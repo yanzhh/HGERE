@@ -49,19 +49,14 @@ If you use our code in your research, please cite our work:
 
 > @misc{yan2023joint,
 > 
-> 
 >       title={Joint Entity and Relation Extraction with Span Pruning and Hypergraph Neural Networks}, 
-> 
-> 
+>  
 >       author={Zhaohui Yan and Songlin Yang and Wei Liu and Kewei Tu},
 >       year={2023},
-> 
-> 
+>  
 >       eprint={2310.17238},
-> 
-> 
+>  
 >       archivePrefix={arXiv},
-> 
-> 
+>  
 >       primaryClass={cs.CL}
 > }
