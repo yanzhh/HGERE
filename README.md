@@ -14,8 +14,6 @@ Please refer to [PL-marker](https://github.com/thunlp/PL-Marker) for dependency 
 
 Download scibert_scivocab_uncased, bert-base-uncased and albert-xxlarge-v1 from huggingface, and place them in fold "pretrained_models".
 
-
-
 ## Training
 
 ### Pruners
@@ -41,13 +39,9 @@ bash shells/hgere/scierc/run_train_scierc_scibert_hgere.sh
 
  All the scripts are in the fold: shells/hgere
 
-
-
 ## Evaluate the pre-trained ERE models
 
 You can replace "--do_train --do_eval" in the scripts for training with "--do_test" if you need to evaluate on a pre-trained ERE model.
-
-
 
 ## Citation
 
@@ -55,9 +49,14 @@ If you use our code in your research, please cite our work:
 
 > @inproceedings{
 > anonymous2023joint,
+> 
 > title={Joint Entity and Relation Extraction with Span Pruning and Hypergraph Neural Networks},
+> 
 > author={Anonymous},
+> 
 > booktitle={The 2023 Conference on Empirical Methods in Natural Language Processing},
+> 
 > year={2023},
+> 
 > url={https://openreview.net/forum?id=YSWLs0G5va}
 > }
