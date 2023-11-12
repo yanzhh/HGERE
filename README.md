@@ -47,16 +47,21 @@ You can replace "--do_train --do_eval" in the scripts for training with "--do_te
 
 If you use our code in your research, please cite our work:
 
-> @inproceedings{
-> anonymous2023joint,
+> @misc{yan2023joint,
 > 
-> title={Joint Entity and Relation Extraction with Span Pruning and Hypergraph Neural Networks},
 > 
-> author={Anonymous},
+>       title={Joint Entity and Relation Extraction with Span Pruning and Hypergraph Neural Networks}, 
 > 
-> booktitle={The 2023 Conference on Empirical Methods in Natural Language Processing},
 > 
-> year={2023},
+>       author={Zhaohui Yan and Songlin Yang and Wei Liu and Kewei Tu},
+>       year={2023},
 > 
-> url={https://openreview.net/forum?id=YSWLs0G5va}
+> 
+>       eprint={2310.17238},
+> 
+> 
+>       archivePrefix={arXiv},
+> 
+> 
+>       primaryClass={cs.CL}
 > }
