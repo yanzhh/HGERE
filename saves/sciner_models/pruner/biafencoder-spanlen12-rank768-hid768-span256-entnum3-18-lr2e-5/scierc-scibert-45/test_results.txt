@@ -1,0 +1,9 @@
+--------------------------
+Test result of data/scierc/plmarker/train.json
+{'f1': 0.5490932450462026, 'precision': 0.37953412118314095, 'recall': 0.992497320471597, 'f1_overlap': 0.2982442074881745, 'p_overlap': 0.1753558970491185, 'r_overlap': 0.9967845659163987}
+--------------------------
+Test result of data/scierc/plmarker/dev.json
+{'f1': 0.5499316005471956, 'precision': 0.3805016564126834, 'recall': 0.9913686806411838, 'f1_overlap': 0.28698593555278623, 'p_overlap': 0.1677070328755722, 'r_overlap': 0.9938347718865598}
+--------------------------
+Test result of data/scierc/plmarker/test.json
+{'f1': 0.5569620253164558, 'precision': 0.38712664968742766, 'recall': 0.9922848664688427, 'f1_overlap': 0.3002599265035404, 'p_overlap': 0.17683699324324326, 'r_overlap': 0.9940652818991098}

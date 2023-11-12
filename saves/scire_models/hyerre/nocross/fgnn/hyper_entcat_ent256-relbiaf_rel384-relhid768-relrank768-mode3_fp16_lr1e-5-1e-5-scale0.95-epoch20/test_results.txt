@@ -1,0 +1,9 @@
+--------------------------
+Test result of saves/sciner_models/pruner/nocross/biaf_rank768_hid768_span256_fp16_mode3-lr1e-5-epoch10/PL-Marker-scierc-scibert-42/ent_pred_train.json
+{'p': 0.9993742177722152, 'r': 0.9922336129232681, 'f1': 0.9957911145752144, 'p+': 0.968397997496871, 'r+': 0.9614787200994097, 'f1_with_ner': 0.9649259547934529, 'ner_p': 0.9463098687574569, 'ner_r': 0.9917827795641301, 'ner_f1': 0.9685128652420409}
+--------------------------
+Test result of saves/sciner_models/pruner/nocross/biaf_rank768_hid768_span256_fp16_mode3-lr1e-5-epoch10/PL-Marker-scierc-scibert-42/ent_pred_dev.json
+{'p': 0.5278396436525612, 'r': 0.5208791208791209, 'f1': 0.5243362831858408, 'p+': 0.42538975501113585, 'r+': 0.4197802197802198, 'f1_with_ner': 0.42256637168141586, 'ner_p': 0.5767562879444926, 'ner_r': 0.8199753390875463, 'ner_f1': 0.6771894093686355}
+--------------------------
+Test result of saves/sciner_models/pruner/nocross/biaf_rank768_hid768_span256_fp16_mode3-lr1e-5-epoch10/PL-Marker-scierc-scibert-42/ent_pred_test.json
+{'p': 0.5338345864661654, 'r': 0.5102669404517454, 'f1': 0.521784776902887, 'p+': 0.39742212674543503, 'r+': 0.3798767967145791, 'f1_with_ner': 0.38845144356955386, 'ner_p': 0.5574927355749274, 'ner_r': 0.797032640949555, 'ner_f1': 0.6560820713238886}
