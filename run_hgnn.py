@@ -58,7 +58,7 @@ from transformers import (WEIGHTS_NAME, BertConfig,
                                   )
 from transformers.modeling_albert import AlbertForHyperGNN, AlbertForHyperGNNPlus
 from transformers import AutoTokenizer
-from torch.utils.data import TensorDataset, Dataset
+from torch.utils.data import TensorDataset
 import json
 import pickle
 import numpy as np
@@ -67,8 +67,7 @@ import itertools
 import timeit
 
 from utils.data import Dataset
-from utils.metric import *
-from scripts.analysis.evalfile import *
+
 
 from tqdm import tqdm
 import socket 
