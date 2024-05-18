@@ -161,3 +161,8 @@ cython_debug/
 
 # ignore saves
 saves/
+scripts/
+slurm/
+logs/
+data/
+pretrained_models/
