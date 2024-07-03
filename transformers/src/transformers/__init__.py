@@ -165,7 +165,6 @@ if is_torch_available():
         BertForACEBothOneDropoutSub,
         BertForACEBothOneDropoutSpanSub,
         BertForACEBothOneDropoutLMSub,
-        BertForAceHyperRE,
         BertForMarkerQA,
         BertForCorefSub,
         BertForACEBothSubNoNer,
