@@ -51,12 +51,13 @@ from transformers import (WEIGHTS_NAME, BertConfig,
                                   AlBertForBaselines,
                                   BertForACEBothOneDropoutSubNoNer,
                                   BertForBaselines,
-                                  BertForAttnHyperGNN,
+                                #   BertForAttnHyperGNN,
                                   BertForHyperGNN,
-                                  BertForHyperGNNPlus,
-                                  BertForHyperGNNwithUnifyEntity,
+                                #   BertForHyperGNNPlus,
+                                #   BertForHyperGNNwithUnifyEntity,
+                                AlbertForHyperGNN
                                   )
-from transformers.modeling_albert import AlbertForHyperGNN, AlbertForHyperGNNPlus
+# from transformers.modeling_albert import 
 from transformers import AutoTokenizer
 from torch.utils.data import TensorDataset
 import json

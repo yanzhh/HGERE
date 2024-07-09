@@ -185,7 +185,9 @@ if is_torch_available():
         BertForACEBothOneDropoutNERSub,
         BertForACEBothOneDropout,
         BertForACEBothOneDropoutSubNoNer,
-        BertForACEBothOneDropoutLeviPair
+        BertForACEBothOneDropoutLeviPair,
+        BertForBaselines,
+        BertForHyperGNN
     )
     
     
@@ -305,7 +307,9 @@ if is_torch_available():
         AlbertForACEBothSub,
         AlbertForSpanNER,
         AlbertForSpanMarkerNER,
-        AlbertForACEBothOneDropoutSub
+        AlbertForACEBothOneDropoutSub,
+        AlBertForBaselines,
+        AlbertForHyperGNN
     )
     from .modeling_xlm_roberta import (
         XLMRobertaForMaskedLM,
