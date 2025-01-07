@@ -1,63 +1,51 @@
 import argparse
 import glob
+
+# from transformers.modeling_albert import
+import json
 import logging
-from multiprocessing.sharedctypes import Value
+
+# from multiprocessing.sharedctypes import Value
 import os
-import random
-from collections import defaultdict
+import pdb
 import re
 import shutil
-import sys
-
+import socket
+import timeit
+from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
-from torch.utils.data.distributed import DistributedSampler
-from torch.nn.utils.rnn import pad_sequence
+# from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
+# from torch.utils.data.distributed import DistributedSampler
+# from torch.nn.utils.rnn import pad_sequence
 from tensorboardX import SummaryWriter
 from tqdm import tqdm, trange
-import time
+
 from transformers import (
-    WEIGHTS_NAME,
-    BertConfig,
-    BertTokenizer,
-    RobertaConfig,
-    RobertaTokenizer,
-    get_linear_schedule_with_warmup,
     AdamW,
-    BertForACEBothOneDropoutSub,
+    # BertForACEBothOneDropoutSub,
     AlbertConfig,
-    AlbertTokenizer,
-    AlbertForACEBothOneDropoutSub,
+    # AlbertForACEBothOneDropoutSub,
     AlBertForBaselines,
-    BertForACEBothOneDropoutSubNoNer,
-    BertForBaselines,
-    #   BertForAttnHyperGNN,
-    BertForHyperGNN,
     #   BertForHyperGNNPlus,
     #   BertForHyperGNNwithUnifyEntity,
     AlbertForHyperGNN,
+    AlbertTokenizer,
+    # WEIGHTS_NAME,
+    BertConfig,
+    # BertForACEBothOneDropoutSubNoNer,
+    BertForBaselines,
+    #   BertForAttnHyperGNN,
+    BertForHyperGNN,
+    BertTokenizer,
+    # RobertaConfig,
+    # RobertaTokenizer,
+    get_linear_schedule_with_warmup,
 )
-
-# from transformers.modeling_albert import
-from transformers import AutoTokenizer
-from torch.utils.data import TensorDataset
-import json
-import pickle
-import numpy as np
-import unicodedata
-import itertools
-import timeit
-
 from utils.data import Dataset
 from utils.misc import get_logger, set_seed
-
-
-from tqdm import tqdm
-import socket
-
-import pdb
 
 WEIGHTS_NAME = "pytorch_model.bin"
 TRAIN_KEYS = [
@@ -372,9 +360,7 @@ def train(logger, args, model, tokenizer):
 
     def _save_model(args, model, logger, global_step, current_epoch):
         checkpoint_prefix = "checkpoint"
-        output_dir = os.path.join(
-            args.output_dir, "{}-{}".format(checkpoint_prefix, global_step)
-        )
+        output_dir = Path(args.output_dir) / f"{checkpoint_prefix}-{global_step}"
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
         model_to_save = (
@@ -413,7 +399,7 @@ def train(logger, args, model, tokenizer):
                 or epoch_num + 1 == args.num_train_epochs
             ):  # Only evaluate when single GPU otherwise metrics may not average well
                 dev_file = os.path.join(args.ner_prediction_dir, args.dev_file)
-                logger.info(f"evaluate dev file.")
+                logger.info("evaluate dev file.")
                 results = evaluate(logger, args, model, tokenizer, file_path=dev_file)
                 f1 = results["f1_with_ner"]
                 tb_writer.add_scalar("f1_with_ner", f1, global_step)
@@ -429,7 +415,7 @@ def train(logger, args, model, tokenizer):
             if update:
                 _save_model(args, model, logger, global_step, current_epoch)
             else:
-                checkpoint_prefix = "checkpoint"
+                # checkpoint_prefix = "checkpoint"
                 if (
                     epoch_num + 1 == args.num_train_epochs
                     and len(
@@ -668,8 +654,8 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
             obj_mentions = batch["obj_token_pos"]
             subs = batch["sub"]
 
-            rel_labels = batch["rel_labels"]
-            ner_labels = batch["ner_labels"]
+            # rel_labels = batch["rel_labels"]
+            # ner_labels = batch["ner_labels"]
             ent_numbers = batch["ent_numbers"]
             inputs = {}
             input_keys = EVAL_KEYS
@@ -1519,7 +1505,7 @@ def main():
 
     model.to(args.device)
 
-    logger.info("Training/evaluation parameters %s", args)
+    logger.info(f"Training/evaluation parameters {args}")
     best_f1 = 0
     # Training
     if args.do_train:
@@ -1527,10 +1513,9 @@ def main():
         global_step, tr_loss, best_f1, best_result = train(
             logger, args, model, tokenizer
         )
-        logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
+        logger.info(" global_step = {global_step}, average loss = {tr_loss}")
 
     # Evaluation
-    results = {"dev_best_f1": best_f1}
     if args.do_eval and args.local_rank in [-1, 0]:
         checkpoints = [args.output_dir]
 
@@ -1546,7 +1531,7 @@ def main():
         logger.info("==========Evaluate the following checkpoints: %s", checkpoints)
         dumps = []
         if best_result is not None:
-            dumps.append(f"--------------------------")
+            dumps.append("--------------------------")
             dumps.append(f"Best result on dev {args.dev_file}")
             dumps.append(str(best_result))
         for checkpoint in checkpoints:
@@ -1569,7 +1554,7 @@ def main():
                         prefix=global_step,
                         do_test=(file_name == args.test_file),
                     )
-                    dumps.append(f"--------------------------")
+                    dumps.append("--------------------------")
                     dumps.append(f"Test result of {test_file}")
                     dumps.append(str(result))
             dumps = "\n".join(dumps)
@@ -1611,7 +1596,7 @@ def main():
                         prefix=global_step,
                         do_test=(file_name == args.test_file),
                     )
-                    dumps.append(f"--------------------------")
+                    dumps.append("--------------------------")
                     dumps.append(f"Test result of {test_file}")
                     dumps.append(str(result))
             dumps = "\n".join(dumps)

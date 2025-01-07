@@ -1,75 +1,33 @@
 # coding=utf-8
-# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
-# Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Finetuning the library models for sequence classification on GLUE (Bert, XLM, XLNet, RoBERTa)."""
-
 import argparse
 import glob
 import json
-import logging
 import os
-import random
 import re
 import shutil
 import socket
-import sys
 from pathlib import Path
 
-from tqdm import tqdm, trange
-import numpy as np
-from tensorboardX import SummaryWriter
-
 import torch
+from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm, trange
 
 from transformers import (
+    AdamW,
     BertConfig,
+    BertForSpanMarkerNerPruner,
+    # AlbertConfig,
+    # AlbertTokenizer,
+    # AlbertForSpanMarkerNerPruner,
     BertTokenizer,
     RobertaConfig,
     get_linear_schedule_with_warmup,
-    AdamW,
-    BertForSpanMarkerNerPruner,
-    #AlbertConfig,
-    #AlbertTokenizer,
-    #AlbertForSpanMarkerNerPruner,
 )
-
+from utils.misc import get_logger, set_seed
 from wolf_data_utils import ACEDatasetNER
 from wolf_eval_pruner import evaluate
-
-"""
-from transformers import (
-    WEIGHTS_NAME,
-    AutoTokenizer,
-    RobertaTokenizer,
-    AlbertForNER,
-    AlbertForSpanNER,
-    AlbertForSpanMarkerNER,
-    BertForNER,
-    BertForSpanNER,
-    BertForLeftLMNER,
-    BertForSpanMarkerNER,
-    BertForSpanMarkerBiNER,
-    RobertaForNER,
-    RobertaForSpanNER,
-    RobertaForSpanMarkerNER,
-)
-"""
-# Logger = logging.getLogger(__name__)
 
 ALL_MODELS = sum(
     (
@@ -81,11 +39,11 @@ ALL_MODELS = sum(
 
 MODEL_CLASSES = {
     "bertspanmarkerpruner": (BertConfig, BertForSpanMarkerNerPruner, BertTokenizer),
-    #"albertspanmarkerpruner": (
+    # "albertspanmarkerpruner": (
     #    AlbertConfig,
     #    AlbertForSpanMarkerNerPruner,
     #    AlbertTokenizer,
-    #),
+    # ),
 }
 
 # NEG_INF = -1e30
@@ -94,9 +52,9 @@ MODEL_CLASSES = {
 def train(logger, args, model, tokenizer):
     train_sampler, train_data_loader = load_data(args, tokenizer, logger)
     len_train = len(train_data_loader)
-    model, optimizer, scheduler, tb_writer = setup_training(args, model, len_train, logger)
-    
-
+    model, optimizer, scheduler, tb_writer = setup_training(
+        args, model, len_train, logger
+    )
 
     # Train!
 
@@ -151,7 +109,7 @@ def train(logger, args, model, tokenizer):
 
             if args.fp16:
                 raise Exception("Not supported")
-                #with amp.scale_loss(loss, optimizer) as scaled_loss:
+                # with amp.scale_loss(loss, optimizer) as scaled_loss:
                 #    scaled_loss.backward()
             else:
                 loss.backward()
@@ -164,9 +122,9 @@ def train(logger, args, model, tokenizer):
                 if args.max_grad_norm > 0:
                     if args.fp16:
                         raise Exception("Not supported")
-                        #torch.nn.utils.clip_grad_norm_(
+                        # torch.nn.utils.clip_grad_norm_(
                         #    amp.master_params(optimizer), args.max_grad_norm
-                        #)
+                        # )
                     else:
                         torch.nn.utils.clip_grad_norm_(
                             model.parameters(), args.max_grad_norm
@@ -175,9 +133,9 @@ def train(logger, args, model, tokenizer):
                 optimizer.step()
                 if args.fp16:
                     raise Exception("Not supported")
-                    #if (
+                    # if (
                     #    amp._amp_state.loss_scalers[0]._unskipped != 0
-                    #):  # assuming you are using a single optimizer
+                    # ):  # assuming you are using a single optimizer
                     #    scheduler.step()
                 else:
                     scheduler.step()  # Update learning rate schedule
@@ -255,6 +213,7 @@ def train(logger, args, model, tokenizer):
 
     return global_step, tr_loss / global_step, best_result
 
+
 def load_data(args, tokenizer, logger):
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     train_file = Path(args.data_dir) / args.train_file
@@ -262,7 +221,8 @@ def load_data(args, tokenizer, logger):
     train_dataset = ACEDatasetNER(
         logger=logger, tokenizer=tokenizer, file_path=train_file, args=args
     )
-    train_sampler = (RandomSampler(train_dataset)
+    train_sampler = (
+        RandomSampler(train_dataset)
         if args.local_rank == -1
         else DistributedSampler(train_dataset)
     )
@@ -273,6 +233,7 @@ def load_data(args, tokenizer, logger):
         num_workers=1,
     )
     return train_sampler, train_data_loader
+
 
 def setup_training(args, model, len_train, logger):
     """Train the model"""
@@ -286,20 +247,13 @@ def setup_training(args, model, len_train, logger):
             + args.output_dir[args.output_dir.rfind("/") :]
         )
 
-
     if args.max_steps > 0:
         t_total = args.max_steps
         args.num_train_epochs = (
-            args.max_steps
-            // (len_train // args.gradient_accumulation_steps)
-            + 1
+            args.max_steps // (len_train // args.gradient_accumulation_steps) + 1
         )
     else:
-        t_total = (
-            len_train
-            // args.gradient_accumulation_steps
-            * args.num_train_epochs
-        )
+        t_total = len_train // args.gradient_accumulation_steps * args.num_train_epochs
 
     if args.eval_epochs > 0:
         args.eval_steps = (
@@ -308,13 +262,14 @@ def setup_training(args, model, len_train, logger):
     else:
         args.eval_steps = args.save_steps
 
-
     # ---------for span encoder---------
     optimizer = get_span_optimizer(model.named_parameters(), args)
-    num_warmup_steps = args.warmup_steps if args.warmup_steps != -1 else int(0.1 * t_total)
+    num_warmup_steps = (
+        args.warmup_steps if args.warmup_steps != -1 else int(0.1 * t_total)
+    )
     scheduler = get_linear_schedule_with_warmup(
-            optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=t_total
-        )
+        optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=t_total
+    )
 
     if args.fp16:
         try:
@@ -326,7 +281,7 @@ def setup_training(args, model, len_train, logger):
         model, optimizer = amp.initialize(
             model, optimizer, opt_level=args.fp16_opt_level
         )
-    
+
     # multi-gpu training (should be after apex fp16 initialization)
     if args.n_gpu > 1:
         model = torch.nn.DataParallel(model)
@@ -357,6 +312,7 @@ def setup_training(args, model, len_train, logger):
 
     return model, optimizer, scheduler, tb_writer
 
+
 def get_span_optimizer(model_named_parameters, args):
     # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ["bias", "LayerNorm.weight"]
@@ -385,38 +341,32 @@ def get_span_optimizer(model_named_parameters, args):
     grouped_params = []
     if is_span_model:
         grouped_params = [
-                dict(
-                    params=params_span,
-                    weight_decay=args.weight_decay,
-                    lr=args.learning_rate),
-                dict(
-                    params=params_span_no_decay,
-                    weight_decay=0.,
-                    lr=args.learning_rate),
-                dict(
-                    params=params_bert,
-                    weight_decay=args.weight_decay,
-                    lr=args.learning_rate),
-                dict(
-                    params=params_bert_no_decay,
-                    weight_decay=0.,
-                    lr=args.learning_rate),
-                ]
+            dict(
+                params=params_span,
+                weight_decay=args.weight_decay,
+                lr=args.learning_rate,
+            ),
+            dict(params=params_span_no_decay, weight_decay=0.0, lr=args.learning_rate),
+            dict(
+                params=params_bert,
+                weight_decay=args.weight_decay,
+                lr=args.learning_rate,
+            ),
+            dict(params=params_bert_no_decay, weight_decay=0.0, lr=args.learning_rate),
+        ]
     else:
         grouped_params = [
-                dict(
-                    params=params_default,
-                    weight_decay=args.weight_decay,
-                    lr=args.learning_rate),
-                dict(
-                    params=params_default_no_decay,
-                    weight_decay=0.,
-                    lr=args.learning_rate),
-                ]
-    optimizer = AdamW(
-            grouped_params, lr=args.learning_rate, eps=args.adam_epsilon)
+            dict(
+                params=params_default,
+                weight_decay=args.weight_decay,
+                lr=args.learning_rate,
+            ),
+            dict(
+                params=params_default_no_decay, weight_decay=0.0, lr=args.learning_rate
+            ),
+        ]
+    optimizer = AdamW(grouped_params, lr=args.learning_rate, eps=args.adam_epsilon)
     return optimizer
-
 
 
 def main():
@@ -444,7 +394,7 @@ def main():
         ],
     )
 
-    logger = set_logger(args, exp_path, args.do_test)
+    logger = get_logger(args, exp_path, args.do_test)
 
     if not args.do_test:
         args_file = output_dir / "training_args.txt"
@@ -530,7 +480,6 @@ def main():
     )
 
     add_special_tokens(model, args, tokenizer, logger)
-
 
     if args.local_rank == 0:
         # Make sure only the first process in distributed training will download model & vocab
@@ -676,14 +625,14 @@ def add_special_tokens(model, args, tokenizer, logger):
 
     if args.do_train and args.lminit:
         # not roberta: BERT or ALBERTA (or SciBERT)
-        if args.model_type.find("roberta") == -1: 
+        if args.model_type.find("roberta") == -1:
             entity_id = tokenizer.encode("entity", add_special_tokens=False)
             assert len(entity_id) == 1
             entity_id = entity_id[0]
             mask_id = tokenizer.encode("[MASK]", add_special_tokens=False)
             assert len(mask_id) == 1
             mask_id = mask_id[0]
-        else: # Roberta: Hard Coded
+        else:  # Roberta: Hard Coded
             entity_id = 10014
             mask_id = 50264
 
@@ -702,46 +651,6 @@ def add_special_tokens(model, args, tokenizer, logger):
             word_embeddings = model.bert.embeddings.word_embeddings.weight.data
             word_embeddings[1].copy_(word_embeddings[mask_id])
             word_embeddings[2].copy_(word_embeddings[entity_id])  # entity
-
-
-def set_logger(args, log_path, test):
-    log_formatter = logging.Formatter(
-        "%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s"
-    )
-    logger = logging.getLogger()
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
-
-    for f in logger.filters[:]:
-        logger.removeFilters(f)
-    if test:
-        log_file = f"test_{args.hostname}.log"
-    else:
-        log_file = f"all_{args.hostname}.log"
-    file_handler = logging.FileHandler(os.path.join(log_path, log_file))
-    file_handler.setFormatter(log_formatter)
-    logger.addHandler(file_handler)
-
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(log_formatter)
-    logger.addHandler(console_handler)
-    logger.setLevel(logging.INFO)
-    # Setup logging ???
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN,
-    )
-
-    return logger
-
-
-def set_seed(args):
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if args.n_gpu > 0:
-        torch.cuda.manual_seed_all(args.seed)
 
 
 def _rotate_checkpoints(logger, args, checkpoint_prefix, use_mtime=False):
@@ -1071,5 +980,7 @@ def parse_arguments():
     args.neg_inf = -1e4 if args.fp16 else -1e30
 
     return args
+
+
 if __name__ == "__main__":
     main()
