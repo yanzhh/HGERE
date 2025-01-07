@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+
 # from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 # from torch.utils.data.distributed import DistributedSampler
 # from torch.nn.utils.rnn import pad_sequence
@@ -44,8 +45,9 @@ from transformers import (
     # RobertaTokenizer,
     get_linear_schedule_with_warmup,
 )
-from utils.data import Dataset
+from utils.data import RelationDataset
 from utils.misc import get_logger, set_seed
+from utils.labels import LABELS
 
 WEIGHTS_NAME = "pytorch_model.bin"
 TRAIN_KEYS = [
@@ -80,139 +82,28 @@ MODEL_CLASSES = {
     "alberthyper": (AlbertConfig, AlbertForHyperGNN, AlbertTokenizer),
 }
 
-### This seems not to be used here. You need to change /utils/data.py
-task_ner_labels = {
-    "ace04": ["FAC", "WEA", "LOC", "VEH", "GPE", "ORG", "PER"],
-    "ace05": ["FAC", "WEA", "LOC", "VEH", "GPE", "ORG", "PER"],
-    "scierc": [
-        "Method",
-        "OtherScientificTerm",
-        "Task",
-        "Generic",
-        "Material",
-        "Metric",
-    ],
-    "gsap": [
-        "Method",
-        "MLModel",
-        "MLModelGeneric",
-        "ModelArchitecture",
-        "Dataset",
-        "DatasetGeneric",
-        "Datasource",
-        "Task",
-        "ReferenceLink",
-        "URL",
-    ],
-}
-### This seems not to be used here. You need to change /utils/data.py
-task_rel_labels = {
-    "ace04": ["PER-SOC", "ART", "PHYS", "OTHER-AFF", "GPE-AFF", "EMP-ORG"],
-    "ace05": ["PER-SOC", "ART", "PHYS", "ORG-AFF", "GEN-AFF", "PART-WHOLE"],
-    "scierc": [
-        "PART-OF",
-        "USED-FOR",
-        "FEATURE-OF",
-        "CONJUNCTION",
-        "EVALUATE-FOR",
-        "HYPONYM-OF",
-        "COMPARE",
-    ],
-    "gsap": [
-        "isBasedOn",
-        "citation",
-        "appliedOn",
-        "coreference",
-        "evaluatedOn",
-        "isPartOf",
-        "trainedOn",
-        "isHyponymOf",
-        "isComparedTo",
-        "hasInstanceType",
-        "size",
-        "url",
-        "versionOf",
-    ],
-}
-
-
-def get_saved_checkpoint(args, checkpoint_prefix):
-    """search for saved checkpoint fold"""
-    checkpoints = os.listdir(args.output_dir)
-    global_steps = []
-    for checkpoint_fold in checkpoints:
-        if checkpoint_fold.startswith(checkpoint_prefix):
-            global_step = int(checkpoint_fold.split("-")[-1])
-            global_steps.append(global_step)
-    if len(global_steps) > 0:
-        max_global_step = max(global_steps)
-        saved_checkpoint = os.path.join(
-            args.output_dir, f"{checkpoint_prefix}-{max_global_step}"
-        )
-    else:
-        saved_checkpoint = None
-        max_global_step = 0
-    return saved_checkpoint, max_global_step
-
-
-def _rotate_checkpoints(logger, args, checkpoint_prefix, use_mtime=False):
-    if not args.save_total_limit:
-        return
-    if args.save_total_limit <= 0:
-        return
-
-    # Check if we should delete older checkpoint(s)
-    glob_checkpoints = glob.glob(
-        os.path.join(args.output_dir, "{}-*".format(checkpoint_prefix))
-    )
-    if len(glob_checkpoints) <= args.save_total_limit:
-        return
-
-    ordering_and_checkpoint_path = []
-    for path in glob_checkpoints:
-        if use_mtime:
-            ordering_and_checkpoint_path.append((os.path.getmtime(path), path))
-        else:
-            regex_match = re.match(".*{}-([0-9]+)".format(checkpoint_prefix), path)
-            if regex_match and regex_match.groups():
-                ordering_and_checkpoint_path.append(
-                    (int(regex_match.groups()[0]), path)
-                )
-
-    checkpoints_sorted = sorted(ordering_and_checkpoint_path)
-    checkpoints_sorted = [checkpoint[1] for checkpoint in checkpoints_sorted]
-    number_of_checkpoints_to_delete = max(
-        0, len(checkpoints_sorted) - args.save_total_limit
-    )
-    checkpoints_to_be_deleted = checkpoints_sorted[:number_of_checkpoints_to_delete]
-    for checkpoint in checkpoints_to_be_deleted:
-        logger.info(
-            "Deleting older checkpoint [{}] due to args.save_total_limit".format(
-                checkpoint
-            )
-        )
-        shutil.rmtree(checkpoint)
-
 
 def train(logger, args, model, tokenizer):
     """Train the model"""
     if args.local_rank in [-1, 0]:
+        ner_prediction_dir_name = Path(args.ner_prediction_dir).name
+        output_dir_name = Path(args.output_dir).name
         tb_writer = SummaryWriter(
-            "logs/"
-            + args.ner_prediction_dir[max(args.ner_prediction_dir.rfind("/"), 0) :]
-            + "_re_logs/"
-            + args.output_dir[args.output_dir.rfind("/") :]
+            f"logs/{ner_prediction_dir_name}_re_logs/{output_dir_name}"
         )
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
 
-    train_file = os.path.join(args.ner_prediction_dir, args.train_file)
-    print("train_file", train_file)
+    train_file = Path(args.ner_prediction_dir) / args.train_file
+    logger.info("Train file:", train_file)
     assert os.path.isfile(train_file)
     # train_dataset = ACEDataset(logger=logger, tokenizer=tokenizer, file_path=train_file, args=args, max_pair_length=args.max_pair_length)
-    train_dataset = Dataset(
+    scheme = get_scheme(train_file)
+    labels = LABELS[scheme]
+    train_dataset = RelationDataset(
         logger=logger,
         tokenizer=tokenizer,
+        labels=labels,
         file_path=train_file,
         args=args,
         max_pair_length=args.max_pair_length,
@@ -593,8 +484,8 @@ def train(logger, args, model, tokenizer):
     return global_step, tr_loss / global_step, best_f1, best_result
 
 
-def to_list(tensor):
-    return tensor.detach().cpu().tolist()
+# def to_list(tensor):
+#    return tensor.detach().cpu().tolist()
 
 
 def get_gold_ner_with_nolabel(ner_golden_labels):
@@ -618,9 +509,14 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
 
     model.eval()
 
-    eval_dataset = Dataset(
+    scheme = get_scheme(file_path)
+    logger.info(f"Evaluation Label Scheme: {scheme}.")
+    labels = LABELS[scheme]
+
+    eval_dataset = RelationDataset(
         logger=logger,
         tokenizer=tokenizer,
+        labels=labels,
         file_path=file_path,
         args=args,
         evaluate=True,
@@ -1602,6 +1498,78 @@ def main():
             dumps = "\n".join(dumps)
             with open(output_test_file, "w") as f:
                 f.write(dumps)
+
+
+def get_saved_checkpoint(args, checkpoint_prefix):
+    """search for saved checkpoint fold"""
+    checkpoints = os.listdir(args.output_dir)
+    global_steps = []
+    for checkpoint_fold in checkpoints:
+        if checkpoint_fold.startswith(checkpoint_prefix):
+            global_step = int(checkpoint_fold.split("-")[-1])
+            global_steps.append(global_step)
+    if len(global_steps) > 0:
+        max_global_step = max(global_steps)
+        saved_checkpoint = os.path.join(
+            args.output_dir, f"{checkpoint_prefix}-{max_global_step}"
+        )
+    else:
+        saved_checkpoint = None
+        max_global_step = 0
+    return saved_checkpoint, max_global_step
+
+
+def _rotate_checkpoints(logger, args, checkpoint_prefix, use_mtime=False):
+    if not args.save_total_limit:
+        return
+    if args.save_total_limit <= 0:
+        return
+
+    # Check if we should delete older checkpoint(s)
+    glob_checkpoints = glob.glob(
+        os.path.join(args.output_dir, "{}-*".format(checkpoint_prefix))
+    )
+    if len(glob_checkpoints) <= args.save_total_limit:
+        return
+
+    ordering_and_checkpoint_path = []
+    for path in glob_checkpoints:
+        if use_mtime:
+            ordering_and_checkpoint_path.append((os.path.getmtime(path), path))
+        else:
+            regex_match = re.match(".*{}-([0-9]+)".format(checkpoint_prefix), path)
+            if regex_match and regex_match.groups():
+                ordering_and_checkpoint_path.append(
+                    (int(regex_match.groups()[0]), path)
+                )
+
+    checkpoints_sorted = sorted(ordering_and_checkpoint_path)
+    checkpoints_sorted = [checkpoint[1] for checkpoint in checkpoints_sorted]
+    number_of_checkpoints_to_delete = max(
+        0, len(checkpoints_sorted) - args.save_total_limit
+    )
+    checkpoints_to_be_deleted = checkpoints_sorted[:number_of_checkpoints_to_delete]
+    for checkpoint in checkpoints_to_be_deleted:
+        logger.info(
+            "Deleting older checkpoint [{}] due to args.save_total_limit".format(
+                checkpoint
+            )
+        )
+        shutil.rmtree(checkpoint)
+
+
+def get_scheme(path):
+    if path.find("ace05") != -1 or path.find("ace2005") != -1:
+        dataset_name = "ace05"
+    elif path.find("ace04") != -1 or path.find("ace2004") != -1:
+        dataset_name = "ace04"
+    elif path.find("gsap") != -1:
+        dataset_name = "gsap"
+    elif path.find("scierc") != -1:
+        dataset_name = "scierc"
+    else:
+        raise Exception("Dataset unknown. Can't find labels.")
+    return dataset_name
 
 
 if __name__ == "__main__":
