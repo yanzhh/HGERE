@@ -230,7 +230,7 @@ class Dataset(Dataset):
         self.no_sym = args.no_sym
 
         # modify
-        if self.file_path.find('ace05')!=-1 or self.file_path.find('ace2005')!=-1:
+        if self.file_path.find('ace05') != -1 or self.file_path.find('ace2005') != -1:
             self.ner_label_list = ['NIL', 'FAC', 'WEA', 'LOC', 'VEH', 'GPE', 'ORG', 'PER']
 
             if args.no_sym:
@@ -253,10 +253,32 @@ class Dataset(Dataset):
                 label_list = ['OTHER-AFF', 'ART', 'GPE-AFF', 'EMP-ORG', 'PHYS']
                 self.sym_labels = ['NIL', 'PER-SOC']
                 self.label_list = self.sym_labels + label_list
-
+        elif self.file_path.find('gsap') != -1:
+            self.ner_label_list = ['NIL', 'Method', 'MLModel', 'MLModelGeneric',
+                                   "ModelArchitecture",
+                                   "Dataset", 'DatasetGeneric', "Datasource",
+                                   "Task", 'ReferenceLink', 'URL']
+            if args.no_sym:
+                label_list = ['isBasedOn',       'citation',    'appliedOn', 
+                              'coreference',     'evaluatedOn', 'isPartOf',
+                              'trainedOn',       'isHyponymOf', 'isComparedTo',
+                              'hasInstanceType', 'size',        'url',
+                              'versionOf']
+                self.sym_labels = ['NIL']
+                self.label_list = self.sym_labels + label_list
+            else:
+                label_list = ['isBasedOn',       'citation',    'appliedOn', 
+                                                 'evaluatedOn', 'isPartOf',
+                              'trainedOn',       'isHyponymOf',
+                              'hasInstanceType', 'size',        'url',
+                              'versionOf']
+                self.sym_labels = ['NIL', 'coreference', 'isComparedTo']
+                self.label_list = self.sym_labels + label_list
+                self.sym_labels = ['NIL', 'CONJUNCTION', 'COMPARE']
+                self.label_list = self.sym_labels + label_list
         elif self.file_path.find('scierc')!=-1:      
-            self.ner_label_list = ['NIL', 'Method', 'OtherScientificTerm', 'Task', 'Generic', 'Material', 'Metric']
-
+            self.ner_label_list = ['NIL', 'Method', 'OtherScientificTerm',
+                                   'Task', 'Generic', 'Material', 'Metric']
             if args.no_sym:
                 label_list = ['CONJUNCTION', 'COMPARE', 'PART-OF', 'USED-FOR', 'FEATURE-OF',  'EVALUATE-FOR', 'HYPONYM-OF']
                 self.sym_labels = ['NIL']
@@ -438,6 +460,8 @@ class Dataset(Dataset):
                     
 
                     # if sub[0] < 10000:
+                    if sub[0] == len(token2subword):
+                        continue
                     sub_s = token2subword[sub[0]] - doc_offset + 1                                      # entity head id in input sequence
                     sub_e = token2subword[sub[1]+1] - doc_offset                                        # entity tail id in input sequence
                     # sub_label = ner_label_map[sub[2]]                                                   # predicted subject label
@@ -471,6 +495,13 @@ class Dataset(Dataset):
                     ner_labels = []
                     # assert(sub_e < self.max_seq_length)
                     for start, end, obj_label in sentence_ners:                                             # add objects from predicted ners
+                        #if start >= len(token2subword):
+                        #    print(start, end, obj_label)
+                        #    print(words[start:end + 1])
+                        #    print(len(token2subword))
+                        #    print(words[doc_sent_start:doc_entity_end])
+                        if start == len(token2subword):
+                            continue
                         obj_label_std = std_entity_labels.get((start,end), 'NIL')
                         # assert obj_label==obj_label_std
                         # if self.model_type.endswith('nersub'):
