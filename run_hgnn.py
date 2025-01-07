@@ -90,16 +90,32 @@ MODEL_CLASSES = {
     'alberthyper' : (AlbertConfig, AlbertForHyperGNN, AlbertTokenizer)
     }
 
+### This seems not to be used here. You need to change /utils/data.py
 task_ner_labels = {
-    'ace04': ['FAC', 'WEA', 'LOC', 'VEH', 'GPE', 'ORG', 'PER'],
-    'ace05': ['FAC', 'WEA', 'LOC', 'VEH', 'GPE', 'ORG', 'PER'],
+    'ace04': ['FAC', 'WEA', 'LOC',
+              'VEH', 'GPE', 'ORG',
+              'PER'],
+    'ace05': ['FAC', 'WEA', 'LOC',
+              'VEH', 'GPE', 'ORG',
+              'PER'],
     'scierc': ['Method', 'OtherScientificTerm', 'Task', 'Generic', 'Material', 'Metric'],
+    'gsap': ['Method', 'MLModel', 'MLModelGeneric',
+             "ModelArchitecture",
+             "Dataset", 'DatasetGeneric', "Datasource",
+             "Task", 'ReferenceLink', 'URL']
 }
-
+### This seems not to be used here. You need to change /utils/data.py
 task_rel_labels = {
-    'ace04': ['PER-SOC', 'OTHER-AFF', 'ART', 'GPE-AFF', 'EMP-ORG', 'PHYS'],
-    'ace05': ['PER-SOC', 'ART', 'ORG-AFF', 'GEN-AFF', 'PHYS', 'PART-WHOLE'],
-    'scierc': ['PART-OF', 'USED-FOR', 'FEATURE-OF', 'CONJUNCTION', 'EVALUATE-FOR', 'HYPONYM-OF', 'COMPARE'],
+    'ace04': ['PER-SOC', 'ART', 'PHYS', 'OTHER-AFF', 'GPE-AFF', 'EMP-ORG'],
+    'ace05': ['PER-SOC', 'ART', 'PHYS', 'ORG-AFF',   'GEN-AFF', 'PART-WHOLE'],
+    'scierc': ['PART-OF',     'USED-FOR',     'FEATURE-OF',
+               'CONJUNCTION', 'EVALUATE-FOR', 'HYPONYM-OF',
+               'COMPARE'],
+    'gsap': ['isBasedOn',       'citation',    'appliedOn', 
+             'coreference',     'evaluatedOn', 'isPartOf',
+             'trainedOn',       'isHyponymOf', 'isComparedTo',
+             'hasInstanceType', 'size',        'url',
+             'versionOf']
 }
 
 
@@ -192,6 +208,8 @@ def train(logger, args, model, tokenizer):
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
 
     train_file = os.path.join(args.ner_prediction_dir, args.train_file)
+    print("train_file", train_file)
+    assert os.path.isfile(train_file)
     # train_dataset = ACEDataset(logger=logger, tokenizer=tokenizer, file_path=train_file, args=args, max_pair_length=args.max_pair_length)
     train_dataset = Dataset(logger=logger, tokenizer=tokenizer, file_path=train_file, args=args, max_pair_length=args.max_pair_length)
     # train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
@@ -1024,16 +1042,24 @@ def main():
     set_seed(args)
 
     if args.ner_prediction_dir.find('ace')!=-1:
-        num_ner_labels = 8
+        num_ner_labels = 8 # 7 ner labels
 
-        if args.no_sym:
+        if args.no_sym: # 6 relation labels
             num_labels = 7 + 7 - 1
         else:
             num_labels = 7 + 7 - 2
-    elif args.ner_prediction_dir.find('scierc')!=-1:
-        num_ner_labels = 7
+    # @todo have the dataset as parameter!
+    elif args.ner_prediction_dir.find('gsap')!=-1:
+        num_ner_labels = 11 # 10 ner labels
 
-        if args.no_sym:
+        if args.no_sym: #  13 relation types
+            num_labels = 14 + 14 - 1 # 1 is NIL (non symetric relations)
+        else:
+            num_labels = 14 + 14 - 3
+    elif args.ner_prediction_dir.find('scierc')!=-1:
+        num_ner_labels = 7 # 6 ner types
+
+        if args.no_sym: # 7 relation types
             num_labels = 8 + 8 - 1
         else:
             num_labels = 8 + 8 - 3
