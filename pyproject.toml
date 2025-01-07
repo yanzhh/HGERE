@@ -1,7 +1,7 @@
 [project]
 name = "hgere"
 version = "0.1.0"
-description = "Add your description here"
+description = "A refactoring of the original HGERE code."
 readme = "README.md"
 requires-python = ">=3.9,<3.10"
 dependencies = [
