@@ -1,7 +1,7 @@
 GPU_ID=1
 
 
-for seed in 42; do 
+for seed in 43; do 
 for epoch in 10; do 
 #for epoch in 30; do 
 for bs in 18; do
@@ -35,7 +35,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID  python  run_hgnn.py  \
     --train_file ent_pred_train.json \
     --dev_file ent_pred_dev.json \
     --test_file ent_pred_test.json  \
-    --output_dir saves/reproduce/HGERE/gsap_rel_models/scibert/$factor/facenc$facenc-seq$seq-mem$memdim-iter$iter-layernorm+_attnself/ent$entdim-rel$reldim-lr$lr-$lr1-bs$bs-ep$epoch-eps$eps/Hyper_scierc_scibert-$seed \
+    --output_dir saves/reproduce/HGERE/gsap_rel_models/scibert/$factor/facenc$facenc-seq$seq-mem$memdim-iter$iter-layernorm+_attnself/ent$entdim-rel$reldim-lr$lr-$lr1-bs$bs-ep$epoch-eps$eps/hyper_gsap_scibert-$seed \
     --overwrite_output_dir  \
     --factor_type $factor  \
     --iter $iter   \

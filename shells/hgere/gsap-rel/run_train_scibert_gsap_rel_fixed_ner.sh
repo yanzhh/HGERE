@@ -1,7 +1,7 @@
-GPU_ID=1
+GPU_ID=0
 
 
-for seed in 42; do 
+for seed in 43; do 
 for epoch in 10; do 
 #for epoch in 30; do 
 for bs in 18; do
