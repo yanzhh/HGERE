@@ -95,7 +95,7 @@ def train(logger, args, model, tokenizer):
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
 
     train_file = Path(args.ner_prediction_dir) / args.train_file
-    logger.info("Train file:", train_file)
+    logger.info("Train file: {train_file}")
     assert os.path.isfile(train_file)
     # train_dataset = ACEDataset(logger=logger, tokenizer=tokenizer, file_path=train_file, args=args, max_pair_length=args.max_pair_length)
     scheme = get_scheme(train_file)
@@ -1559,6 +1559,7 @@ def _rotate_checkpoints(logger, args, checkpoint_prefix, use_mtime=False):
 
 
 def get_scheme(path):
+    path = str(path)
     if path.find("ace05") != -1 or path.find("ace2005") != -1:
         dataset_name = "ace05"
     elif path.find("ace04") != -1 or path.find("ace2004") != -1:
