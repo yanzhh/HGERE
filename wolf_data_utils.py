@@ -80,6 +80,8 @@ class ACEDatasetNER(Dataset):
         self.logger = logger
 
         file_path = Path(file_path)
+        if not file_path.is_file():
+            logger.warn(f"File does not exist: {file_path}")
         assert file_path.is_file()
 
         self.file_path = file_path

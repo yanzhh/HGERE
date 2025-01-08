@@ -40,6 +40,24 @@ GSAP = {
         "versionOf",
     ],
 }
+SCIER = {
+    "ner": [
+        "Method",
+        "Dataset",
+        "Task"
+        ],
+    "rel": [
+        "Part-Of",
+        "Synonym-Of",
+        "Benchmark-For",
+        "Used-For",
+        "Evaluated-With",
+        "Trained-With",
+        "SubTask-Of",
+        "SubClass-Of",
+        "Compare-With"
+        ]
+}
 SCIERC = {
     "ner": [
         "Method",

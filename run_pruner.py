@@ -502,7 +502,7 @@ def main():
 
         update = True
         if args.evaluate_during_training:
-            dev_file = output_dir / args.dev_file
+            dev_file = Path(args.data_dir) / args.dev_file
             results = evaluate(logger, args, model, tokenizer, file_path=dev_file)
             # logger.info(f"Epoch: {epoch_num}, F1: {results['f1']}, recall: {results['recall']}")
             # logger.info(f"Epoch: {epoch_num}, ent_recall: {results['recall_score']}, R_overlap: {results['r_overlap']}")

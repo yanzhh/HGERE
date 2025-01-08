@@ -33,6 +33,9 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
 
     goldspan2label = _span2label(ner_golden_labels)
     eval_sampler = SequentialSampler(eval_dataset)
+    
+    args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
+    
     eval_dataloader = DataLoader(
         eval_dataset,
         sampler=eval_sampler,
@@ -47,7 +50,6 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
     min_mentions_num = args.min_mentions_num
     topk_infos = (topk_ratio, min_mentions_num, max_mentions_num)
 
-    args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
 
     # Eval!
     logger.info(f"***** Running evaluation {prefix} *****")
@@ -99,7 +101,7 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
             gold_labels = (
                 inputs["labels"] > 0
             ).int()  # target: gold label exist (classes: 0, 1)
-            ent_masks = (inputs["labels"] > -1).int()  # entity mask without -1 labels
+            ent_masks = (inputs["labels"] > -1).bool()  # entity mask without -1 labels
             ner_logits = outputs[1].squeeze(-1)
             ner_probs = ner_logits.sigmoid()
             # NEG_INF = NEG_INF if ner_logits.dtype==torch.float32 else -1e4
@@ -154,7 +156,7 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
     force_same_label = not is_ontonotes
     ner_total_recall = eval_dataset.tot_recall
     predict_ners, predict_ners_overlap, results = postprocess_predictions(
-        sentences_predictions, force_same_label, ner_total_recall
+        sentences_predictions, ner_golden_labels, force_same_label, ner_total_recall
     )
     res = {k: f"{v:.4f}" for k, v in results.items()}
     logger.info(f"Result: {res}")
@@ -165,9 +167,9 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
 
     if args.output_results and (do_test or not args.do_train):
         eval_filename = eval_dataset.file_path
-        save_results(results, eval_filename, args, file_path, predict_ners)
+        save_results(logger, results, eval_filename, args, file_path, predict_ners)
         save_results(
-            results, eval_filename, args, file_path, predict_ners_overlap, overlap=True
+            logger, results, eval_filename, args, file_path, predict_ners_overlap, overlap=True
         )
     return results
 
@@ -188,7 +190,7 @@ def postprocess_predictions(
     tot_pred_tot = 0
     for sentence_id, sentence_spans in sentences_predictions.items():
         # sort by probability (prefer highest probability)
-        sentence_spans.sort(key=lambda x: -x[2])
+        sentence_spans.sort(key=lambda x: (x[3] == "NIL", -x[2]))
         non_overlapping_spans = []
 
         for start, end, prob, label_gold in sentence_spans:
@@ -201,12 +203,13 @@ def postprocess_predictions(
             tot_pred_tot += 1
             if not is_overlap:
                 tot_pred += 1
-                predict_ners[sentence_id].append((start, end, label_gold, prob))
-            predict_ners_overlap[sentence_id].append((start, end, label_gold, prob))
+                predict_ners[sentence_id].append((start, end, prob, label_gold))
+            predict_ners_overlap[sentence_id].append((start, end, prob, label_gold))
             if (sentence_id, (start, end), label_gold) in ner_golden_labels:
                 cor_tot += 1
                 if not is_overlap:
                     cor += 1
+
 
     precision_score = p = cor / tot_pred if tot_pred > 0 else 0
     recall_score = r = cor / ner_total_recall
@@ -229,7 +232,7 @@ def postprocess_predictions(
 
 
 def save_results(
-    results, eval_filename, args, file_path, predicted_ners, overlap=False
+    logger, results, eval_filename, args, file_path, predicted_ners, overlap=False
 ):
     # pdb.set_trace()
     file_path = Path(file_path)
@@ -246,7 +249,7 @@ def save_results(
 
     # file_path is gold file
     input_lines = open(eval_filename)
-    filename_wo_json = file_name[:-5]
+    filename_wo_json = file_name[:-6]
     overlap_info = "_overlap" if overlap else ""
     target_filename = f"ent_pred_{filename_wo_json}{overlap_info}.json"
     target_path = Path(args.output_dir) / target_filename
@@ -259,7 +262,7 @@ def save_results(
         predicted_ner_proba = []
         for sentence_idx in range(num_sents):
             sentence_ner = predicted_ners.get((line_idx, sentence_idx), [])
-            sentence_ner.sort()
+            #sentence_ner.sort(key=lambda x: -x[2])
             predicted_ner_proba.append(sentence_ner)
             spans_wo_prob = [
                 (start, end, label) for start, end, prob, label in sentence_ner
