@@ -205,7 +205,6 @@ class RelationDataset(Dataset):
         self.model_type = args.model_type
         self.no_sym = args.no_sym
 
-        from utils.labels import ACE04_ as labels
 
         self.ner_label_list = labels.ner
         self.sym_labels = labels.rel.symmetric(only_nil=args.no_sym)
