@@ -99,7 +99,7 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
             gold_labels = (
                 inputs["labels"] > 0
             ).int()  # target: gold label exist (classes: 0, 1)
-            ent_masks = (inputs["labels"] > -1).int()  # entity mask without -1 labels
+            ent_masks = (inputs["labels"] > -1).bool()  # entity mask without -1 labels
             ner_logits = outputs[1].squeeze(-1)
             ner_probs = ner_logits.sigmoid()
             # NEG_INF = NEG_INF if ner_logits.dtype==torch.float32 else -1e4
