@@ -190,7 +190,7 @@ def postprocess_predictions(
     tot_pred_tot = 0
     for sentence_id, sentence_spans in sentences_predictions.items():
         # sort by probability (prefer highest probability)
-        sentence_spans.sort(key=lambda x: (x[3] == "NIL", -x[2]))
+        sentence_spans.sort(key=lambda x: -x[2])
         non_overlapping_spans = []
 
         for start, end, prob, label_gold in sentence_spans:
@@ -578,16 +578,25 @@ def _decode_pruner_topk(topk_infos, previous_infos):
     # assert torch.equal(ner_probs, ner_probs_1),pdb.set_trace()
     _, indices = torch.sort(ner_probs, dim=1, descending=True)
     _, n_entity = ner_probs.shape
+    
+    # Determine max entities for each sentence
 
     # gold_entities_id_flat = gold_labels.masked_select(ent_masks)
+    ## topk_ratio in hgere paper: 0.5
+    ### 1. define the maximum number of candidates based on topk ratio
     n_ent_topk = torch.ceil(sent_lens.float() * topk_ratio)
 
+    ### 2. select all sentences, where the initial number of candidates is lower than the defined minimum (e.g. sentence length 4: after topk-ratio: expect 2 candidates)
+    #  * min_topk_masked sentences need to be set to minimum
     min_topk_mask = n_ent_topk < min_mentions_num
+    #  * max_topk_masked sentences need to be reduced to max_mention_num value
     max_topk_mask = n_ent_topk > max_mentions_num
-
+    ### 3. select right value
+    #  * select min_mention_num if min_menition_num is higher than min_topk else n_ent_topk
     n_ent_topk = (
         min_topk_mask * min_mentions_num + (~min_topk_mask) * n_ent_topk
-    )  # if min_topk_mask=True, n_ent_topk=ent_mintopk, else: n_ent_topk=n_ent_topk
+    )
+    #  * select max_mention_num if max_menition_num is higher than max_topk else n_ent_topk
     n_ent_topk = max_topk_mask * max_mentions_num + (~max_topk_mask) * n_ent_topk
 
     # prune spans
