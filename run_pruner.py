@@ -169,6 +169,9 @@ def train(logger, args, model, tokenizer):
                             logger, args, model, tokenizer, file_path=dev_file
                         )
                         ent_recall = results["r_overlap"]
+                        ent_precision = results["p_overlap"]
+                        tb_writer.add_scalar("dev_recall", ent_recall, global_step)
+                        tb_writer.add_scalar("dev_precision", ent_precision, global_step)
 
                         if ent_recall >= best_result:
                             best_result = ent_recall
@@ -241,10 +244,8 @@ def setup_training(args, model, len_train, logger):
     if args.local_rank in [-1, 0]:
         # tb_writer = SummaryWriter("logs/ace_ner_logs/"+args.output_dir[args.output_dir.rfind('/'):])
         tb_writer = SummaryWriter(
-            "logs/"
-            + args.data_dir[max(args.data_dir.rfind("/"), 0) :]
-            + "_ner_logs/"
-            + args.output_dir[args.output_dir.rfind("/") :]
+            "logs/pruner/"
+            + Path(args.output_dir).name
         )
 
     if args.max_steps > 0:

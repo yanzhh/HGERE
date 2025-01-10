@@ -292,13 +292,18 @@ def train(logger, args, model, tokenizer):
                 dev_file = os.path.join(args.ner_prediction_dir, args.dev_file)
                 logger.info("evaluate dev file.")
                 results = evaluate(logger, args, model, tokenizer, file_path=dev_file)
-                f1 = results["f1_with_ner"]
-                tb_writer.add_scalar("f1_with_ner", f1, global_step)
+                f1_re_plus = results["f1_with_ner"]
+                f1_re = results["f1"]
+                f1_ner = results["ner_f1"]
+                tb_writer.add_scalar("f1_re+", f1_re_plus, global_step)
+                tb_writer.add_scalar("f1_re", f1_re, global_step)
+                tb_writer.add_scalar("f1_ner", f1_ner, global_step)
+
 
                 if f1 > best_f1:
                     best_f1 = f1
                     best_result = results
-                    print("Best F1", best_f1)
+                    logger.info("New Best F1+: {best_f1}")
                     update = True
                 else:
                     update = False
@@ -1478,7 +1483,7 @@ def main():
             model = model_class.from_pretrained(checkpoint, config=config, args=args)
             model.to(args.device)
 
-            dumps = []
+            results = {}
             for file_name in (args.train_file, args.dev_file, args.test_file):
                 test_file = os.path.join(args.ner_prediction_dir, file_name)
                 if os.path.exists(test_file):
@@ -1492,12 +1497,9 @@ def main():
                         prefix=global_step,
                         do_test=(file_name == args.test_file),
                     )
-                    dumps.append("--------------------------")
-                    dumps.append(f"Test result of {test_file}")
-                    dumps.append(str(result))
-            dumps = "\n".join(dumps)
+                    results["test_file"] = result
             with open(output_test_file, "w") as f:
-                f.write(dumps)
+                f.write(json.dumps(results))
 
 
 def get_saved_checkpoint(args, checkpoint_prefix):
