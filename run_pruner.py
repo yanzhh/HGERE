@@ -449,6 +449,8 @@ def main():
         num_labels = 19
     elif args.data_dir.find("gsap") != -1:
         num_labels = 11
+    elif args.data_dir.find("somd") != -1:
+        num_labels = 14
     else:
         assert False
 

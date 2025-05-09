@@ -12,6 +12,39 @@ ACE05 = {
     "rel_sym": ["PER-SOC"],
     "rel_non_sym": ["ART", "ORG-AFF", "GEN-AFF", "PHYS", "PART-WHOLE"],
 }
+SOMD = {
+        "ner": [
+        'Abbreviation',
+        'AlternativeName',
+        'Application',
+        'Citation',
+        'Developer',
+        'Extension',
+        'License',
+        'OperatingSystem',
+        'PlugIn',
+        'ProgrammingEnvironment',
+        'Release',
+        'SoftwareCoreference',
+        'URL',
+        'Version',
+            ],
+        "rel_sym": [],
+        "rel_non_sym": [
+            'Version_of',
+             'Developer_of',
+              'Citation_of',
+               'URL_of',
+                'PlugIn_of',
+                 'Release_of',
+                  'Abbreviation_of',
+                   'Specification_of',
+                    'Extension_of',
+                     'License_of',
+                      'AlternativeName_of'
+            ]
+        }
+
 GSAP = {
     "ner": [
         "Method",
@@ -20,25 +53,45 @@ GSAP = {
         "ModelArchitecture",
         "Dataset",
         "DatasetGeneric",
-        "Datasource",
+        "DataSource", # old: Datasource
         "Task",
         "ReferenceLink",
         "URL",
     ],
     "rel_sym": ["coreference", "isComparedTo"],
+    #"rel_non_sym_old": [
+    #    "isBasedOn",
+    #    "citation",
+    #    "appliedOn",
+    #    "evaluatedOn",
+    #    "isPartOf",
+    #    "trainedOn",
+    #    "isHyponymOf",
+    #    "hasInstanceType",
+    #    "size",
+    #    "url",
+    #    "versionOf",
+    #],
     "rel_non_sym": [
-        "isBasedOn",
-        "citation",
-        "appliedOn",
-        "evaluatedOn",
-        "isPartOf",
-        "trainedOn",
-        "isHyponymOf",
-        "hasInstanceType",
-        "size",
-        "url",
-        "versionOf",
-    ],
+        'citation', # 3
+             'usedFor',
+              'architecture', #5
+                'evaluatedOn',
+                 'isPartOf',
+                  'trainedOn',
+                   'appliedTo',
+                    'isHyponymOf', #10
+                      'transformedFrom',
+                       'benchmarkFor',
+                        'generatedBy',
+                         'isBasedOn',
+                          'sourcedFrom',#15
+                           'processed',
+                            'hasInstanceType',
+                             'size',
+                              'url',
+                               'versionOf' # 20
+                               ]
 }
 SCIER = {
     "ner": [
@@ -46,7 +99,8 @@ SCIER = {
         "Dataset",
         "Task"
         ],
-    "rel": [
+    "rel_sym": [],
+    "rel_non_sym": [
         "Part-Of",
         "Synonym-Of",
         "Benchmark-For",
@@ -102,4 +156,6 @@ LABELS = {
     "ace05": LabelScheme(**ACE05),
     "gsap": LabelScheme(**GSAP),
     "scierc": LabelScheme(**SCIERC),
+    "scier": LabelScheme(**SCIER),
+    "somd": LabelScheme(**SOMD),
 }

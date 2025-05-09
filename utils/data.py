@@ -1,8 +1,13 @@
 import itertools
+from copy import deepcopy
+import random
+from collections import defaultdict
+from collections import Counter
 import json
 import math
 import os
 import pdb
+from pprint import pprint
 
 # from multiprocessing.sharedctypes import Value
 # from re import I
@@ -96,8 +101,8 @@ class Sampler(torch.utils.data.Sampler):
         # self.epoch = 1
 
     def __iter__(self):
-        # indices = [self.buckets[i] for i in torch.arange(self.n_samples).tolist()]
-        return iter(self.buckets[i] for i in torch.arange(self.n_samples).tolist())
+        indices = [self.buckets[i] for i in torch.arange(self.n_samples).tolist()]
+        return iter(indices)
 
     def __len__(self):
         return self.n_samples
@@ -116,20 +121,14 @@ class DistrSampler(DistributedSampler):
         # super().__init__(self, num_replicas=None,rank=None, drop_last=False)
         if not dist.is_available():
             raise RuntimeError("Requires distributed package to be available")
-        num_replicas = dist.get_world_size()
-        if not dist.is_available():
-            raise RuntimeError("Requires distributed package to be available")
-        rank = dist.get_rank()
-        if rank >= num_replicas or rank < 0:
+        self.num_replicas = dist.get_world_size()
+        self.rank = dist.get_rank()
+        if self.rank >= self.num_replicas or self.rank < 0:
             raise ValueError(
-                "Invalid rank {}, rank should be in the interval" " [0, {}]".format(
-                    rank, num_replicas - 1
-                )
-            )
-        self.num_replicas = num_replicas
-        self.rank = rank
+                f"Invalid rank {rank}, rank should be in the interval" " [0, {num_replicas - 1}]")
         self.drop_last = False
-        if self.drop_last and len(self) % self.num_replicas != 0:  # type: ignore[arg-type]
+        if self.drop_last and len(self) % self.num_replicas != 0:
+            # type: ignore[arg-type]
             # Split to nearest available length that is evenly divisible.
             # This is to ensure each rank receives the same amount of data when
             # using this Sampler.
@@ -183,6 +182,8 @@ class RelationDataset(Dataset):
         args=None,
         evaluate=False,
         max_pair_length=None,
+        max_ents=18,
+        doc_limit=None
     ):
         self.logger = logger
 
@@ -194,6 +195,8 @@ class RelationDataset(Dataset):
         self.max_seq_length = args.max_seq_length
         self.max_pair_length = max_pair_length
         self.max_entity_length = self.max_pair_length * 2
+        self.max_ents = max_ents
+        self.doc_limit = doc_limit
 
         self.evaluate = evaluate
         self.use_typemarker = args.use_typemarker
@@ -232,7 +235,7 @@ class RelationDataset(Dataset):
             return tokenizer.tokenize(text)
 
         self.logger.info(f"loading from {self.file_path}")
-        f = open(self.file_path, "r", encoding="utf-8")
+        file = open(self.file_path, "r", encoding="utf-8")
         self.ner_tot_recall = 0
         self.tot_recall = 0
         self.data = []
@@ -250,7 +253,9 @@ class RelationDataset(Dataset):
         maxR = 0
         maxL = 0
 
-        for doc_idx, line in enumerate(f):
+        for doc_idx, line in enumerate(file):
+            if self.doc_limit is not None and doc_idx == self.doc_limit:
+                break
             data = json.loads(line)
             n_docs += 1
             # if self.args.output_dir.find('test')!=-1:
@@ -301,6 +306,8 @@ class RelationDataset(Dataset):
             #for sentence_idx in range(len(subword_sentence_boundaries) - 1):
             for sentence_idx, sentence in enumerate(sentences):
                 ner_candidates_sent = ner_candidates[sentence_idx]  # predicted ner
+                if self.max_ents is not None:
+                    ner_candidates_sent = ner_candidates_sent[:self.max_ents]
                 sentence_relations = relations[sentence_idx]
                 n_rels += len(sentence_relations)
                 # relation list of nth sentence,  [subj_head, subj_tail, obj_head, obj_tail, label_string]
@@ -631,22 +638,37 @@ class RelationDataset(Dataset):
         print("n_sents_used:", n_sents_used)
         print("n_ents:", n_ents)
         print("n_ents_used:", n_ents_used)
-        print("pruner entity recall:", n_ents_used / n_ents)
+        recall = 0.
+        if n_ents:
+            recall = n_ents_used / n_ents
+        print("pruner entity recall:", recall)
         print("n_rels:", n_rels)
         print("n_rels_used:", n_rels_used)
         self.logger.info("maxR: %s", maxR)
         self.logger.info("maxL: %s", maxL)
+        self.logger.info("Load whole dataset ...")
+        self.preload()
+        self.logger.info("Load whole dataset ended.")
+
 
     def __len__(self):
         return len(self.data)
-
+    
     def __getitem__(self, idx):
+        return self.data_tokenized[idx]
+    
+    def preload(self):
+        self.data_tokenized = []
+        for idx in range(len(self.data)):
+            print(f"\r{idx}/{len(self.data)} preprocessed", end="")
+            self.data_tokenized.append(self.prepare_item(idx))
+
+    def prepare_item(self, idx):
         items = []
         sent = self.data[idx]
         sent_index = sent.index
         ner_labels = sent.ner_labels
         obj_token_pos = sent.obj_token_pos
-
         input_ids_list = []
         attention_mask_list = []
         position_ids_list = []
@@ -702,10 +724,10 @@ class RelationDataset(Dataset):
             # else:
             attention_mask[:L, :L] = 1
 
-            obj_subtoken_pos = (
-                entry.obj_subtoken_pos
-            )  # object subtoken head/tail positions
-            # obj_token_pos = entry.obj_token_pos                # object token head/tail positions
+            obj_subtoken_pos = entry.obj_subtoken_pos
+            # object subtoken head/tail positions
+            # obj_token_pos = entry.obj_token_pos                
+            # object token head/tail positions
 
             position_ids = list(range(self.max_seq_length)) + [0] * (
                 tot_seq_len - self.max_seq_length
@@ -749,9 +771,8 @@ class RelationDataset(Dataset):
 
         n_ent = sent.size
         if n_ent == 0:
-            input_ids = torch.tensor(
-                []
-            )  # n_ent x n_ids (e.g. 12 x 324, 12 is the accumulate entity numbers of each sentences)
+            input_ids = torch.tensor([])  
+            # n_ent x n_ids (e.g. 12 x 324, 12 is the accumulate entity numbers of each sentences)
             attention_mask = torch.tensor([])  # n_ent x n_ids x n_ids
             position_ids = torch.tensor([])  # n_ent x n_ids
             sub_subtoken_pos = torch.tensor([])  # n_ent x 2
@@ -784,34 +805,23 @@ class RelationDataset(Dataset):
         )
         return items
 
+
+
+
     def build(
-        self, batch_size, shuffle=False, n_workers=0, pin_memory=True, sort=False
-    ):
-        if sort:
-            sort_index = np.argsort(self.sizes)  # sentence index
-            sorted_size = sorted(self.sizes)
+        self, batch_size, shuffle=False, n_workers=0, pin_memory=True):
+        """
+        @idea: make batches as big as possible
+         * currently if one batch is of size 1, the next one is bigger than batch_size:
+           => a new batch is created an the one with size 1 is left as it is (to small).
+        sort: Bool Sort by number of items (Object candidates?)
+        """
+
+        if shuffle:
+            self.buckets = _create_shuffled_batches(self.sizes, batch_size)
         else:
-            sort_index = np.arange(len(self.sizes))
-            sorted_size = self.sizes
-        sizes = []
-        buckets = []
-        new_sizes = []
-        new_buck = []
-        for i, size_i in enumerate(sorted_size):
-            if (sum(new_sizes) + size_i <= batch_size) or (
-                len(new_sizes) == 0 and size_i >= batch_size
-            ):
-                new_sizes.append(size_i)
-                new_buck.append(sort_index[i])
-            else:
-                sizes.append(new_sizes)
-                buckets.append(new_buck)
-                new_sizes = [size_i]
-                new_buck = [sort_index[i]]
-        if len(new_sizes) > 0:
-            sizes.append(new_sizes)
-            buckets.append(new_buck)
-        self.buckets = buckets
+            self.buckets = _create_batches(self.sizes, batch_size)
+
         sampler = Sampler if self.args.local_rank == -1 else DistrSampler
         # e.g. buckets: [[0, 1], [2, 3], [4, 5], [6, 7], [8]] indicate which sents are in one batch.
         self.loader = DataLoader(
@@ -827,12 +837,24 @@ class RelationDataset(Dataset):
         """
         batch: list of items got by Dataset.__getitem__()
         """
+        """
+        if all(sent.get("n_ent") is None for sent in batch):
+            # batch is reiterated
+            # just return the batch without further processing
+            assert len(batch) == 1
+            return batch[0]
+        if all(sent.get("n_ent") is None for sent in batch):
+            # batch is reiterated
+            # just return the batch without further processing
+            assert len(batch) == 1
+            return batch[0]
+        """
         ent_numbers = torch.tensor([sent["n_ent"] for sent in batch])
         n_sent = len(batch)
         if len(ent_numbers) == 0:
             pdb.set_trace()
         if len(ent_numbers) == 1:  # only one sentence
-            items = batch[0]
+            items = deepcopy(batch[0])
             # print(f'index:{items["indexs"]}')
             # print(f'ner_labels:{items["ner_labels"]}')
             items.pop("n_ent")
@@ -843,13 +865,12 @@ class RelationDataset(Dataset):
                 batch[k] = batch[k].unsqueeze(0)
             for k in ["indexs", "sub", "obj_token_pos"]:
                 batch[k] = [batch[k]]
-            return batch
         else:
             subs = []
             obj_token_pos = []
             indexs = []
             max_ent_num = max(ent_numbers)
-            seqlen = batch[0].pop("subtoken_len")
+            seqlen = batch[0]["subtoken_len"]
             bs = sum(
                 ent_numbers
             )  # bs: number of input sequences for sentences in batch
@@ -953,3 +974,69 @@ class RelationDataset(Dataset):
                 ent_numbers=ent_numbers,
             )
         return batch
+
+def _create_batches(n_ents_by_sent, batch_size):
+    sort_index = np.arange(len(n_ents_by_sent))
+    sorted_sizes = n_ents_by_sent
+    batch_sizes = []
+    batches = []
+    missing_in_batches = []
+
+    current_sizes = []
+    current_batch = []
+    for sent_idx, n_sent_ents in enumerate(sorted_sizes):
+        if (sum(current_sizes) + n_sent_ents <= batch_size) or (
+            len(current_sizes) == -1 and n_sent_ents >= batch_size
+        ):
+            #current batch has room for more sentences
+            current_sizes.append(n_sent_ents)
+            current_batch.append(sort_index[sent_idx])
+        else:
+            # current batch is full, open new batch
+            missing = batch_size - sum(current_sizes)
+            missing_in_batches.append(missing)
+            batch_sizes.append(current_sizes)
+            batches.append(current_batch)
+            current_sizes = [n_sent_ents]
+            current_batch = [sort_index[sent_idx]]
+    if len(current_sizes) > -1:
+        batch_sizes.append(current_sizes)
+        batches.append(current_batch)
+    #print("missing in batches:", sum(missing_in_batches))
+    return batches
+
+
+def _create_shuffled_batches(n_ents_by_sent, batch_size):
+    random.shuffle(n_ents_by_sent)
+    ordered = [(idx, max(size, 1)) for idx, size in enumerate(n_ents_by_sent)]
+    ordered.sort(key=lambda x: x[1])
+    batches = []
+    sizes = []
+    while ordered:
+        batch, size = _get_batch_filled_up_smallest(ordered, batch_size)
+        if batch is not None:
+            batches.append(batch)
+            sizes.append(size)
+    print("Reals batch_size counts:", Counter(sizes).most_common())
+    random.shuffle(batches)
+    return batches
+
+def _get_batch_filled_up_smallest(ordered, batch_size):
+    current_batch = None
+    current_size = None
+    if ordered:
+        sent_id, size = ordered.pop()
+        current_batch = [sent_id]
+        current_size = size
+    while ordered:
+        next_sent_id, next_size = ordered[0]
+        if current_size + next_size > batch_size:
+            return current_batch, current_size
+        else:
+            sent_id, size = ordered.pop(0)
+            current_batch.append(sent_id)
+            current_size += size
+            if len(ordered) == 0:
+                return current_batch, current_size
+    return current_batch, current_size
+

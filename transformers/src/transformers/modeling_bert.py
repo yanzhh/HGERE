@@ -4398,7 +4398,7 @@ class BertForHyperGNN(BertPreTrainedModel):
 		self.obj_encoder = CatEncoder(input_dims=[config.hidden_size]*2, output_dim=args.ent_dim)
 		sub_dim = args.ent_dim
 		obj_dim = args.ent_dim
-		self.rel_encoder =CatEncoder(input_dims=[sub_dim, obj_dim] , output_dim=args.rel_dim)
+		self.rel_encoder = CatEncoder(input_dims=[sub_dim, obj_dim] , output_dim=args.rel_dim)
 		rel_dim = args.rel_dim
 		ent_dim = args.ent_dim
 

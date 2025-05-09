@@ -1,3 +1,4 @@
+
 # HGERE
 
 Source Code for "Joint Entity and Relation Extraction with Span Pruning and Hypergraph Neural Networks" of EMNLP2023
@@ -13,6 +14,7 @@ Please refer to [PL-marker](https://github.com/thunlp/PL-Marker) for dependency 
 ### Download Pre-trained Language Models
 
 Download scibert_scivocab_uncased, bert-base-uncased and albert-xxlarge-v1 from huggingface, and place them in fold "pretrained_models".
+huggingface-cli download answerdotai/ModernBERT-base --local-dir ./your_target_directory
 
 ## Training
 

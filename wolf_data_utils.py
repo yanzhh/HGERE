@@ -38,10 +38,27 @@ NER_LABEL_LISTS = dict(
         "Method",
         "Task",
         "Dataset",
-        "Datasource",
+        "DataSource",
         "DatasetGeneric",
         "URL",
         "ReferenceLink",
+    ],
+    somd=[
+        "Unknown",
+        'Abbreviation',
+        'AlternativeName',
+        'Application',
+        'Citation',
+        'Developer',
+        'Extension',
+        'License',
+        'OperatingSystem',
+        'PlugIn',
+        'ProgrammingEnvironment',
+        'Release',
+        'SoftwareCoreference',
+        'URL',
+        'Version',
     ],
     default=[
         "NIL",
@@ -96,6 +113,8 @@ class ACEDatasetNER(Dataset):
 
         if args.data_dir.find("ace") != -1:
             self.ner_label_list = NER_LABEL_LISTS["ace"]
+        elif args.data_dir.find("somd") != -1:
+            self.ner_label_list = NER_LABEL_LISTS["somd"]
         elif args.data_dir.find("scierc") != -1:
             self.ner_label_list = NER_LABEL_LISTS["scierc"]
         elif args.data_dir.find("gsap") != -1:
@@ -103,6 +122,7 @@ class ACEDatasetNER(Dataset):
         else:
             self.ner_label_list = NER_LABEL_LISTS["default"]
 
+        print(self.ner_label_list)
         self.max_pair_length = args.max_pair_length
 
         self.max_entity_length = args.max_pair_length * 2
@@ -254,6 +274,7 @@ class ACEDatasetNER(Dataset):
                     #    print(start, end, label)
                     #    print(token2subword[7000:])
                     key = token2subword[start], token2subword[end + 1]
+
                     entity_labels[key] = ner_label_map[label]
                     self.ner_golden_labels.add(
                         ((line_idx, sentence_idx), (start, end), label)

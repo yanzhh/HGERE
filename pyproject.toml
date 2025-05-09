@@ -10,6 +10,7 @@ dependencies = [
     "tensorboardx>=2.6.2.2",
     "torch>=2.5.1",
     "tqdm>=4.67.1",
+    "wandb>=0.19.9",
 ]
 
 [tool.uv]
