@@ -13,7 +13,7 @@
 * uv add setuptools
 
 ## install transformers
-* uv pip install --editable ./transformers
+* uv add --editable ./transformers
 ## install apex
  * installed apex from a fresh clone:
 ```
