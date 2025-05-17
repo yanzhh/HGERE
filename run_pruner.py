@@ -1,5 +1,6 @@
 # coding=utf-8
 import argparse
+#from enum import global_str
 import glob
 import json
 import os
@@ -13,6 +14,8 @@ from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
+import wandb
+
 
 from transformers import (
     AdamW,
@@ -52,7 +55,7 @@ MODEL_CLASSES = {
 def train(logger, args, model, tokenizer):
     train_sampler, train_data_loader = load_data(args, tokenizer, logger)
     len_train = len(train_data_loader)
-    model, optimizer, scheduler, tb_writer = setup_training(
+    model, optimizer, scheduler = setup_training(
         args, model, len_train, logger
     )
 
@@ -148,12 +151,11 @@ def train(logger, args, model, tokenizer):
                     and global_step % args.logging_steps == 0
                 ):
                     # Log metrics
-                    tb_writer.add_scalar("lr", scheduler.get_last_lr()[0], global_step)
-                    tb_writer.add_scalar(
-                        "loss",
-                        (tr_loss - logging_loss) / args.logging_steps,
-                        global_step,
-                    )
+                    metrics_to_log = {
+                        "train/lr": scheduler.get_last_lr()[0],
+                        "train/loss": (tr_loss - logging_loss) / args.logging_steps,
+                    }
+                    wandb.log(metrics_to_log, global_step)
                     logging_loss = tr_loss
 
                 if (
@@ -170,8 +172,11 @@ def train(logger, args, model, tokenizer):
                         )
                         ent_recall = results["r_overlap"]
                         ent_precision = results["p_overlap"]
-                        tb_writer.add_scalar("dev_recall", ent_recall, global_step)
-                        tb_writer.add_scalar("dev_precision", ent_precision, global_step)
+                        metrics_to_log = {
+                            "dev/recall", ent_recall,
+                            "dev/precision", ent_precision,
+                        }
+                        wandb.log(metrics_to_log, global_step)
 
                         if ent_recall >= best_result:
                             best_result = ent_recall
@@ -240,14 +245,11 @@ def load_data(args, tokenizer, logger):
 
 def setup_training(args, model, len_train, logger):
     """Train the model"""
-    tb_writer = None
     if args.local_rank in [-1, 0]:
-        # tb_writer = SummaryWriter("logs/ace_ner_logs/"+args.output_dir[args.output_dir.rfind('/'):])
-        tb_writer = SummaryWriter(
-            "logs/pruner/"
-            + Path(args.output_dir).name
-        )
-
+        wandb_params = dict(project=args.project_name, config=vars(args))
+        if args.run_name is not None:
+            wandb_params["name"] = args.run_name
+        wandb.init(**wandb_params)
     if args.max_steps > 0:
         t_total = args.max_steps
         args.num_train_epochs = (
@@ -311,7 +313,7 @@ def setup_training(args, model, len_train, logger):
     logger.info("  Total optimization steps = %d", t_total)
     logger.info("  Eval steps = %d", args.eval_steps)
 
-    return model, optimizer, scheduler, tb_writer
+    return model, optimizer, scheduler
 
 
 def get_span_optimizer(model_named_parameters, args):
@@ -718,6 +720,18 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
 
     ## Required parameters
+    parser.add_argument(
+            "--project_name",
+            type=str,
+            default="hgere-pruner",
+            help="project name for wandb",
+        )
+    parser.add_argument(
+            "--run_name",
+            type=str,
+            default=None,
+            help="run name for wandb.",
+        )
     parser.add_argument(
         "--data_dir",
         default="ace_data",
