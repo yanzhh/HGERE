@@ -1,13 +1,11 @@
 import itertools
 from copy import deepcopy
 import random
-from collections import defaultdict
 from collections import Counter
 import json
 import math
 import os
 import pdb
-from pprint import pprint
 
 # from multiprocessing.sharedctypes import Value
 # from re import I
@@ -22,8 +20,6 @@ from torch.utils.data import DataLoader, Dataset  # , TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 
 from transformers import RobertaTokenizer
-
-WEIGHTS_NAME = "pytorch_model.bin"
 
 
 class SentenceSubjectCandidate:
@@ -125,7 +121,7 @@ class DistrSampler(DistributedSampler):
         self.rank = dist.get_rank()
         if self.rank >= self.num_replicas or self.rank < 0:
             raise ValueError(
-                f"Invalid rank {rank}, rank should be in the interval" " [0, {num_replicas - 1}]")
+                f"Invalid rank {self.rank}, rank should be in the interval" " [0, {self.num_replicas - 1}]")
         self.drop_last = False
         if self.drop_last and len(self) % self.num_replicas != 0:
             # type: ignore[arg-type]
@@ -178,12 +174,12 @@ class RelationDataset(Dataset):
         logger,
         tokenizer,
         labels,
-        file_path=None,
+        file_path,
         args=None,
-        evaluate=False,
         max_pair_length=None,
         max_ents=18,
-        doc_limit=None
+        doc_limit=None,
+        preload=False
     ):
         self.logger = logger
 
@@ -198,7 +194,6 @@ class RelationDataset(Dataset):
         self.max_ents = max_ents
         self.doc_limit = doc_limit
 
-        self.evaluate = evaluate
         self.use_typemarker = args.use_typemarker
         self.local_rank = args.local_rank
         self.args = args
@@ -211,6 +206,11 @@ class RelationDataset(Dataset):
 
         self.global_predicted_ners = {}
         self.initialize()
+        self.is_preloaded = preload
+        if preload:
+            self.logger.info("Load whole dataset ...")
+            self.preload()
+            self.logger.info("Load whole dataset ended.")
 
     def initialize(self):
         tokenizer = self.tokenizer
@@ -483,9 +483,6 @@ class RelationDataset(Dataset):
                             )
                             # add label id for non-symmetric labels (there is no relation exists for reverse of x, so we call the reverse of x the pseudo label)
 
-                # if not self.evaluate:
-                #     entities.append((10000, 10000, 'NIL')) # only for NER
-                # [[4, 5, 'NIL'], [4, 7, 'Task'], [13, 13, 'NIL'], [13, 14, 'Method'], (10000, 10000, 'NIL')]
                 subject_candidates = []
                 for subj_begin, subj_end, subj_label in ner_candidates_sent:
                     # iterated entity of a sentence  as subject.  e.g.: [48, 48, 'Generic']
@@ -602,7 +599,8 @@ class RelationDataset(Dataset):
                         ner_labels.append(ner_label_map[obj_label_gold])
 
 
-                    if subj_label_gold != 0: n_ents_used += 1
+                    if subj_label_gold != 0:
+                        n_ents_used += 1
                     subject_candidate = SentenceSubjectCandidate(
                         id_tuple=(doc_idx, sentence_idx),
                         sub_tokens=sub_tokens,  # context text (incl. sentence with subject marker, but no object Marker)
@@ -646,16 +644,16 @@ class RelationDataset(Dataset):
         print("n_rels_used:", n_rels_used)
         self.logger.info("maxR: %s", maxR)
         self.logger.info("maxL: %s", maxL)
-        self.logger.info("Load whole dataset ...")
-        self.preload()
-        self.logger.info("Load whole dataset ended.")
 
 
     def __len__(self):
         return len(self.data)
     
     def __getitem__(self, idx):
-        return self.data_tokenized[idx]
+        if self.is_preloaded:
+            return self.data_tokenized[idx]
+        else:
+            return self.prepare_item(idx)
     
     def preload(self):
         self.data_tokenized = []
