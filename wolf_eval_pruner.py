@@ -212,11 +212,11 @@ def postprocess_predictions(
 
 
     precision_score = p = cor / tot_pred if tot_pred > 0 else 0
-    recall_score = r = cor / ner_total_recall
+    recall_score = r = cor / ner_total_recall if ner_total_recall > 0 else 0
     f1 = 2 * (p * r) / (p + r) if cor > 0 else 0.0
 
     p = cor_tot / tot_pred_tot if tot_pred_tot > 0 else 0
-    r = cor_tot / ner_total_recall
+    r = cor_tot / ner_total_recall if ner_total_recall > 0 else 0
     f1_tot = 2 * (p * r) / (p + r) if cor > 0 else 0.0
 
     results = {
