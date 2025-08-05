@@ -2,22 +2,24 @@
 # set cuda visible devices here
 
 GPU_ID=0
-DATASET_DATE=2025-04-15
-DATE_MODEL=2025-04-07
+DATASET_DATE=2025-05-19
+DATE_MODEL=2025-05-09
 ANNOTATOR=
+RUN_NAME="first_try${ANNOTATOR}"
 # directory of preprocessed dataset
-DATADIR=/home/ottowg/projects/gsap/gsap-rel/preprocessing/gsap-rel-sentence-simple/  
-DATADIR=/home/ottowg/projects/gsap/gsap-hub/data_plmarker/$DATASET_DATE/
-for seed in 44; do 
+DATADIR=/home/groups/gsap/projects/gsap/gsap-rel/preprocessing/gsap-rel-sentence-simple/
+DATADIR=/home/groups/gsap/data/annotations/plmarker/$DATASET_DATE/ground_truth/clean/SentenceFootnote
+for seed in 44; do
 for minent in 30; do
 for maxent in 30; do
 for epochs in 4; do
 for lr in 1e-5; do
 #--do_train \
-OUTPUT_DIR=saves/gsap/pruner/biafencoder-spanlen12-rank768-hid768-span256-bs8-entnum$minent-$maxent-lr$lr-epochs$epochs/gsap_scibert_data2025-02-08-bs16-$lr-$epochs-$seed
-OUTPUT_DIR=saves/gsap/pruner/lr$lr-epochs$epochs/gsap_scibert_data_${DATE_MODEL}-bs16-$seed  
+OUTPUT_DIR=saves/gsap/pruner/$RUN_NAME/${DATE_MODEL}
+OUTPUT_DIR=saves/gsap/pruner/$RUN_NAME
 echo $OUTPUT_DIR
 CUDA_VISIBLE_DEVICES=$GPU_ID  python3  run_pruner.py  \
+    --run_name $RUN_NAME \
     --do_test  \
     --do_eval \
     --seed $seed \
