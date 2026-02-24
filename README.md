@@ -29,22 +29,26 @@
    * mv `scibert_scivocab_uncased` to `pretrained_models`
 
 ### Note on Cuda Version (12.8)
- * in `pyproject.toml` the installation of cuda 12.8 is used for other cuda version you need to set up things on your own.
+ * in `pyproject.toml` the installation of cuda 12.8 is used, for other cuda versions you need to set up things on your own.
 
 ### install dependencies via uv
  * `uv sync`
- * activate uv virtual environment `source .venv/bin/activate
+ * Then activate uv virtual environment `source .venv/bin/activate`
  * You are ready to use the bash scripts in `scripts` folder
 
 ## How HGERE works
-HGERE contains two steps based on two different models. First is a pruner model, which is trained on the NER annotations but is not considering the NER labels. It reduces the candidates for NER from 12 * n (where n is the number of words in the sentences) to ~5 candidates in mean.
+HGERE contains two steps based on two different models. First is a pruner model, which is trained on the NER annotations but does not consider the NER labels. It reduces the candidates for NER from 12 * n (where n is the number of words in the sentences) to ~5 candidates on average (mean).
 
-The first step is to train the pruner. The pruner results are then used as input for the HGERE Entity and Relation Extraction (ERE) model
+The first step is to train the pruner. The pruner results are then used as input for the HGERE Entity and Relation Extraction (ERE) model.
 
 ### Run pruner and hgere training
  * Use `GPU_ID` parameter in scripts to choose specific GPU(s) on your machine.
- * Use the scripts:
-   * `scripts/pruner/train.py`
-   * `scripts/hgere/train.py`
+  * In run_pruner_gsap.sh, change the DATADIR variable to the dataset containing your data, e.g.:
+      `DATADIR=/home/groups/gsap/data/annotations/plmarker/2025-05-19/ground_truth/clean/SentenceFootnote`
+ * Use the scripts for a given model-dataset folder:
+   1. `./scripts/pruner/{model-dataset}/run_pruner_gsap.sh`
+   2. `./scripts/hgere/{model-dataset}/train.sh`
 
-
+### Inference -- (WIP)
+#### Pruner
+If you already have a model, by default (following the bash script) it should be loaded from `./saves/gsap/pruner`. (Bash Variable )

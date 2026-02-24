@@ -10,7 +10,6 @@ import socket
 from pathlib import Path
 
 import torch
-from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
