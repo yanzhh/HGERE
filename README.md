@@ -5,8 +5,10 @@
 
 ### Install depenendencies
  * install `uv` first
-   * `curl -LsSf https://astral.sh/uv/install.sh | sh`
+  * `curl -LsSf https://astral.sh/uv/install.sh | sh`
  * install `rust` to be able to install transformers (see below)
+  * `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+  * `source "$HOME/.cargo/env"`
  * install bash if not available
 
 ### External Tools
@@ -15,11 +17,9 @@
 ### Tested Hardware
  * Linux Server with ubuntu
  * GPU Access A40 GPUs with 40Gig Ram
-   * The HGERE is gpu memory hungry for large batch sizes. Batch size of 18 with 40Gig GPU works for us 
+  * The HGERE is gpu memory hungry for large batch sizes. Batch size of 18 with 40Gig GPU works for us 
 
 ### install rust (Needed for transformers)
- * `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
- * `source "$HOME/.cargo/env"`
 
 ### Load scibert base model
  * install lfs for git 
