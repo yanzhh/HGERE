@@ -8,7 +8,7 @@
   * `curl -LsSf https://astral.sh/uv/install.sh | sh`
  * install `rust` to be able to install transformers (see below)
   * `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-  * `source "$HOME/.cargo/env"`
+    * If you wish to use rust with the current shell run `source ". $HOME/.cargo/env"`, or reload shell to update the path.
  * install bash if not available
 
 ### External Tools
