@@ -5,6 +5,7 @@
 
 ### Install depenendencies
  * install `uv` first
+   * `curl -LsSf https://astral.sh/uv/install.sh | sh`
  * install `rust` to be able to install transformers (see below)
  * install bash if not available
 
