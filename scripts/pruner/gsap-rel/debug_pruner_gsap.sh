@@ -1,6 +1,6 @@
 # SciERC with scibert
 # set cuda visible devices here
-GPU_ID=-1
+GPU_ID=4
 # directory of preprocessed dataset
 DATADIR=/home/ottowg/projects/gsap/gsap-rel/preprocessing/gsap-rel-sentence-simple/  
 
@@ -13,18 +13,18 @@ CUDA_VISIBLE_DEVICES=$GPU_ID  python3  run_pruner.py  \
     --train_file train_debug.jsonl \
     --dev_file dev_debug.jsonl \
     --test_file test_debug.jsonl  \
-    --output_dir saves/reproduce/gsap_models/pruner/biafencoder-spanlen12-rank768-hid768-span256-entnum$minent-$maxent-lr2e-5-epochs8/scierc_scibert-$seed  \
+    --output_dir saves/gsap/pruner/biafencoder-spanlen12-rank768-hid768-span256-entnum$minent-$maxent-lr2e-5-epochs8/gsap_debug_scibert-$seed  \
     --overwrite_output_dir  \
     --output_results \
     --model_type bertspanmarkerpruner  \
     --model_name_or_path  pretrained_models/scibert_scivocab_uncased  \
     --do_lower_case  \
     --learning_rate 2e-5  \
-    --num_train_epochs 8  \
+    --num_train_epochs 1  \
     --eval_epochs 1   \
-    --per_gpu_train_batch_size  8  \
-    --per_gpu_eval_batch_size 8 \
-    --gradient_accumulation_steps 1  \
+    --per_gpu_train_batch_size  4  \
+    --per_gpu_eval_batch_size 4 \
+    --gradient_accumulation_steps 2  \
     --max_seq_length 256  \
     --save_steps 1000  \
     --max_pair_length 64  \
