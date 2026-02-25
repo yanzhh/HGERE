@@ -9,23 +9,14 @@ dependencies = [
     "setuptools>=75.6.0",
     "torch>=2.5.1",
     "tqdm>=4.67.1",
-    "transformers",
     "wandb>=0.19.9",
+    "transformers",
 ]
 
 [tool.uv]
 dev-dependencies = [
     "lint>=1.2.1",
     "ruff>=0.8.4",
-    "tensorboard>=2.18.0",
 ]
-
 [tool.uv.sources]
-torch = { index = "pytorch-cu128"}
-torchvision = { index = "pytorch-cu128"}
-torchaudio = { index = "pytorch-cu128"}
 transformers = { path = "transformers", editable = true }
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true

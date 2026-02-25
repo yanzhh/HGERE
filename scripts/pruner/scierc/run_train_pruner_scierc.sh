@@ -1,6 +1,6 @@
 # SciERC with scibert
 #GPU_ID=$CUDA_VISIBLE_DEVICES
-GPU_ID=3
+GPU_ID=7
 # directory of preprocessed dataset
 DATADIR=/home/ottowg/projects/gsap/related_datasets/scierc/dataset/
 
@@ -11,15 +11,15 @@ CUDA_VISIBLE_DEVICES=$GPU_ID  python3  run_pruner.py  --model_type bertspanmarke
     --model_name_or_path  pretrained_models/scibert_scivocab_uncased  --do_lower_case  \
     --data_dir $DATADIR  \
     --learning_rate 2e-5  \
-    --num_train_epochs 8  --eval_epochs 1    --per_gpu_train_batch_size  8  --per_gpu_eval_batch_size 8  --gradient_accumulation_steps 1  \
+    --num_train_epochs 8  --eval_epochs 1    --per_gpu_train_batch_size  4  --per_gpu_eval_batch_size 4  --gradient_accumulation_steps 2  \
     --max_seq_length 256  --save_steps 1000  --max_pair_length 64  --max_mention_ori_length 12    \
     --max_mentions_num $maxent --min_mentions_num $minent \
     --do_train --do_test  --do_eval  --evaluate_during_training   --eval_all_checkpoints  \
     --seed $seed  --onedropout  --lminit  --nocross\
     --train_file train.json --dev_file dev.json --test_file test.json  \
-    --output_dir saves/reproduce/sciner_models/pruner/biafencoder-spanlen12-rank768-hid768-span256-entnum$minent-$maxent-lr2e-5/scierc_scibert-$seed  --overwrite_output_dir  --output_results \
+    --output_dir saves/scierc/pruner/biafencoder-spanlen12-rank768-hid768-span256-entnum$minent-$maxent-lr2e-5/scierc_scibert-$seed  --overwrite_output_dir  --output_results \
     --biaf_span  --biaf_mode  2  --biaf_factorize  --span_hidden_size 768   --rank 768  --span_size 256 \
-    --local_rank -1 --fp16
+    --local_rank -1
 done;
 done;
 done;

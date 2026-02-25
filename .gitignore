@@ -171,3 +171,4 @@ slurm/
 logs/
 data/
 pretrained_models/
+uv.lock

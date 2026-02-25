@@ -28,7 +28,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID  python3  run_pruner.py  \
     --dev_file ${DATASET_DATE}${ANNOTATOR}_dev.jsonl \
     --test_file ${DATASET_DATE}${ANNOTATOR}_test.jsonl  \
     --output_dir ${OUTPUT_DIR} \
-    --overwrite_output_dir  \
+    --overwrite_model_dir  \
     --output_results \
     --model_type bertspanmarkerpruner  \
     --model_name_or_path  pretrained_models/scibert_scivocab_uncased  \
