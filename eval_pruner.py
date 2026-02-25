@@ -154,9 +154,9 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
         )
 
     force_same_label = not is_ontonotes
-    ner_total_recall = eval_dataset.tot_recall
+    ner_support = eval_dataset.tot_recall
     predict_ners, predict_ners_overlap, results = postprocess_predictions(
-        sentences_predictions, ner_golden_labels, force_same_label, ner_total_recall
+        sentences_predictions, ner_golden_labels, force_same_label, ner_support
     )
     res = {k: f"{v:.4f}" for k, v in results.items()}
     logger.info(f"Result: {res}")
@@ -175,61 +175,77 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
 
 
 def postprocess_predictions(
-    sentences_predictions, ner_golden_labels, force_same_label, ner_total_recall
+    sentences_predictions, ner_golden_labels, force_same_label, support
 ):
-    # p = tp / tot_pred if tot_pred > 0 else 0
-    # r = tp / n_pos
-    # f1_tot = 2 * (p * r) / (p + r) if tp > 0 else 0.0
+    all_golden_labels_included = len(ner_golden_labels) == support
+    if not all_golden_labels_included:
+        print("Caution: Not all golden labels are used for performance calculations")
+    support = len(ner_golden_labels)
 
-    # print(f'f1_tot:{f1_tot}')
     predict_ners = defaultdict(list)
     predict_ners_overlap = defaultdict(list)
-    cor = 0
-    tot_pred = 0
-    cor_tot = 0
-    tot_pred_tot = 0
+ 
+    tp = 0
+    fp = 0
+    tp_05 = 0
+    fp_05 = 0
+    tp_overlap = 0
+    fp_overlap = 0
     for sentence_id, sentence_spans in sentences_predictions.items():
         # sort by probability (prefer highest probability)
         sentence_spans.sort(key=lambda x: -x[2])
         non_overlapping_spans = []
 
         for start, end, prob, label_gold in sentence_spans:
+            predict_ners_overlap[sentence_id].append((start, end, prob, label_gold))
+            # is there a span with overlap to this spans allready predicted?
             is_overlap = _overlapping_span_exist(
                 start, end, label_gold, non_overlapping_spans, force_same_label
-            )
+            ) # Check function
             if not is_overlap:
+                # a new predicted span!
                 non_overlapping_spans.append((start, end, prob, label_gold))
-
-            tot_pred_tot += 1
-            if not is_overlap:
-                tot_pred += 1
                 predict_ners[sentence_id].append((start, end, prob, label_gold))
-            predict_ners_overlap[sentence_id].append((start, end, prob, label_gold))
-            if (sentence_id, (start, end), label_gold) in ner_golden_labels:
-                cor_tot += 1
+            
+            # count matches 
+            #  prediction is in gold: true positive
+            is_tp = (sentence_id, (start, end), label_gold) in ner_golden_labels
+            if is_tp:
+                tp_overlap += 1
                 if not is_overlap:
-                    cor += 1
+                    tp += 1
+                    if prob >= 0.5:
+                        tp_05 += 1
+            else:
+                # False Positive
+                fp_overlap += 1
+                if not is_overlap:
+                    fp += 1
+                    if prob >= 0.5:
+                        fp_05 += 1
 
+    
+    metrics = {}
+    metrics |= _get_metrics(tp, fp, support, "")
+    metrics |= _get_metrics(tp_05, fp_05, support, "_05")
+    metrics |= _get_metrics(tp_overlap, fp_overlap, support, "_overlap")
 
-    precision_score = p = cor / tot_pred if tot_pred > 0 else 0
-    recall_score = r = cor / ner_total_recall
-    f1 = 2 * (p * r) / (p + r) if cor > 0 else 0.0
+    return predict_ners, predict_ners_overlap, metrics
 
-    p = cor_tot / tot_pred_tot if tot_pred_tot > 0 else 0
-    r = cor_tot / ner_total_recall
-    f1_tot = 2 * (p * r) / (p + r) if cor > 0 else 0.0
-
-    results = {
-        "f1": f1,
-        "precision": precision_score,
-        "recall": recall_score,
-        "f1_overlap": f1_tot,
-        "p_overlap": p,
-        "r_overlap": r,
-    }
-
-    return predict_ners, predict_ners_overlap, results
-
+def _get_metrics(tp, fp, support, suffix):
+    precision = recall = f1 = 0.
+    if tp + fp > 0.:
+        precision = tp / (tp + fp)
+    if support > 0.:
+        recall = tp / support
+    if precision + recall > 0.:
+        f1 = 2 * (precision * recall) / (precision + recall)
+    metrics = {
+        f"precision{suffix}": precision,
+        f"recall{suffix}": recall,
+        f"f1{suffix}": f1,
+        }
+    return metrics
 
 def save_results(
     logger, results, eval_filename, args, file_path, predicted_ners, overlap=False
@@ -264,9 +280,16 @@ def save_results(
             sentence_ner = predicted_ners.get((line_idx, sentence_idx), [])
             #sentence_ner.sort(key=lambda x: -x[2])
             predicted_ner_proba.append(sentence_ner)
-            spans_wo_prob = [
+            # filter by threshold
+            if args.filter_threshold:
+                spans_wo_prob = [
                 (start, end, label) for start, end, prob, label in sentence_ner
+                if prob >= args.filter_threshold
             ]
+            else:
+                spans_wo_prob = [
+                    (start, end, label) for start, end, prob, label in sentence_ner
+                ]
             predicted_ner.append(spans_wo_prob)
 
         doc["predicted_ner"] = predicted_ner

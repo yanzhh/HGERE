@@ -411,12 +411,12 @@ class RelationDataset(Dataset):
                             (
                                 subj_begin,
                                 subj_end,
-                                entity_labels_gold[(subj_begin, subj_end)],
+                                entity_labels_gold.get((subj_begin, subj_end), 0),
                             ),
                             (
                                 obj_begin,
                                 obj_end,
-                                entity_labels_gold[(obj_begin, obj_end)],
+                                entity_labels_gold.get((obj_begin, obj_end), 0),
                             ),
                             relation_label,
                         )

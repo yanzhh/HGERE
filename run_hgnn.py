@@ -424,9 +424,9 @@ def load_dataset(split, tokenizer, args, logger):
     assert os.path.isfile(file_path)
 
 
-    scheme = get_scheme(file_path)
-    logger.info(f"    Evaluation Label Scheme: {scheme}.")
-    labels = LABELS[scheme]
+    label_set = args.label_set
+    logger.info(f"    Evaluation using label set: {label_set}.")
+    labels = LABELS[label_set]
     dataset = RelationDataset(
         logger=logger,
         tokenizer=tokenizer,
@@ -748,9 +748,15 @@ def main():
         help="Whether to log the training in wandb",
     )
     parser.add_argument(
+            "--label_set",
+            type=str,
+            default=None,
+            help="label set to use (e.g., gsap)",
+            )
+    parser.add_argument(
         "--loss_re_weight_alpha",
         type=float,
-        default=0.7,
+        default=0.5,
         help="Weight the re loss in respect to the ner loss. E.g., 0.7 => 0.7 re loss and 0.3 ner loss",
     )
 
@@ -829,7 +835,7 @@ def main():
         "--eval_dev", action="store_true", help="Whether to run eval on the dev set and save the predictions."
     )
     parser.add_argument("--eval_test", action="store_true", help="want to test and save the predictions.")
-    parser.add_argument("--preload_dataset", action="store_true", help="want to test and save the predictions.")
+    parser.add_argument("--preload_dataset", action="store_true", help="preload dataset")
 
     parser.add_argument(
         "--evaluate_during_training",
@@ -1124,6 +1130,11 @@ def main():
         logger.warning(
             f"Output directory ({args.output_dir}) already exists and is not empty. It will continue training or use --overwrite_output_dir to overcome."
         )
+    elif not args.do_train:
+        exp_path = args.output_dir
+        assert os.path.exists(exp_path) # no training, output_dir need to exist with a model
+        logger = get_logger(args, exp_path, args.eval_test)
+        
     else:
         # if args.do_train and args.local_rank in [-1, 0]:
         exp_path = create_exp_dir(
@@ -1163,7 +1174,7 @@ def main():
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         device_name = "cuda"
         torch.cuda.set_device(args.local_rank)
-        device = torch.device("cuda", args.local_rank)
+        device = torch.device(device_name, args.local_rank)
         torch.distributed.init_process_group(backend="nccl")
         args.n_gpu = 1
     args.device = device
@@ -1183,44 +1194,58 @@ def main():
 
     # Set seed
     set_seed(args)
-
-    if args.ner_prediction_dir.find("ace") != -1:
+    label_set = args.label_set
+    logger.info(f"    Evaluation using label set: {label_set}.")
+    assert label_set in LABELS # Please add your labels in utils/labals.py
+    labels = LABELS[label_set]
+    args.num_ner_labels = labels.num_ner_labels
+    args.num_rel_labels = labels.num_rel_labels(args.no_sym)
+    """
+    if args.label_set == "ace":
         num_ner_labels = 8  # 7 ner labels
 
         if args.no_sym:  # 6 relation labels
             num_labels = 7 + 7 - 1
         else:
             num_labels = 7 + 7 - 2
-    elif args.ner_prediction_dir.find("somd") != -1:
+    elif args.label_set == "somd":
         num_ner_labels = 15  # 14 ner labels
         if args.no_sym:  #  20 relation types # old 13
             num_labels = 12 + 12 - 1  # 1 is NIL (non symetric relations) # old 14
         else:
             num_labels = 12 + 12 - 1
     # @todo have the dataset as parameter!
-    elif args.ner_prediction_dir.find("gsap") != -1:
+    elif args.label_set == "gsap":
         num_ner_labels = 11  # 10 ner labels
 
         if args.no_sym:  #  20 relation types # old 13
             num_labels = 21 + 21 - 1  # 1 is NIL (non symetric relations) # old 14
         else:
             num_labels = 21 + 21 - 3
-    elif args.ner_prediction_dir.find("scierc") != -1:
+    elif args.label_set == "scierc":
         num_ner_labels = 7  # 6 ner types
 
         if args.no_sym:  # 7 relation types
             num_labels = 8 + 8 - 1
         else:
             num_labels = 8 + 8 - 3
-    elif args.ner_prediction_dir.find("scier") != -1:
+    elif args.label_set == "scier":
         num_ner_labels = 4  # 6 ner types
 
-        if args.no_sym:  # 7 relation types
+        if args.no_sym:  # 9 relation types
             num_labels = 10 + 10 - 1
         else:
             num_labels = 10 + 10 - 1
+    elif args.label_set == "scinlp":
+        num_ner_labels = 5  # 4 ner types
+
+        if args.no_sym:  # 11 relation types
+            num_labels = 12 + 12 - 1
+        else:
+            num_labels = 12 + 12 - 2
     else:
-        assert False
+        assert False # please define --label_set (e.g., "gsap")
+    """
 
     # Load pretrained model and tokenizer
     if args.local_rank not in [-1, 0]:
@@ -1245,7 +1270,7 @@ def main():
     args.global_step = global_step
 
     config = config_class.from_pretrained(
-        args.config_name if args.config_name else args.model_path, num_labels=num_labels
+        args.config_name if args.config_name else args.model_path, num_labels=args.num_rel_labels
     )
     tokenizer = tokenizer_class.from_pretrained(
         args.model_name_or_path, do_lower_case=args.do_lower_case
@@ -1253,7 +1278,7 @@ def main():
 
     config.max_seq_length = args.max_seq_length
     config.alpha = args.alpha
-    config.num_ner_labels = num_ner_labels
+    config.num_ner_labels = args.num_ner_labels
 
     #print(config)
     #raise Exception()
@@ -1264,7 +1289,7 @@ def main():
         args=args,
     )
 
-    adjust_tokenizer(tokenizer, model, num_ner_labels, args, logger)
+    adjust_tokenizer(tokenizer, model, args.num_ner_labels, args, logger)
 
 
     if args.local_rank == 0:
@@ -1386,7 +1411,7 @@ def _rotate_checkpoints(logger, args, checkpoint_prefix, use_mtime=False):
         shutil.rmtree(checkpoint)
 
 
-def get_scheme(path):
+def get_scheme_depricated(path):
     path = str(path)
     if path.find("ace05") != -1 or path.find("ace2005") != -1:
         dataset_name = "ace05"

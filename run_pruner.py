@@ -12,6 +12,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
+from torch.amp import autocast, GradScaler
 from tqdm import tqdm, trange
 import wandb
 
@@ -54,7 +55,7 @@ MODEL_CLASSES = {
 def train(logger, args, model, tokenizer):
     train_sampler, train_data_loader = load_data(args, tokenizer, logger)
     len_train = len(train_data_loader)
-    model, optimizer, scheduler = setup_training(
+    model, optimizer, scaler, scheduler = setup_training(
         args, model, len_train, logger
     )
 
@@ -99,49 +100,41 @@ def train(logger, args, model, tokenizer):
             if args.use_full_layer != -1:
                 inputs["full_attention_mask"] = batch[5]
 
-            outputs = model(**inputs)
-            loss = outputs[
-                0
-            ]  # model outputs are always tuple in pytorch-transformers (see doc)
+            with autocast(device_type=args.device_name, dtype=torch.float16, enabled=args.fp16):
+                outputs = model(**inputs)
+                loss = outputs[
+                    0
+                ]  # model outputs are always tuple in pytorch-transformers (see doc)
 
-            if args.n_gpu > 1:
-                loss = loss.mean()  # mean() to average on multi-gpu parallel training
-            if args.gradient_accumulation_steps > 1:
-                loss = loss / args.gradient_accumulation_steps
+                if args.n_gpu > 1:
+                    loss = loss.mean()  # mean() to average on multi-gpu parallel training
+                if args.gradient_accumulation_steps > 1:
+                    loss = loss / args.gradient_accumulation_steps
+                logging_loss_epoch += loss.item()
+                tr_loss += loss.item()
 
-            if args.fp16:
-                raise Exception("Not supported")
-                # with amp.scale_loss(loss, optimizer) as scaled_loss:
-                #    scaled_loss.backward()
-            else:
-                loss.backward()
+            scaler.scale(loss).backward()
+            #loss.backward()
 
-            tr_loss += loss.item()
 
-            logging_loss_epoch += loss.item()
 
-            if (step + 1) % args.gradient_accumulation_steps == 0:
+            if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == len(train_data_loader):
                 if args.max_grad_norm > 0:
-                    if args.fp16:
-                        raise Exception("Not supported")
-                        # torch.nn.utils.clip_grad_norm_(
-                        #    amp.master_params(optimizer), args.max_grad_norm
-                        # )
-                    else:
-                        torch.nn.utils.clip_grad_norm_(
-                            model.parameters(), args.max_grad_norm
-                        )
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), args.max_grad_norm
+                    )
+                scaler.step(optimizer)
 
-                optimizer.step()
-                if args.fp16:
-                    raise Exception("Not supported")
-                    # if (
-                    #    amp._amp_state.loss_scalers[0]._unskipped != 0
-                    # ):  # assuming you are using a single optimizer
-                    #    scheduler.step()
-                else:
-                    scheduler.step()  # Update learning rate schedule
-                model.zero_grad()
+                # Only ubpdate scheduler when optimization is successfull
+                old_scale = scaler.get_scale()
+                scaler.update()
+                new_scale = scaler.get_scale()
+                if new_scale == old_scale: # == => successfull optimization 
+                    scheduler.step()
+
+                optimizer.zero_grad()
+
                 global_step += 1
 
                 if (
@@ -169,13 +162,9 @@ def train(logger, args, model, tokenizer):
                         results = evaluate(
                             logger, args, model, tokenizer, file_path=dev_file
                         )
-                        ent_recall = results["r_overlap"]
-                        ent_precision = results["p_overlap"]
-                        metrics_to_log = {
-                            "dev/recall", ent_recall,
-                            "dev/precision", ent_precision,
-                        }
+                        metrics_to_log = {f"dev/{k}": v for k, v in results.items()}
                         wandb.log(metrics_to_log, global_step)
+                        ent_recall = results["recall_05"]
 
                         if ent_recall >= best_result:
                             best_result = ent_recall
@@ -187,18 +176,18 @@ def train(logger, args, model, tokenizer):
 
                     if update:
                         checkpoint_prefix = "checkpoint"
-                        output_dir = (
-                            Path(args.output_dir) / f"{checkpoint_prefix}-{global_step}"
+                        model_dir = (
+                            Path(args.model_dir) / f"{checkpoint_prefix}-{global_step}"
                         )
-                        if not output_dir.exists():
-                            output_dir.mkdir(parents=True, exist_ok=True)
+                        if not model_dir.exists():
+                            model_dir.mkdir(parents=True, exist_ok=True)
                         model_to_save = (
                             model.module if hasattr(model, "module") else model
                         )  # Take care of distributed/parallel training
-                        model_to_save.save_pretrained(output_dir)
+                        model_to_save.save_pretrained(model_dir)
 
-                        torch.save(args, os.path.join(output_dir, "training_args.bin"))
-                        logger.info("Saving model checkpoint to %s", output_dir)
+                        torch.save(args, os.path.join(model_dir, "training_args.bin"))
+                        logger.info("Saving model checkpoint to %s", model_dir)
 
                         _rotate_checkpoints(logger, args, checkpoint_prefix)
 
@@ -215,8 +204,6 @@ def train(logger, args, model, tokenizer):
             train_iterator.close()
             break
 
-    if args.local_rank in [-1, 0]:
-        tb_writer.close()
 
     return global_step, tr_loss / global_step, best_result
 
@@ -266,6 +253,7 @@ def setup_training(args, model, len_train, logger):
 
     # ---------for span encoder---------
     optimizer = get_span_optimizer(model.named_parameters(), args)
+    scaler = GradScaler(device=args.device_name, enabled=args.fp16)
     num_warmup_steps = (
         args.warmup_steps if args.warmup_steps != -1 else int(0.1 * t_total)
     )
@@ -273,22 +261,11 @@ def setup_training(args, model, len_train, logger):
         optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=t_total
     )
 
-    if args.fp16:
-        try:
-            from apex import amp
-        except ImportError:
-            raise ImportError(
-                "Please install apex from https://www.github.com/nvidia/apex to use fp16 training."
-            )
-        model, optimizer = amp.initialize(
-            model, optimizer, opt_level=args.fp16_opt_level
-        )
-
-    # multi-gpu training (should be after apex fp16 initialization)
+    # multi-gpu training (should be after fp16 initialization with GradScaler)
     if args.n_gpu > 1:
         model = torch.nn.DataParallel(model)
 
-    # Distributed training (should be after apex fp16 initialization)
+    # Distributed training (should be after fp16 initialization with GradScaler)
     if args.local_rank != -1:
         model = torch.nn.parallel.DistributedDataParallel(
             model,
@@ -312,7 +289,7 @@ def setup_training(args, model, len_train, logger):
     logger.info("  Total optimization steps = %d", t_total)
     logger.info("  Eval steps = %d", args.eval_steps)
 
-    return model, optimizer, scheduler
+    return model, optimizer, scaler, scheduler
 
 
 def get_span_optimizer(model_named_parameters, args):
@@ -373,33 +350,36 @@ def get_span_optimizer(model_named_parameters, args):
 
 def main():
     args = parse_arguments()
+    exp_path = Path(args.model_dir)
+    if args.do_train:
+        model_dir = Path(args.model_dir)
+        if (
+            not args.overwrite_model_dir
+            and model_dir.exists()
+            and args.do_train
+            and list(model_dir.iterdir())
+        ):
+            raise ValueError(
+                f"Model directory ({model_dir}) already exists and is not empty. Use --overwrite_model_dir to overcome."
+            )
 
-    output_dir = Path(args.output_dir)
-    if (
-        not args.overwrite_output_dir
-        and output_dir.exists()
-        and args.do_train
-        and list(output_dir.iterdir())
-    ):
-        raise ValueError(
-            f"Output directory ({output_dir}) already exists and is not empty. Use --overwrite_output_dir to overcome."
+        # if args.do_train and args.local_rank in [-1, 0]:
+        exp_path = create_exp_dir(
+            args.output_dir,
+            scripts_to_save=[
+                "run_pruner.py",
+                "transformers/src/transformers/modules.py",
+                "transformers/src/transformers/modeling_bert.py",
+                "transformers/src/transformers/modeling_albert.py",
+            ],
         )
-
-    # if args.do_train and args.local_rank in [-1, 0]:
-    exp_path = create_exp_dir(
-        args.output_dir,
-        scripts_to_save=[
-            "run_pruner.py",
-            "transformers/src/transformers/modules.py",
-            "transformers/src/transformers/modeling_bert.py",
-            "transformers/src/transformers/modeling_albert.py",
-        ],
-    )
+    elif not exp_path.exists():
+        raise Exception(f"model path given by --model_dir not valid ('{exp_path}'). Are your sure you trained the model?")
 
     logger = get_logger(args, exp_path, args.do_test)
 
-    if not args.do_test:
-        args_file = output_dir / "training_args.txt"
+    if args.do_train:
+        args_file = model_dir / "training_args.txt"
         with args_file.open("w") as json_file:
             json.dump(vars(args), json_file, indent=4)
 
@@ -416,16 +396,17 @@ def main():
 
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
-        device = torch.device(
-            "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
-        )
+        device_name = "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
+        device = torch.device(device_name)
         args.n_gpu = torch.cuda.device_count()
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+        device_name = "cuda"
         torch.cuda.set_device(args.local_rank)
-        device = torch.device("cuda", args.local_rank)
+        device = torch.device(device_name, args.local_rank)
         torch.distributed.init_process_group(backend="nccl")
         args.n_gpu = 1
     args.device = device
+    args.device_name = device_name
 
     logger.info(
         "\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
@@ -442,18 +423,22 @@ def main():
     # Set seed
     set_seed(args)
 
-    if args.data_dir.find("ace") != -1:
+    if args.label_set == "ace":
         num_labels = 8
-    elif args.data_dir.find("scierc") != -1:
+    elif args.label_set == "scierc":
         num_labels = 7
-    elif args.data_dir.find("ontonotes") != -1:
+    elif args.label_set == "ontonotes":
         num_labels = 19
-    elif args.data_dir.find("gsap") != -1:
+    elif args.label_set == "gsap":
         num_labels = 11
-    elif args.data_dir.find("somd") != -1:
+    elif args.label_set == "somd": 
         num_labels = 14
+    elif args.label_set == "scinlp": 
+        num_labels = 5
+    elif args.label_set == "scier": 
+        num_labels = 5
     else:
-        assert False
+        assert False # No valid --label_set parameter given (e.g., gsap)
 
     # Load pretrained model and tokenizer
     if args.local_rank not in [-1, 0]:
@@ -464,11 +449,11 @@ def main():
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
 
     config = config_class.from_pretrained(
-        args.config_name if args.config_name else args.model_name_or_path,
+        args.config_name if args.config_name else args.base_model_name_or_path,
         num_labels=num_labels,
     )
     tokenizer = tokenizer_class.from_pretrained(
-        args.model_name_or_path, do_lower_case=args.do_lower_case
+        args.base_model_name_or_path, do_lower_case=args.do_lower_case
     )
 
     config.max_seq_length = args.max_seq_length
@@ -477,8 +462,8 @@ def main():
     config.use_full_layer = args.use_full_layer
 
     model = model_class.from_pretrained(
-        args.model_name_or_path,
-        from_tf=bool(".ckpt" in args.model_name_or_path),
+        args.base_model_name_or_path,
+        from_tf=bool(".ckpt" in args.base_model_name_or_path),
         config=config,
         args=args,
     )
@@ -503,6 +488,9 @@ def main():
         output_dir = Path(args.output_dir)
         if not output_dir.exists() and args.local_rank in [-1, 0]:
             output_dir.mkdir(parents=True)
+        model_dir = Path(args.model_dir)
+        if not model_dir.exists() and args.local_rank in [-1, 0]:
+            model_dir.mkdir(parents=True)
 
         update = True
         if args.evaluate_during_training:
@@ -510,7 +498,7 @@ def main():
             results = evaluate(logger, args, model, tokenizer, file_path=dev_file)
             # logger.info(f"Epoch: {epoch_num}, F1: {results['f1']}, recall: {results['recall']}")
             # logger.info(f"Epoch: {epoch_num}, ent_recall: {results['recall_score']}, R_overlap: {results['r_overlap']}")
-            ent_recall = results["r_overlap"]
+            ent_recall = results["recall_overlap"]
             if ent_recall >= best_result:
                 best_result = ent_recall
                 logger.info(f"Best recall overlap:{best_result:.4f}")
@@ -519,31 +507,31 @@ def main():
 
         if update:
             checkpoint_prefix = "checkpoint"
-            output_dir_checkpoint = output_dir / f"{checkpoint_prefix}-{global_step}"
-            output_dir_checkpoint.mkdir(parents=True, exist_ok=True)
+            model_dir_checkpoint = model_dir / f"{checkpoint_prefix}-{global_step}"
+            model_dir_checkpoint.mkdir(parents=True, exist_ok=True)
             model_to_save = (
                 model.module if hasattr(model, "module") else model
             )  # Take care of distributed/parallel training
 
-            model_to_save.save_pretrained(output_dir_checkpoint)
+            model_to_save.save_pretrained(model_dir_checkpoint)
 
-            torch.save(args, output_dir_checkpoint / "training_args.bin")
-            logger.info(f"Saving model checkpoint to {output_dir_checkpoint}")
+            torch.save(args, model_dir_checkpoint / "training_args.bin")
+            logger.info(f"Saving model checkpoint to {model_dir_checkpoint}")
             _rotate_checkpoints(logger, args, checkpoint_prefix)
 
-        tokenizer.save_pretrained(args.output_dir)
+        tokenizer.save_pretrained(args.model_dir)
 
-        torch.save(args, output_dir / "training_args.bin")
+        torch.save(args, model_dir / "training_args.bin")
 
     # Evaluation test file
     # results = {'dev_best_result':best_result}
     # if args.do_eval and args.local_rank in [-1, 0]:
-    #     checkpoints = [args.output_dir]
+    #     checkpoints = [args.model_dir]
 
     #     WEIGHTS_NAME = 'pytorch_model.bin'
 
     #     if args.eval_all_checkpoints:
-    #         checkpoints = list(os.path.dirname(c) for c in sorted(glob.glob(args.output_dir + '/**/' + WEIGHTS_NAME, recursive=True)))
+    #         checkpoints = list(os.path.dirname(c) for c in sorted(glob.glob(args.model_dir + '/**/' + WEIGHTS_NAME, recursive=True)))
 
     #     logger.info("Evaluate on test set")
 
@@ -562,7 +550,7 @@ def main():
     #         results.update(result)
 
     # if args.do_train and args.local_rank in [-1, 0]:
-    #     output_eval_file = os.path.join(args.output_dir, "results.json")
+    #     output_eval_file = os.path.join(args.model_dir, "results.json")
     #     json.dump(results, open(output_eval_file, "w"))
     #     # logger.info("Result in checkpoint: %s", json.dumps(results))
     #     res = {k:f'{v:.4f}' for k,v in results.items()}
@@ -571,22 +559,21 @@ def main():
     # -------------------------------------------------------------
     # test all files
     if args.do_test and args.local_rank in [-1, 0]:
-        checkpoints = [args.output_dir]
-
         WEIGHTS_NAME = "pytorch_model.bin"
-        # pdb.set_trace()
-        if args.eval_all_checkpoints:
-            checkpoints = list(
-                os.path.dirname(c)
-                for c in sorted(
-                    glob.glob(f"{args.output_dir}/**/{WEIGHTS_NAME}", recursive=True)
-                )
+        checkpoints = list(
+            os.path.dirname(c)
+            for c in sorted(
+                glob.glob(f"{args.model_dir}/**/{WEIGHTS_NAME}", recursive=True)
             )
+        )
+        if not args.eval_all_checkpoints:
+            print(checkpoints)
+            checkpoints = checkpoints[-1:]
 
         logger.info("Evaluate the following checkpoints: %s", checkpoints)
         for checkpoint in checkpoints:
             global_step = checkpoint.split("-")[-1]
-            output_test_file = Path(args.output_dir) / "test_results.txt"
+            output_test_file = Path(args.model_dir) / "test_results.txt"
 
             model = model_class.from_pretrained(checkpoint, config=config, args=args)
             model.to(args.device)
@@ -665,7 +652,7 @@ def _rotate_checkpoints(logger, args, checkpoint_prefix, use_mtime=False):
 
     # Check if we should delete older checkpoint(s)
     glob_checkpoints = glob.glob(
-        os.path.join(args.output_dir, "{}-*".format(checkpoint_prefix))
+        os.path.join(args.model_dir, "{}-*".format(checkpoint_prefix))
     )
     if len(glob_checkpoints) <= args.save_total_limit:
         return
@@ -732,6 +719,12 @@ def parse_arguments():
             help="run name for wandb.",
         )
     parser.add_argument(
+            "--label_set",
+            type=str,
+            default=None,
+            help="label set to use (e.g., gsap)",
+            )
+    parser.add_argument(
         "--data_dir",
         default="ace_data",
         type=str,
@@ -746,7 +739,7 @@ def parse_arguments():
         help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()),
     )
     parser.add_argument(
-        "--model_name_or_path",
+        "--base_model_name_or_path",
         default=None,
         type=str,
         required=True,
@@ -758,7 +751,14 @@ def parse_arguments():
         default=None,
         type=str,
         required=True,
-        help="The output directory where the model predictions and checkpoints will be written.",
+        help="The output directory where the model predictions wo;; be written.",
+    )
+    parser.add_argument(
+        "--model_dir",
+        default=None,
+        type=str,
+        required=True,
+        help="The directory where the checkpoints will be written.",
     )
 
     ## Other parameters
@@ -886,9 +886,9 @@ def parse_arguments():
         "--no_cuda", action="store_true", help="Avoid using CUDA when available"
     )
     parser.add_argument(
-        "--overwrite_output_dir",
+        "--overwrite_model_dir",
         action="store_true",
-        help="Overwrite the content of the output directory",
+        help="Overwrite the content of the model directory",
     )
     parser.add_argument(
         "--overwrite_cache",
@@ -902,14 +902,7 @@ def parse_arguments():
     parser.add_argument(
         "--fp16",
         action="store_true",
-        help="Whether to use 16-bit (mixed) precision (through NVIDIA apex) instead of 32-bit",
-    )
-    parser.add_argument(
-        "--fp16_opt_level",
-        type=str,
-        default="O1",
-        help="For fp16: Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
-        "See details at https://nvidia.github.io/apex/amp.html",
+        help="Whether to use 16-bit (mixed) precision (through torch.amp) instead of 32-bit",
     )
     parser.add_argument(
         "--local_rank",
@@ -963,6 +956,12 @@ def parse_arguments():
         type=int,
         default=3,
         help="max mentions number feed in pruner",
+    )
+    parser.add_argument(
+        "--filter_threshold",
+        type=float,
+        default=None,
+        help="min prediction score for predicted ner.",
     )
     parser.add_argument(
         "--max_mentions_num",
