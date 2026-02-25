@@ -30,6 +30,12 @@ NER_LABEL_LISTS = dict(
         "Material",
         "Metric",
     ],
+    scier=[
+        "NIL",
+        "Method",
+        "Dataset",
+        "Task",
+    ],
     gsap=[
         "NIL",
         "MLModel",
@@ -59,6 +65,13 @@ NER_LABEL_LISTS = dict(
         'SoftwareCoreference',
         'URL',
         'Version',
+    ],
+    scinlp=[
+        "NIL",
+        "task",
+        "method",
+        "dataset",
+        "metric",
     ],
     default=[
         "NIL",
@@ -110,17 +123,11 @@ class ACEDatasetNER(Dataset):
         self.local_rank = args.local_rank
         self.args = args
         self.model_type = args.model_type
-
-        if args.data_dir.find("ace") != -1:
-            self.ner_label_list = NER_LABEL_LISTS["ace"]
-        elif args.data_dir.find("somd") != -1:
-            self.ner_label_list = NER_LABEL_LISTS["somd"]
-        elif args.data_dir.find("scierc") != -1:
-            self.ner_label_list = NER_LABEL_LISTS["scierc"]
-        elif args.data_dir.find("gsap") != -1:
-            self.ner_label_list = NER_LABEL_LISTS["gsap"]
+        if args.label_set not in NER_LABEL_LISTS:
+            valid_label_sets = list(NER_LABEL_LISTS.keys())
+            raise Exception(f"No valid --label_set parameter '{args.label_set}' not in {valid_label_sets}")
         else:
-            self.ner_label_list = NER_LABEL_LISTS["default"]
+            self.ner_label_list = NER_LABEL_LISTS[args.label_set]
 
         print(self.ner_label_list)
         self.max_pair_length = args.max_pair_length
@@ -169,11 +176,10 @@ class ACEDatasetNER(Dataset):
             # doc_id = self.doc2id[doc_key]
 
             ## make sure, there are no replacements like "-LRB-" for "("
-            for sent_idx in range(len(sentences)):
-                for word_idx in range(len(sentences[sent_idx])):
-                    sentences[sent_idx][word_idx] = self.get_original_token(
-                        sentences[sent_idx][word_idx]
-                    )
+            for sentence in sentences:
+                for word_idx, word in enumerate(sentence):
+                    word_orig = self.get_original_token(word)
+                    sentence[word_idx] = word_orig
 
             # ners: e.g. [[[4, 7, 'Task'], [13, 14, 'Method'], [17, 18, 'Material'], [22, 23, 'Material'], [34, 36, 'Method'], [38, 39, 'Method']], [[47, 48, 'Material']]]
             ners = document["ner"]
@@ -275,7 +281,7 @@ class ACEDatasetNER(Dataset):
                     #    print(token2subword[7000:])
                     key = token2subword[start], token2subword[end + 1]
 
-                    entity_labels[key] = ner_label_map[label]
+                    entity_labels[key] = ner_label_map.get(label, 0) # defaults to zero (NIL) 
                     self.ner_golden_labels.add(
                         ((line_idx, sentence_idx), (start, end), label)
                     )
@@ -372,16 +378,15 @@ class ACEDatasetNER(Dataset):
                             + 1
                             > self.args.max_mention_ori_length
                         ):
-                            # if current entity length > max entity length, continue
+                            # if current entity length > max entity length (measured in subword token), break
                             # @todo: why not break? next end will lead to a to long mention as well!
-                            #   I try it
-                            # continue
                             break
                         # try to get label. if not existing: add 0 as label
                         label = entity_labels.get((doc_entity_start, doc_entity_end), 0)
                         # every entity only onces
                         entity_labels.pop((doc_entity_start, doc_entity_end), None)
                         # entity_start+1: target_tokens[0] is [CLS], entity_start should be right shifted by 1.
+                        # entity_info: ( (start_in_context, end_in_context), label_id, (span_begin, span_end)) 
                         entity_infos.append(
                             (
                                 (context_entity_start + 1, context_entity_end),
@@ -546,6 +551,7 @@ class ACEDatasetNER(Dataset):
                 list(range(position_plus_pad, position_plus_pad + self.max_seq_length))
                 + [0] * self.max_entity_length
             )
+
 
         else:
             attention_mask = [1] * L + [0] * (self.max_seq_length - L)

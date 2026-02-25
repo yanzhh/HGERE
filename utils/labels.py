@@ -74,24 +74,24 @@ GSAP = {
     #],
     "rel_non_sym": [
         'citation', # 3
-             'usedFor',
-              'architecture', #5
-                'evaluatedOn',
-                 'isPartOf',
-                  'trainedOn',
-                   'appliedTo',
-                    'isHyponymOf', #10
-                      'transformedFrom',
-                       'benchmarkFor',
-                        'generatedBy',
-                         'isBasedOn',
-                          'sourcedFrom',#15
-                           'processed',
-                            'hasInstanceType',
-                             'size',
-                              'url',
-                               'versionOf' # 20
-                               ]
+        'usedFor',
+       'architecture', #5
+       'evaluatedOn',
+       'isPartOf',
+       'trainedOn',
+       'appliedTo',
+       'isHyponymOf', #10
+       'transformedFrom',
+       'benchmarkFor',
+       'generatedBy',
+       'isBasedOn',
+       'sourcedFrom',#15
+       'processed',
+       'hasInstanceType',
+       'size',
+       'url',
+       'versionOf' # 20
+       ]
 }
 SCIER = {
     "ner": [
@@ -131,6 +131,29 @@ SCIERC = {
     ],
 }
 
+SCINLP = {
+    "ner": [
+        "method",
+        "dataset",
+        "task",
+        "metric",
+        ],
+    "rel_sym": [
+        "compareWith",
+    ],
+    "rel_non_sym": [
+        "UsedFor",
+        "MeasuredBy",
+        "trainedWith",
+        "evaluatedOn",
+        "enhancedBy",
+        "evaluatedBy",
+        "subclassOf",
+        "subtaskOf",
+        "similarWith",
+        "partOf",
+        ]
+}
 
 @dataclass
 class RelationLabelScheme:
@@ -149,6 +172,14 @@ class LabelScheme:
     def __init__(self, ner, rel_sym, rel_non_sym):
         self.ner = ["NIL"] + ner
         self.rel = RelationLabelScheme(rel_sym, rel_non_sym)
+    @property
+    def num_ner_labels(self):
+        return len(self.ner)
+    def num_rel_labels(self, no_sym):
+        n_all_rels = len(self.rel.all) #  incl. NIL
+        only_nil = no_sym
+        n_symmetric_rels = len(self.rel.symmetric(only_nil=only_nil))
+        return (2 * n_all_rels) - n_symmetric_rels
 
 
 LABELS = {
@@ -158,4 +189,5 @@ LABELS = {
     "scierc": LabelScheme(**SCIERC),
     "scier": LabelScheme(**SCIER),
     "somd": LabelScheme(**SOMD),
+    "scinlp": LabelScheme(**SCINLP),
 }

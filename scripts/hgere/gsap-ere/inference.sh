@@ -38,7 +38,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID  python  run_hgnn.py  \
 	--shuffle \
 	--eval_test \
 	--preload_dataset \
-	--model_name_or_path  pretrained_models/scibert_scivocab_uncased \
+	--model_name_or_path  /home/groups/gsap/pretrained_models/scibert_scivocab_uncased \
 	--model_type hyper  \
 	--do_lower_case  \
 	--learning_rate $lr  \
@@ -52,7 +52,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID  python  run_hgnn.py  \
 	--max_pair_length 18  \
 	--adam_epsilon $eps \
 	--evaluate_during_training \
-       	--eval_all_checkpoints  \
+		--eval_all_checkpoints  \
 	--seed $seed   \
 	--overwrite_output_dir  \
 	--factor_type $factor  \
