@@ -31,7 +31,7 @@ def run(config: Dict[str, Any]) -> None:
     params_pruner = get_as_commandline_params(params_pruner_dict)
     cmd = ["python", "run_pruner.py"] + params_pruner
 
-    #subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True)
 
     path_model = Path(params_pruner_dict["output_dir"])
     test_file = Path(params_pruner_dict["test_file"])
@@ -136,10 +136,10 @@ def get_as_commandline_params(params: Dict[str, Any]) -> List[str]:
 
 
 if __name__ == "__main__":
-    #fn_config = sys.argv[1]
-    #devices = int(sys.argv[2])
-    fn_config = "pipeline/config_gpu.yaml"
-    devices = "0"
+    fn_config = sys.argv[1]
+    devices = sys.argv[2]
+    #fn_config = "pipeline/config_gpu.yaml"
+    #devices = "0"
     os.environ["CUDA_VISIBLE_DEVICES"] = devices
     with open(fn_config) as f:
         config = yaml.safe_load(f)

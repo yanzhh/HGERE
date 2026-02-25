@@ -30,7 +30,7 @@ from transformers import (
 )
 from utils.misc import get_logger, set_seed
 from wolf_data_utils import ACEDatasetNER
-from wolf_eval_pruner import evaluate
+from eval_pruner import evaluate
 
 ALL_MODELS = sum(
     (
