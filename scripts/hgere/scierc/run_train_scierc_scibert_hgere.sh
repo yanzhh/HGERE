@@ -1,4 +1,4 @@
-GPU_ID=3
+GPU_ID=1
 
 
 for seed in 43; do 
@@ -15,18 +15,26 @@ for facenc in biaf; do
 for factor in tersibcop; do
 for iter in 3; do
 for eps in 1e-8; do
-CUDA_VISIBLE_DEVICES=$GPU_ID  python  run_hgnn.py  --model_type hyper  \
+echo "no --do_train" set
+CUDA_VISIBLE_DEVICES=$GPU_ID  python  run_hgnn.py \
+    --do_eval \
+    --do_train \
+    --model_type hyper  \
     --model_name_or_path  pretrained_models/scibert_scivocab_uncased   --do_lower_case  \
     --learning_rate $lr   --learning_rate_cls $lr1 \
-    --num_train_epochs $epoch --eval_epochs 3 \
-    --per_gpu_train_batch_size  $bs --per_gpu_eval_batch_size 32 \
+    --num_train_epochs $epoch \
+    --eval_epochs 3 \
+    --per_gpu_train_batch_size  $bs \
+    --per_gpu_eval_batch_size 32 \
     --gradient_accumulation_steps 1  \
-    --max_seq_length $seq  --max_pair_length 18  --adam_epsilon $eps  \
-    --do_train --do_eval  --evaluate_during_training   --eval_all_checkpoints  \
+    --max_seq_length $seq \
+    --max_pair_length 18  \
+    --adam_epsilon $eps  \
+    --evaluate_during_training   --eval_all_checkpoints  \
     --seed $seed   \
-    --ner_prediction_dir  saves/reproduce/sciner_models/pruner/biafencoder-spanlen12-rank768-hid768-span256-entnum3-18-lr2e-5/scierc_scibert-43 \
+    --ner_prediction_dir  saves/scierc/pruner/biafencoder-spanlen12-rank768-hid768-span256-entnum3-18-lr2e-5/scierc_scibert-43 \
     --train_file ent_pred_train.json --dev_file ent_pred_dev.json --test_file ent_pred_test.json  \
-    --output_dir saves/reproduce/HGERE/scire_models/scibert/$factor/facenc$facenc-seq$seq-mem$memdim-iter$iter-layernorm+_attnself/ent$entdim-rel$reldim-lr$lr-$lr1-bs$bs-ep$epoch-eps$eps/Hyper_scierc_scibert-$seed  --overwrite_output_dir  \
+    --output_dir saves/scier/HGERE/scibert/$factor/facenc$facenc-seq$seq-mem$memdim-iter$iter-layernorm+_attnself/ent$entdim-rel$reldim-lr$lr-$lr1-bs$bs-ep$epoch-eps$eps/Hyper_scierc_scibert-$seed  --overwrite_output_dir  \
     --factor_type $factor  --iter $iter   --factor_encoder $facenc \
     --ent_dim $entdim --rel_dim $reldim  --mem_dim $memdim  \
     --layernorm  --layernorm_1st   --attn_self \
@@ -45,4 +53,3 @@ done;
 done;
 done;
 #--fp16  \
-#--gradient_accumulation_steps 1  \

@@ -20,8 +20,8 @@ OUTPUT_DIR=saves/gsap/HGERE/scibert/2025-02-08-lr11e-4-ep10-43
 echo $OUTPUT_DIR
 CUDA_VISIBLE_DEVICES=$GPU_ID  python  run_hgnn.py  \
     --output_dir $OUTPUT_DIR \
-    --do_eval \
-    --do_test \
+    --eval_dev \
+    --evel_test \
     --ner_prediction_dir  saves/gsap/pruned_ner/2025-02-12/ \
     --test_file v0_ent_pred_2025-02-12_dev.json \
     --dev_file v0_ent_pred_2025-02-12_dev.json \
