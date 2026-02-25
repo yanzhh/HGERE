@@ -24,6 +24,7 @@ pred_base_path = Path("../saves/somd/pruner/entnum/somd_phase1_scibert_data-bs16
 pred_base_path = Path(f"../saves/gsap/pruner/lr1e-5-epochs4/gsap_scibert_data_{date_model}-bs16-44/")
 target_path = Path("../saves/somd/pruned_ner/phase1")
 target_path = Path(f"../saves/gsap/pruned_ner/{date_data}")
+target_path = Path("../saves/scinlp/pruned_ner")
 target_path.mkdir(parents=True, exist_ok=True)
 
 
