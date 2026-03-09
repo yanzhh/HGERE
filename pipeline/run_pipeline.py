@@ -37,13 +37,18 @@ def run(config: Dict[str, Any]) -> None:
     test_file = Path(params_pruner_dict["test_file"])
     fn_pruned_prediction = f'ent_pred_{test_file.with_suffix(".json")}'
     path_pruned_prediction = path_model / fn_pruned_prediction
+    
+    fn_pruned_prediction_copy = f'mention_candidates_{test_file.with_suffix(".json")}'
+    path_pruned_prediction_copy = path_model / fn_pruned_prediction_copy
 
     path_target = Path(config["target_dir"])
     path_target.mkdir(parents=True, exist_ok=True)
-    path_target /= test_file.name
+    fn_target_mention_candidates = path_target / test_file.name
+    fn_target_mention_candidates_copy = path_target / f"{test_file.stem}_mention_candidates.jsonl"
 
     threshold = config["pruner"]["threshold"]
-    copy_pruned_version(path_pruned_prediction, path_target, threshold)
+    copy_pruned_version(path_pruned_prediction, fn_target_mention_candidates, threshold)
+    copy_pruned_version(path_pruned_prediction, fn_target_mention_candidates_copy, threshold)
 
     # Further steps like running an extraction model could go here.
     params_hgere_dict = config["hgere"]["params"]
@@ -54,7 +59,7 @@ def run(config: Dict[str, Any]) -> None:
     print("subprocess finished")
     path_pred = Path(params_hgere_dict["output_dir"])
     path_pred /= params_hgere_dict["test_file"]
-    path_pred.rename(path_target)
+    path_pred.rename(fn_target_mention_candidates)
     # move file to output
     # * use extraction model for ere on files
     # * save results somewhere
