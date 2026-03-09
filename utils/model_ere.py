@@ -1,8 +1,44 @@
+"""
+HGERE model definitions (Entity and Relation Extraction).
+
+BertForHyperGNN
+    Main end-to-end model.  Encodes sentences with BERT/SciBERT, then runs a
+    stack of HyperGNN message-passing layers over a hypergraph whose nodes are
+    entity candidates and whose hyperedges are candidate relation triples.
+    Outputs NER logits (multi-class) and relation logits (multi-class) jointly.
+
+HyperGNN layers
+    HyperGNNBinaryGraph        – binary (entity–entity) hypergraph
+    HyperGNNTernaryGraph       – ternary (subject–object–relation) hypergraph
+    HyperGNNHybridGraph        – hybrid binary + ternary graph
+    HyperGNNBinaryComposeLayer / HyperGNNBinaryAggregateLayer
+        – compose and aggregate messages for binary edges
+    HyperGNNTernaryComposeLayer / HyperGNNTernaryAggregateLayer
+        – compose and aggregate messages for ternary edges
+    HyperGNNHybridAggregateLayer
+        – aggregation for the hybrid graph
+
+Supporting modules
+    BiafEncoder     – biaffine relation encoder (subject × object → relation)
+    CPDTrilinear    – CP-decomposed trilinear tensor for ternary interactions
+    CatEncoder      – concatenation + optional linear projection
+    LinearMessegePasser – single linear message-passing step
+"""
+
 from transformers import BertModel, BertPreTrainedModel
 import torch
 from torch import nn
-from torch.nn import CrossEntropyLoss, Dropout, Linear, Sequential, LayerNorm, Identity, Module, Parameter, 
-GELU
+from torch.nn import (
+    CrossEntropyLoss,
+    Dropout,
+    Linear,
+    Sequential,
+    LayerNorm,
+    Identity,
+    Module,
+    Parameter,
+    GELU,
+)
 from torch.nn.utils.rnn import pad_sequence
 import pdb
 
@@ -391,9 +427,7 @@ class HyperGNNBinaryComposeLayer(Module):
                 self.factor_compose1 = CatEncoder(
                     input_dims=dims, output_dim=mem_dim, proj=True
                 )
-            self.layernorm1 = (
-                LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
-            )
+            self.layernorm1 = LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
         elif args.factor_type in {
             "sibcop",
             "sibgp",
@@ -424,12 +458,8 @@ class HyperGNNBinaryComposeLayer(Module):
                 self.factor_compose2 = CatEncoder(
                     input_dims=dims, output_dim=mem_dim, proj=True
                 )
-            self.layernorm1 = (
-                LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
-            )
-            self.layernorm2 = (
-                LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
-            )
+            self.layernorm1 = LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
+            self.layernorm2 = LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
         elif args.factor_type in {"sibcopgp", "tersibcopgp"}:
             if args.factor_encoder == "biaf":
                 self.factor_compose1 = BiafEncoder(
@@ -463,15 +493,9 @@ class HyperGNNBinaryComposeLayer(Module):
                 self.factor_compose3 = CatEncoder(
                     input_dims=dims, output_dim=mem_dim, proj=True
                 )
-            self.layernorm1 = (
-                LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
-            )
-            self.layernorm2 = (
-                LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
-            )
-            self.layernorm3 = (
-                LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
-            )
+            self.layernorm1 = LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
+            self.layernorm2 = LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
+            self.layernorm3 = LayerNorm(mem_dim, eps=1e-6) if layernorm else Identity()
 
     def forward(self, rel_reprs):
         """
@@ -973,15 +997,9 @@ class HyperGNNTernaryAggregateLayer(Module):
         else:
             self.encode_r = LinearMessegePasser(mem_dim, rel_dim)
 
-        self.layernorm_s = (
-            LayerNorm(ent_dim, eps=1e-6) if layernorm else Identity()
-        )
-        self.layernorm_o = (
-            LayerNorm(ent_dim, eps=1e-6) if layernorm else Identity()
-        )
-        self.layernorm_r = (
-            LayerNorm(rel_dim, eps=1e-6) if layernorm else Identity()
-        )
+        self.layernorm_s = LayerNorm(ent_dim, eps=1e-6) if layernorm else Identity()
+        self.layernorm_o = LayerNorm(ent_dim, eps=1e-6) if layernorm else Identity()
+        self.layernorm_r = LayerNorm(rel_dim, eps=1e-6) if layernorm else Identity()
 
     def update_rel(self, rel_reprs, factor):
         """
@@ -1294,6 +1312,7 @@ class HyperGNNHybridAggregateLayer(nn.Module):
             raise ValueError("factor_type is not correct")
 
         return sub_reprs, obj_reprs, rel_reprs
+
     def update_rel_single(self, rel_reprs, factors, ent_numbers):
         """
         rel_reprs: bs x ns x no x dr
@@ -1695,7 +1714,6 @@ class HyperGNNHybridAggregateLayer(nn.Module):
         output = self.layernorm_o(output)  # no x dm
 
         return output
-
 
 
 class LinearMessegePasser(Module):

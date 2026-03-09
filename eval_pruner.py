@@ -2,6 +2,7 @@ import timeit
 import pdb
 import json
 from collections import defaultdict
+from itertools import product as iproduct
 from pathlib import Path
 
 import torch
@@ -11,7 +12,7 @@ from torch.utils.data import DataLoader, SequentialSampler
 from wolf_data_utils import ACEDatasetNER
 
 
-def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False):
+def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False, prune_config=None):
     is_ontonotes = args.data_dir.find("ontonotes") != -1
 
     global NEG_INF
@@ -158,20 +159,46 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
     predict_ners, predict_ners_overlap, results = postprocess_predictions(
         sentences_predictions, ner_golden_labels, force_same_label, ner_support
     )
-    res = {k: f"{v:.4f}" for k, v in results.items()}
+
+    target_recall_diff = getattr(args, "target_recall_diff", 0.01)
+    pruner_metrics = _compute_pruner_wandb_metrics(
+        sentences_predictions, ner_golden_labels, target_recall_diff
+    )
+    results.update(pruner_metrics)
+    logger.info(
+        f"  Pruner pool: upper_bound_recall={pruner_metrics['pruner/upper_bound_recall']:.4f}  "
+        f"target_recall={pruner_metrics['pruner/target_recall']:.4f}\n"
+        f"  Threshold method @target: threshold={pruner_metrics['pruner/thresh/threshold']:.6f}  "
+        f"recall={pruner_metrics['pruner/thresh/recall']:.4f}  "
+        f"precision={pruner_metrics['pruner/thresh/precision']:.4f}  "
+        f"TN/(FP+TN)={pruner_metrics['pruner/thresh/tn_rate']:.4f}\n"
+        f"  Top-K method @target:     lam={pruner_metrics.get('pruner/topk/lam')}  "
+        f"lmin={pruner_metrics.get('pruner/topk/lmin')}  "
+        f"lmax={pruner_metrics.get('pruner/topk/lmax')}  "
+        f"recall={pruner_metrics.get('pruner/topk/recall', 0):.4f}  "
+        f"precision={pruner_metrics.get('pruner/topk/precision', 0):.4f}  "
+        f"TN/(FP+TN)={pruner_metrics.get('pruner/topk/tn_rate', 0):.4f}"
+    )
+
+    res = {k: f"{v:.4f}" if isinstance(v, float) else v for k, v in results.items()}
     logger.info(f"Result: {res}")
     eval_time = timeit.default_timer() - start_time
     logger.info(
         f"  Evaluation done in total {eval_time} secs ({len(eval_dataset) / eval_time}) example per second)"
     )
 
+    # Determine the pruning config used for this evaluation
+    best_prune_config = prune_config if prune_config is not None else _extract_best_config(pruner_metrics)
+
     if args.output_results and (do_test or not args.do_train):
         eval_filename = eval_dataset.file_path
-        save_results(logger, results, eval_filename, args, file_path, predict_ners)
+        save_results(logger, results, eval_filename, args, file_path, predict_ners,
+                     prune_config=best_prune_config)
         save_results(
-            logger, results, eval_filename, args, file_path, predict_ners_overlap, overlap=True
+            logger, results, eval_filename, args, file_path, predict_ners_overlap,
+            overlap=True, prune_config=best_prune_config,
         )
-    return results
+    return results, best_prune_config
 
 
 def postprocess_predictions(
@@ -247,8 +274,64 @@ def _get_metrics(tp, fp, support, suffix):
         }
     return metrics
 
+def _select_sent_spans(sent_spans, prune_config):
+    """Apply a best_config dict (threshold_analysis.py format) to one sentence's span pool."""
+    method = prune_config["best_method"]
+    if method == "threshold":
+        t = prune_config["parameters"]
+        return [(s, e, p, l) for s, e, p, l in sent_spans if p >= t]
+    elif method == "topk":
+        params = prune_config["parameters"]
+        lam  = params["topk_ratio"]
+        lmin = int(params["min_mentions_num"])
+        lmax = int(params["max_mentions_num"])
+        if not sent_spans:
+            return []
+        n = max(e for _, e, _, _ in sent_spans) + 1
+        k = max(lmin, min(int(lam * n), lmax))
+        return sorted(sent_spans, key=lambda x: -x[2])[:k]
+    return list(sent_spans)
+
+
+def _extract_best_config(pruner_metrics: dict) -> dict:
+    """Convert pruner wandb metrics to a best_config dict (threshold_analysis.py format)."""
+    thresh_tn     = pruner_metrics.get("pruner/thresh/tn_rate", 0.0)
+    topk_tn       = pruner_metrics.get("pruner/topk/tn_rate",   0.0)
+    thresh_recall = pruner_metrics.get("pruner/thresh/recall",  0.0)
+    topk_recall   = pruner_metrics.get("pruner/topk/recall",    0.0)
+    target_recall = pruner_metrics.get("pruner/target_recall",  0.0)
+
+    thresh_meets = thresh_recall >= target_recall
+    topk_meets   = topk_recall   >= target_recall
+
+    if thresh_meets and topk_meets:
+        best_method = "threshold" if thresh_tn >= topk_tn else "topk"
+    elif thresh_meets:
+        best_method = "threshold"
+    elif topk_meets:
+        best_method = "topk"
+    else:
+        best_method = "threshold" if thresh_recall >= topk_recall else "topk"
+
+    if best_method == "threshold":
+        return {
+            "best_method": "threshold",
+            "parameters": pruner_metrics["pruner/thresh/threshold"],
+        }
+    else:
+        return {
+            "best_method": "topk",
+            "parameters": {
+                "topk_ratio":       pruner_metrics["pruner/topk/lam"],
+                "min_mentions_num": int(pruner_metrics["pruner/topk/lmin"]),
+                "max_mentions_num": int(pruner_metrics["pruner/topk/lmax"]),
+            },
+        }
+
+
 def save_results(
-    logger, results, eval_filename, args, file_path, predicted_ners, overlap=False
+    logger, results, eval_filename, args, file_path, predicted_ners, overlap=False,
+    prune_config=None,
 ):
     # pdb.set_trace()
     file_path = Path(file_path)
@@ -280,16 +363,14 @@ def save_results(
             sentence_ner = predicted_ners.get((line_idx, sentence_idx), [])
             #sentence_ner.sort(key=lambda x: -x[2])
             predicted_ner_proba.append(sentence_ner)
-            # filter by threshold
-            if args.filter_threshold:
-                spans_wo_prob = [
-                (start, end, label) for start, end, prob, label in sentence_ner
-                if prob >= args.filter_threshold
-            ]
+            # select spans for predicted_ner
+            if prune_config is not None:
+                filtered = _select_sent_spans(sentence_ner, prune_config)
             else:
-                spans_wo_prob = [
-                    (start, end, label) for start, end, prob, label in sentence_ner
-                ]
+                filtered = sentence_ner
+            spans_wo_prob = [
+                (start, end, label) for start, end, prob, label in filtered
+            ]
             predicted_ner.append(spans_wo_prob)
 
         doc["predicted_ner"] = predicted_ner
@@ -680,6 +761,128 @@ def _update_sentences_predictions(
                 sentences_predictions[sentence_id].append(
                     (start, end, prob, gold_label)
                 )
+
+
+def _compute_pruner_wandb_metrics(
+    sentences_predictions: dict,
+    ner_golden_labels: set,
+    target_recall_diff: float,
+) -> dict:
+    """Compute pruner analysis metrics for wandb logging during training.
+
+    Works on the pool of spans already selected by the top-K decoder, so
+    the upper-bound recall is pool-constrained (not the absolute maximum).
+
+    Parameters
+    ----------
+    sentences_predictions : dict
+        Maps (line_idx, sent_idx) -> list of (start, end, prob, gold_label).
+    ner_golden_labels : set
+        Set of (index, mention, label) tuples from the dataset.
+    target_recall_diff : float
+        Desired gap below upper-bound recall (e.g. 0.01 = 1%).
+
+    Returns
+    -------
+    dict of scalar metrics, prefixed for wandb logging.
+    """
+    # Build gold set and pool
+    gold_set = {(idx, s, e) for idx, (s, e), _ in ner_golden_labels}
+    pool_set = {
+        (idx, s, e)
+        for idx, spans in sentences_predictions.items()
+        for s, e, _p, _l in spans
+    }
+    n_gold         = len(gold_set)
+    n_pool         = len(pool_set)
+    n_gold_in_pool = len(gold_set & pool_set)
+    upper_bound    = n_gold_in_pool / n_gold if n_gold > 0 else 1.0
+    target_recall  = max(0.0, upper_bound - target_recall_diff)
+
+    def _metrics(predicted: set) -> dict:
+        n_pred       = len(predicted)
+        tp           = len(gold_set & predicted)
+        fp           = n_pred - tp
+        fn_in_pool   = n_gold_in_pool - tp
+        tn           = (n_pool - n_pred) - fn_in_pool
+        recall       = tp / n_gold if n_gold > 0 else 0.0
+        precision    = tp / n_pred if n_pred > 0 else 0.0
+        tn_rate      = tn / (fp + tn) if (fp + tn) > 0 else 1.0
+        return dict(recall=recall, precision=precision, tn_rate=tn_rate,
+                    tp=tp, fp=fp, tn=tn, n_pred=n_pred)
+
+    def _predicted_threshold(t: float) -> set:
+        return {
+            (idx, s, e)
+            for idx, spans in sentences_predictions.items()
+            for s, e, p, _l in spans if p >= t
+        }
+
+    # Binary search for highest threshold that still meets target_recall
+    lo, hi, best_threshold = 0.0, 1.0, 0.0
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        pred = _predicted_threshold(mid)
+        r = len(gold_set & pred) / n_gold if n_gold > 0 else 0.0
+        if r >= target_recall:
+            best_threshold = mid
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < 1e-5:
+            break
+    thresh_m = _metrics(_predicted_threshold(best_threshold))
+
+    # Top-K grid search: find (lam, lmin, lmax) that maximises TN/(FP+TN)
+    # while achieving recall >= target_recall.
+    def _predicted_topk(lam: float, lmin: int, lmax: int) -> set:
+        predicted = set()
+        for idx, spans in sentences_predictions.items():
+            if not spans:
+                continue
+            n = max(e for _s, e, _p, _l in spans) + 1   # inferred sent length
+            k = max(lmin, min(int(lam * n), lmax))
+            for s, e, _p, _l in sorted(spans, key=lambda x: x[2], reverse=True)[:k]:
+                predicted.add((idx, s, e))
+        return predicted
+
+    topk_ratio_values       = [round(v * 0.1, 1) for v in range(1, 11)]
+    min_mentions_num_values = [1, 2, 3, 4, 5]
+    max_mentions_num_values = [10, 15, 20, 25, 30]
+
+    feasible, infeasible = [], []
+    for lam, lmin, lmax in iproduct(
+        topk_ratio_values, min_mentions_num_values, max_mentions_num_values
+    ):
+        if lmin > lmax:
+            continue
+        m = _metrics(_predicted_topk(lam, lmin, lmax))
+        m.update(dict(lam=lam, lmin=lmin, lmax=lmax))
+        (feasible if m["recall"] >= target_recall else infeasible).append(m)
+
+    # Best feasible: highest TN/(FP+TN).  Fallback: highest recall.
+    feasible.sort(key=lambda x: -x["tn_rate"])
+    infeasible.sort(key=lambda x: -x["recall"])
+    best_topk = (feasible or infeasible or [None])[0]
+
+    out = {
+        "pruner/upper_bound_recall": upper_bound,
+        "pruner/target_recall":      target_recall,
+        "pruner/thresh/threshold":   best_threshold,
+        "pruner/thresh/recall":      thresh_m["recall"],
+        "pruner/thresh/precision":   thresh_m["precision"],
+        "pruner/thresh/tn_rate":     thresh_m["tn_rate"],
+    }
+    if best_topk:
+        out.update({
+            "pruner/topk/lam":       best_topk["lam"],
+            "pruner/topk/lmin":      best_topk["lmin"],
+            "pruner/topk/lmax":      best_topk["lmax"],
+            "pruner/topk/recall":    best_topk["recall"],
+            "pruner/topk/precision": best_topk["precision"],
+            "pruner/topk/tn_rate":   best_topk["tn_rate"],
+        })
+    return out
 
 
 def _span2label(ner_golden_labels):

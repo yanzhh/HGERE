@@ -20,7 +20,6 @@ import wandb
 from transformers import (
     AdamW,
     BertConfig,
-    BertForSpanMarkerNerPruner,
     # AlbertConfig,
     # AlbertTokenizer,
     # AlbertForSpanMarkerNerPruner,
@@ -28,6 +27,7 @@ from transformers import (
     RobertaConfig,
     get_linear_schedule_with_warmup,
 )
+from utils.models_pruner import BertForSpanMarkerNerPruner
 from utils.misc import get_logger, set_seed
 from wolf_data_utils import ACEDatasetNER
 from eval_pruner import evaluate
@@ -159,17 +159,20 @@ def train(logger, args, model, tokenizer):
                     # Save model checkpoint
                     if args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
                         dev_file = Path(args.data_dir) / args.dev_file
-                        results = evaluate(
+                        results, _ = evaluate(
                             logger, args, model, tokenizer, file_path=dev_file
                         )
                         metrics_to_log = {f"dev/{k}": v for k, v in results.items()}
                         wandb.log(metrics_to_log, global_step)
-                        ent_recall = results["recall_05"]
+                        tn_rate = max(
+                            results.get("pruner/thresh/tn_rate", 0.0),
+                            results.get("pruner/topk/tn_rate", 0.0),
+                        )
 
-                        if ent_recall >= best_result:
-                            best_result = ent_recall
+                        if tn_rate >= best_result:
+                            best_result = tn_rate
                             logger.info(
-                                f"Best recall overlap:{best_result:.4f} in step:{global_step}"
+                                f"Best TN/(FP+TN):{best_result:.4f} in step:{global_step}"
                             )
                         else:
                             update = False
@@ -495,13 +498,16 @@ def main():
         update = True
         if args.evaluate_during_training:
             dev_file = Path(args.data_dir) / args.dev_file
-            results = evaluate(logger, args, model, tokenizer, file_path=dev_file)
+            results, _ = evaluate(logger, args, model, tokenizer, file_path=dev_file)
             # logger.info(f"Epoch: {epoch_num}, F1: {results['f1']}, recall: {results['recall']}")
             # logger.info(f"Epoch: {epoch_num}, ent_recall: {results['recall_score']}, R_overlap: {results['r_overlap']}")
-            ent_recall = results["recall_overlap"]
-            if ent_recall >= best_result:
-                best_result = ent_recall
-                logger.info(f"Best recall overlap:{best_result:.4f}")
+            tn_rate = max(
+                results.get("pruner/thresh/tn_rate", 0.0),
+                results.get("pruner/topk/tn_rate", 0.0),
+            )
+            if tn_rate >= best_result:
+                best_result = tn_rate
+                logger.info(f"Best TN/(FP+TN):{best_result:.4f}")
             else:
                 update = False
 
@@ -571,6 +577,15 @@ def main():
             checkpoints = checkpoints[-1:]
 
         logger.info("Evaluate the following checkpoints: %s", checkpoints)
+
+        # Determine pruning config:
+        #   --prune-config PATH  → load from JSON file (skip dev tuning)
+        #   (default)            → estimate best config from dev set
+        prune_config_override = None
+        if args.prune_config:
+            prune_config_override = json.loads(Path(args.prune_config).read_text())
+            logger.info(f"Using prune config from {args.prune_config}: {prune_config_override}")
+
         for checkpoint in checkpoints:
             global_step = checkpoint.split("-")[-1]
             output_test_file = Path(args.model_dir) / "test_results.txt"
@@ -578,18 +593,34 @@ def main():
             model = model_class.from_pretrained(checkpoint, config=config, args=args)
             model.to(args.device)
 
+            # Always write output files during do_test
+            args.output_results = True
+
+            prune_config = prune_config_override
+            if prune_config is None:
+                # Run dev to find the best pruning config
+                dev_file = Path(args.data_dir) / args.dev_file
+                if dev_file.exists():
+                    logger.info("Running dev inference to determine best pruning config …")
+                    _, prune_config = evaluate(
+                        logger, args, model, tokenizer,
+                        file_path=dev_file, prefix=global_step, do_test=True,
+                    )
+                    config_path = Path(args.output_dir) / "best_config.json"
+                    config_path.write_text(json.dumps(prune_config, indent=2) + "\n")
+                    logger.info(f"Best prune config: {prune_config}  (saved to {config_path})")
+
             results = {}
             for file_name in (
                 args.train_file,
                 args.dev_file,
                 args.test_file,
             ):
-                # for file_name in (args.test_file,):
                 test_file = Path(args.data_dir) / file_name
-                file_name = test_file.name
+                split_name = test_file.name
                 if test_file.exists():
-                    logger.info(f"Evaluate on {file_name}")
-                    result = evaluate(
+                    logger.info(f"Evaluate on {split_name}")
+                    result, _ = evaluate(
                         logger,
                         args,
                         model,
@@ -597,8 +628,9 @@ def main():
                         file_path=test_file,
                         prefix=global_step,
                         do_test=True,
+                        prune_config=prune_config,
                     )
-                    results[file_name] = result
+                    results[split_name] = result
                 else:
                     logger.info(f"{test_file} does not exist!")
             with open(output_test_file, "w") as f:
@@ -928,6 +960,25 @@ def parse_arguments():
     parser.add_argument("--test_file", default="test.json", type=str)
 
     parser.add_argument("--alpha", type=float, default=1, help="")
+    parser.add_argument(
+        "--pruner_loss",
+        type=str,
+        default="bce",
+        choices=["bce", "focal"],
+        help="Loss function for the pruner binary classifier. 'bce' = standard BCEWithLogitsLoss; 'focal' = focal loss (use --focal_gamma / --focal_alpha to tune).",
+    )
+    parser.add_argument(
+        "--focal_gamma",
+        type=float,
+        default=2.0,
+        help="Focusing parameter γ for focal loss (only used when --pruner_loss focal). Higher values down-weight easy negatives more strongly. Typical range: 0.5–5.",
+    )
+    parser.add_argument(
+        "--focal_alpha",
+        type=float,
+        default=0.25,
+        help="Class-balance factor α for focal loss (only used when --pruner_loss focal). Weight applied to the positive (entity) class. Typical range: 0.1–0.5.",
+    )
     parser.add_argument("--max_pair_length", type=int, default=256, help="")
     parser.add_argument("--max_mention_ori_length", type=int, default=8, help="")
     parser.add_argument("--lminit", action="store_true")
@@ -946,6 +997,15 @@ def parse_arguments():
 
     # for pruner
     parser.add_argument(
+        "--target_recall_diff",
+        type=float,
+        default=0.01,
+        help=(
+            "Gap below pool upper-bound recall used as analysis target during eval "
+            "(e.g. 0.01 = 1%%). Controls threshold/top-K search logged to wandb."
+        ),
+    )
+    parser.add_argument(
         "--topk_ratio",
         default=0.5,
         type=float,
@@ -958,10 +1018,15 @@ def parse_arguments():
         help="max mentions number feed in pruner",
     )
     parser.add_argument(
-        "--filter_threshold",
-        type=float,
+        "--prune-config",
+        dest="prune_config",
         default=None,
-        help="min prediction score for predicted ner.",
+        type=str,
+        help=(
+            "Path to a best_config.json produced by evaluation/threshold_analysis.py. "
+            "When set, the pruning parameters are loaded from this file instead of being "
+            "estimated from the dev set at the end of training."
+        ),
     )
     parser.add_argument(
         "--max_mentions_num",

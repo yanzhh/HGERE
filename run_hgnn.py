@@ -31,23 +31,24 @@ from transformers import (
     # BertForACEBothOneDropoutSub,
     AlbertConfig,
     # AlbertForACEBothOneDropoutSub,
-    AlBertForBaselines,
+    # AlBertForBaselines,
     #   BertForHyperGNNPlus,
     #   BertForHyperGNNwithUnifyEntity,
-    AlbertForHyperGNN,
+    # AlbertForHyperGNN,
     AlbertTokenizer,
     # WEIGHTS_NAME,
     BertConfig,
     # BertForACEBothOneDropoutSubNoNer,
-    BertForBaselines,
+    # BertForBaselines,
     #   BertForAttnHyperGNN,
-    BertForHyperGNN,
+    # BertForHyperGNN,
     BertTokenizer,
     AutoTokenizer,
     # RobertaConfig,
     # RobertaTokenizer,
     get_linear_schedule_with_warmup,
 )
+from utils.model_ere import BertForHyperGNN
 from utils.data import RelationDataset
 from utils.misc import get_logger, set_seed
 from utils.labels import LABELS
@@ -79,10 +80,10 @@ ALL_MODELS = sum(
 )
 
 MODEL_CLASSES = {
-    "baseline": (BertConfig, BertForBaselines, BertTokenizer),
-    "albertbaseline": (AlbertConfig, AlBertForBaselines, AlbertTokenizer),
+    # "baseline": (BertConfig, BertForBaselines, BertTokenizer),
+    # "albertbaseline": (AlbertConfig, AlBertForBaselines, AlbertTokenizer),
     "hyper": (BertConfig, BertForHyperGNN, AutoTokenizer),
-    "alberthyper": (AlbertConfig, AlbertForHyperGNN, AlbertTokenizer),
+    # "alberthyper": (AlbertConfig, AlbertForHyperGNN, AlbertTokenizer),
 }
 
 
