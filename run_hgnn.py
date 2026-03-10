@@ -1,5 +1,6 @@
 import argparse
 import glob
+import math
 
 # from transformers.modeling_albert import
 import json
@@ -266,15 +267,24 @@ def train(model, train_dataset, eval_dataset, args, logger):
                 if k in input_keys:
                     v = v.to(args.device)
                     inputs[k] = v
+            # Compute loss weighting alpha (RE share): static or dynamic sigmoid schedule
+            if args.train_time_loss_weighting:
+                t = global_step / max(t_total, 1)
+                alpha = 1.0 / (1.0 + math.exp(
+                    -args.train_time_loss_steepness * (t - args.train_time_loss_turn)
+                ))
+            else:
+                alpha = args.loss_re_weight_alpha
+
             with autocast(device_type=args.device_name, dtype=torch.float16, enabled=args.fp16):
                 outputs = model(**inputs)
 
                 # model outputs are always tuple in pytorch-transformers (see doc)
                 re_loss = outputs[1]
                 ner_loss = outputs[2]
-                
-                # weight loss (orginal added loss is in outputs[0]
-                loss = args.loss_re_weight_alpha * re_loss + (1 - args.loss_re_weight_alpha) * ner_loss
+
+                # weight loss (original added loss is in outputs[0])
+                loss = alpha * re_loss + (1 - alpha) * ner_loss
 
                 if args.n_gpu > 1:
                     loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -318,6 +328,20 @@ def train(model, train_dataset, eval_dataset, args, logger):
                 optimizer.zero_grad()
                 global_step += 1
 
+                # Log dynamic weight at every step so the full sigmoid curve is visible in wandb
+                if (
+                    args.train_time_loss_weighting
+                    and args.local_rank in [-1, 0]
+                    and log_wandb
+                ):
+                    wandb.log(
+                        {
+                            "train/loss_weight/alpha_re": alpha,
+                            "train/loss_weight/alpha_ner": 1 - alpha,
+                        },
+                        step=global_step,
+                    )
+
                 # Log metrics
                 if (
                     args.local_rank in [-1, 0]
@@ -334,6 +358,8 @@ def train(model, train_dataset, eval_dataset, args, logger):
                         "train/loss": (tr_loss - logging_loss) / args.logging_steps,
                         "train/loss/re": (tr_re_loss - logging_re_loss) / args.logging_steps,
                         "train/loss/ner": (tr_ner_loss - logging_ner_loss) / args.logging_steps,
+                        "train/loss_weight/alpha_re": alpha,
+                        "train/loss_weight/alpha_ner": 1 - alpha,
                     }
                     logging_loss = tr_loss
                     logging_re_loss = tr_re_loss
@@ -760,6 +786,33 @@ def main():
         default=0.5,
         help="Weight the re loss in respect to the ner loss. E.g., 0.7 => 0.7 re loss and 0.3 ner loss",
     )
+    parser.add_argument(
+        "--train_time_loss_weighting",
+        action="store_true",
+        help=(
+            "Enable dynamic NER→RE loss weighting over training. Alpha shifts from 0.0 (full NER) "
+            "to 1.0 (full RE) via a sigmoid schedule. "
+            "See documentation/train_time_loss_weighting.md for details."
+        ),
+    )
+    parser.add_argument(
+        "--train_time_loss_turn",
+        type=float,
+        default=0.5,
+        help=(
+            "Fractional training progress [0, 1] at which the NER→RE weighting is at its midpoint "
+            "(alpha=0.5). Default: 0.5 (centre of training)."
+        ),
+    )
+    parser.add_argument(
+        "--train_time_loss_steepness",
+        type=float,
+        default=10.0,
+        help=(
+            "Steepness of the sigmoid phase transition for dynamic loss weighting. "
+            "Higher values produce a sharper switch. Default: 10.0."
+        ),
+    )
 
     ## Required parameters
     parser.add_argument(
@@ -1092,6 +1145,15 @@ def main():
     # parser.add_argument('--edge2nodefunc', action='store_true', help="")
 
     args = parser.parse_args()
+
+    # Warn if both dynamic and static weighting are configured
+    if args.train_time_loss_weighting and args.loss_re_weight_alpha != 0.5:
+        logging.warning(
+            "--train_time_loss_weighting is enabled but --loss_re_weight_alpha is also set to %.3f "
+            "(non-default value). The static --loss_re_weight_alpha will be IGNORED in favour of "
+            "the dynamic sigmoid schedule. Remove --loss_re_weight_alpha to suppress this warning.",
+            args.loss_re_weight_alpha,
+        )
 
     # get hostname
     args.hostname = socket.gethostname()
