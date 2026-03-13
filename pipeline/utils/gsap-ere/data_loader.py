@@ -520,24 +520,6 @@ class PrunerDataset(Dataset):
         # print(f'input_ids length: {len(input_ids)}')
         position_ids = self._generate_marker_position_ids(sample["spans"])
 
-        # full attention mask (attend between text and all marker)
-        full_attention_mask = (
-            [1] * text_length
-            + [0] * (self.max_sequence_length - text_length)
-            + [0] * (self.max_entities * 2)
-        )
-        for span_idx, ((start_idx, end_idx), label, mention) in enumerate(
-            sample["spans"]
-        ):
-            start_subtoken_idx = (
-                self.max_sequence_length + span_idx
-            )  # for start subtoken of an entity
-            end_subtoken_idx = (
-                self.max_sequence_length + self.max_entities + span_idx
-            )  # for end subtoken of an entity
-            full_attention_mask[start_subtoken_idx] = 1
-            full_attention_mask[end_subtoken_idx] = 1
-
         # attent only from marker begin to end and to full text span
         attention_mask = self._generate_attention_mask(sample["spans"], text_length)
 
@@ -562,7 +544,6 @@ class PrunerDataset(Dataset):
             torch.tensor(position_ids),
             torch.tensor(labels, dtype=torch.int64),
             torch.tensor(mention_pos),
-            torch.tensor(full_attention_mask),
         ]
 
         if self.evaluate:

@@ -129,7 +129,7 @@ class ACEDatasetNER(Dataset):
         else:
             self.ner_label_list = NER_LABEL_LISTS[args.label_set]
 
-        print(self.ner_label_list)
+        self.logger.info("NER labels: %s", self.ner_label_list)
         self.max_pair_length = args.max_pair_length
 
         self.max_entity_length = args.max_pair_length * 2
@@ -162,10 +162,11 @@ class ACEDatasetNER(Dataset):
         maxL = 0  # maximum number of words per document(not sub_words)
         maxR = 0  # maximum number of subword tokens incl. context per document
         # For each document
+        doc_limit = getattr(self.args, "limit", None)
         for line_idx, line in enumerate(f):
+            if doc_limit is not None and line_idx >= doc_limit:
+                break
             document = json.loads(line)
-            # if len(self.data) > 5:
-            #     break
 
             # if self.args.output_dir.find('test')!=-1:
             #     if len(self.data) > 5:
@@ -568,10 +569,6 @@ class ACEDatasetNER(Dataset):
         mention_pos = []
         num_pair = self.max_pair_length
 
-        full_attention_mask = (
-            [1] * L + [0] * (self.max_seq_length - L) + [0] * (self.max_pair_length) * 2
-        )  # max_seq_length | max_pair_length | max_pair_length;   full sequence: length L for input subtokens and (max_seq_length - L) paddings; max_pair_length for entity starts; max_pair_length for entity ends
-
         for x_idx, x in enumerate(entry["examples"]):
             # x_idx: entities idx for a sentence, entry['examples']: entity_infos
             m1 = x[0]  # entity positions: (start idx, end idx)
@@ -596,7 +593,6 @@ class ACEDatasetNER(Dataset):
             position_ids[w2] = m1[1]
 
             for xx in [w1, w2]:
-                full_attention_mask[xx] = 1
                 for yy in [w1, w2]:
                     attention_mask[xx, yy] = 1
                 attention_mask[xx, :L] = 1
@@ -610,7 +606,6 @@ class ACEDatasetNER(Dataset):
             torch.tensor(position_ids),
             torch.tensor(labels, dtype=torch.int64),
             torch.tensor(mention_pos),
-            torch.tensor(full_attention_mask),
         ]
 
         if self.evaluate:

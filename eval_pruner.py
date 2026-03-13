@@ -73,7 +73,7 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
         # mentions
 
         # -------for pruner------------
-        sent_lens = batch[6]
+        sent_lens = batch[5]
 
         split_ranges, sent_lens_simple, indexs_simple, batch_m2s_simple = (
             _exact_boundaries(indexs, sent_lens, batch_m2s)
@@ -82,7 +82,7 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
 
         # batch_mentions = _get_batch_mentions(batch_m2s_simple, args.device)
 
-        batch = tuple(t.to(args.device) for t in batch[:6])
+        batch = tuple(t.to(args.device) for t in batch[:5])
 
         with torch.no_grad():
             inputs = {
@@ -94,8 +94,6 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
 
             if args.model_type.find("span") != -1:
                 inputs["mention_pos"] = batch[4]
-            if args.use_full_layer != -1:
-                inputs["full_attention_mask"] = batch[5]
 
             outputs = model(**inputs)
 
@@ -180,8 +178,10 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
         f"TN/(FP+TN)={pruner_metrics.get('pruner/topk/tn_rate', 0):.4f}"
     )
 
-    res = {k: f"{v:.4f}" if isinstance(v, float) else v for k, v in results.items()}
-    logger.info(f"Result: {res}")
+    res = {k: f"{v:.3f}" if isinstance(v, float) else v for k, v in results.items()}
+    col_w = max(len(k) for k in res) + 2
+    res_lines = "\n".join(f"  {k:<{col_w}}{v}" for k, v in res.items())
+    logger.info(f"Result:\n{res_lines}")
     eval_time = timeit.default_timer() - start_time
     logger.info(
         f"  Evaluation done in total {eval_time} secs ({len(eval_dataset) / eval_time}) example per second)"

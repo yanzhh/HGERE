@@ -169,6 +169,6 @@ saves/
 models/
 slurm/
 logs/
-data/
+/data/
 pretrained_models/
 uv.lock

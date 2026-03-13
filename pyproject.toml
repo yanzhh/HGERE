@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "hgere"
 version = "0.1.0"
@@ -7,7 +11,7 @@ requires-python = ">=3.9,<3.10"
 dependencies = [
     "einops>=0.8.0",
     "setuptools>=75.6.0",
-    "torch>=2.5.1",
+    "torch>=2.8.0",
     "tqdm>=4.67.1",
     "wandb>=0.19.9",
     "transformers",
@@ -15,6 +19,9 @@ dependencies = [
     "scikit-learn>=1.6.0",
     "tabulate>=0.9.0",
 ]
+
+[project.scripts]
+train-span-classifier = "hgere.commands.train_span_classifier:cli"
 
 [dependency-groups]
 dev = [
@@ -29,7 +36,6 @@ pythonpath = ["."]
 torch = { index = "pytorch-cu128"}
 torchvision = { index = "pytorch-cu128"}
 torchaudio = { index = "pytorch-cu128"}
-transformers = { path = "transformers", editable = true }
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"

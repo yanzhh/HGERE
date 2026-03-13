@@ -27,8 +27,8 @@ import wandb
 
 from tqdm import tqdm, trange
 
+from torch.optim import AdamW
 from transformers import (
-    AdamW,
     # BertForACEBothOneDropoutSub,
     AlbertConfig,
     # AlbertForACEBothOneDropoutSub,
@@ -72,13 +72,7 @@ EVAL_KEYS = [
     "ent_numbers",
 ]
 
-ALL_MODELS = sum(
-    (
-        tuple(conf.pretrained_config_archive_map.keys())
-        for conf in (BertConfig, AlbertConfig)
-    ),
-    (),
-)
+ALL_MODELS = []  # pretrained_config_archive_map removed in transformers 4.x
 
 MODEL_CLASSES = {
     # "baseline": (BertConfig, BertForBaselines, BertTokenizer),
@@ -181,11 +175,14 @@ def train(model, train_dataset, eval_dataset, args, logger):
     # initilize the scaler to train with float16
     scaler = GradScaler(device=args.device_name, enabled=args.fp16)
 
-    scheduler = get_linear_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=int(args.warmup_ratio * t_total),
-        num_training_steps=t_total,
-    )
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", "Detected call of `lr_scheduler.step\\(\\)`")
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=int(args.warmup_ratio * t_total),
+            num_training_steps=t_total,
+        )
 
     if args.continue_training:
         train_states_checkpoint = torch.load(
@@ -1345,12 +1342,16 @@ def main():
 
     #print(config)
     #raise Exception()
+    _transformers_logger = logging.getLogger("transformers.modeling_utils")
+    _prev_level = _transformers_logger.level
+    _transformers_logger.setLevel(logging.ERROR)
     model = model_class.from_pretrained(
         args.model_path,
         from_tf=bool(".ckpt" in args.model_path),
         config=config,
         args=args,
     )
+    _transformers_logger.setLevel(_prev_level)
 
     adjust_tokenizer(tokenizer, model, args.num_ner_labels, args, logger)
 
