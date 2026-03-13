@@ -17,7 +17,6 @@ from itertools import combinations
 from pathlib import Path
 
 import torch
-from hgere.models.model_ere import BertForHyperGNN
 from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from tqdm import tqdm, trange
@@ -26,9 +25,7 @@ from tqdm import tqdm, trange
 # from torch.utils.data.distributed import DistributedSampler
 # from torch.nn.utils.rnn import pad_sequence
 import wandb
-from hgere.data.relation_dataset import RelationDataset
-from hgere.labels import LABELS
-from hgere.utils import get_logger, set_seed
+
 from transformers import (
     # BertForACEBothOneDropoutSub,
     AlbertConfig,
@@ -50,6 +47,11 @@ from transformers import (
     # RobertaTokenizer,
     get_linear_schedule_with_warmup,
 )
+
+from hgere.models.hgere import BertForHyperGNN
+from hgere.data.relation_dataset import RelationDataset
+from hgere.labels import LABELS
+from hgere.utils import get_logger, set_seed
 
 WEIGHTS_NAME = "pytorch_model.bin"
 TRAIN_KEYS = [
@@ -1241,10 +1243,10 @@ def main():
             args.output_dir,
             scripts_to_save=[
                 os.path.basename(__file__),
-                "utils/data.py",
-                "transformers/src/transformers/modules.py",
-                "transformers/src/transformers/modeling_bert.py",
-                "transformers/src/transformers/modeling_albert.py",
+               # "utils/data.py",
+               # "transformers/src/transformers/modules.py",
+               # "transformers/src/transformers/modeling_bert.py",
+               # "transformers/src/transformers/modeling_albert.py",
             ],
         )
 
