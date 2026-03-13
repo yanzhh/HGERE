@@ -1,6 +1,6 @@
 # SciER HGERE — train on focal pruner predictions
 GPU_ID=0
-NICK_NAME=fuchs_1e-4_new_pruner
+NICK_NAME=fuchs_1e-4_test_transformer
 for seed in 43; do
 for bs in 18; do
 for lr in 1e-4; do

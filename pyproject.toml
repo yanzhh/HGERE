@@ -18,10 +18,12 @@ dependencies = [
     "matplotlib>=3.9.0",
     "scikit-learn>=1.6.0",
     "tabulate>=0.9.0",
+    "pandas>=2.0.0",
 ]
 
 [project.scripts]
 train-span-classifier = "hgere.commands.train_span_classifier:cli"
+eval-rulebased-pruner = "hgere.commands.eval_rulebased_pruner:cli"
 
 [dependency-groups]
 dev = [
