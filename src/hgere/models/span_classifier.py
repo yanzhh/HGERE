@@ -87,7 +87,6 @@ class BertForSpanMarkerNerPruner(BertPreTrainedModel):
         inputs_embeds=None,
         labels=None,
         mention_pos=None,
-        full_attention_mask=None,
     ):
         outputs = self.bert(
             input_ids,
@@ -96,7 +95,6 @@ class BertForSpanMarkerNerPruner(BertPreTrainedModel):
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
-            full_attention_mask=full_attention_mask,
         )
 
         hidden_states = outputs[0]  # bs * tot_seq_len * hidden_dim

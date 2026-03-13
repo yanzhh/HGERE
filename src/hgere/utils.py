@@ -8,7 +8,7 @@ import torch
 
 
 def get_logger(args, log_path, test: bool=False):
-    log_formatter = logging.Formatter("%(asctime)s [%(threadName)-12.12s] [%(levelname)-5.5s]  %(message)s")
+    log_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     logger = logging.getLogger()
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)

@@ -155,6 +155,14 @@ class BertForHyperGNN(BertPreTrainedModel):
         ent_numbers=None,
         # sub_ner_labels=None,
     ):
+        # token_type_ids is never provided by the data loader.
+        # In transformers 4.x a pre-registered buffer of size [1, 512] is used as fallback,
+        # which fails to expand when seq_length > 512 (entity-marker sequences can reach ~530).
+        # Explicitly pass zeros of the correct shape to avoid the buffer expansion error.
+        if token_type_ids is None:
+            ids = input_ids if input_ids is not None else inputs_embeds
+            token_type_ids = torch.zeros(ids.shape[:2], dtype=torch.long, device=ids.device)
+
         outputs = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask,
