@@ -1,8 +1,8 @@
 import argparse
 import socket
 
-from hgere.ner_classifier.train import run_train_span_classifier, MODEL_CLASSES as _MODEL_CLASSES
-
+from hgere.span_classifier.neural.train import MODEL_CLASSES as _MODEL_CLASSES
+from hgere.span_classifier.neural.train import run_train_span_classifier
 
 MODEL_CLASSES = list(_MODEL_CLASSES.keys())
 

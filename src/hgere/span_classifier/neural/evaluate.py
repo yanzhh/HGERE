@@ -1,18 +1,28 @@
-import timeit
-import pdb
 import json
+import pdb
+import timeit
 from collections import defaultdict
 from itertools import product as iproduct
 from pathlib import Path
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
-from tqdm import tqdm
 from torch.utils.data import DataLoader, SequentialSampler
-from wolf_data_utils import ACEDatasetNER
+from tqdm import tqdm
+
+from ...data.pruner_data_utils import ACEDatasetNER
 
 
-def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False, prune_config=None):
+def evaluate(
+    logger,
+    args,
+    model,
+    tokenizer,
+    file_path,
+    prefix="",
+    do_test=False,
+    prune_config=None,
+):
     is_ontonotes = args.data_dir.find("ontonotes") != -1
 
     global NEG_INF
@@ -34,9 +44,9 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
 
     goldspan2label = _span2label(ner_golden_labels)
     eval_sampler = SequentialSampler(eval_dataset)
-    
+
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
-    
+
     eval_dataloader = DataLoader(
         eval_dataset,
         sampler=eval_sampler,
@@ -50,7 +60,6 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
     max_mentions_num = args.max_mentions_num
     min_mentions_num = args.min_mentions_num
     topk_infos = (topk_ratio, min_mentions_num, max_mentions_num)
-
 
     # Eval!
     logger.info(f"***** Running evaluation {prefix} *****")
@@ -188,15 +197,32 @@ def evaluate(logger, args, model, tokenizer, file_path, prefix="", do_test=False
     )
 
     # Determine the pruning config used for this evaluation
-    best_prune_config = prune_config if prune_config is not None else _extract_best_config(pruner_metrics)
+    best_prune_config = (
+        prune_config
+        if prune_config is not None
+        else _extract_best_config(pruner_metrics)
+    )
 
     if args.output_results and (do_test or not args.do_train):
         eval_filename = eval_dataset.file_path
-        save_results(logger, results, eval_filename, args, file_path, predict_ners,
-                     prune_config=best_prune_config)
         save_results(
-            logger, results, eval_filename, args, file_path, predict_ners_overlap,
-            overlap=True, prune_config=best_prune_config,
+            logger,
+            results,
+            eval_filename,
+            args,
+            file_path,
+            predict_ners,
+            prune_config=best_prune_config,
+        )
+        save_results(
+            logger,
+            results,
+            eval_filename,
+            args,
+            file_path,
+            predict_ners_overlap,
+            overlap=True,
+            prune_config=best_prune_config,
         )
     return results, best_prune_config
 
@@ -211,7 +237,7 @@ def postprocess_predictions(
 
     predict_ners = defaultdict(list)
     predict_ners_overlap = defaultdict(list)
- 
+
     tp = 0
     fp = 0
     tp_05 = 0
@@ -228,13 +254,13 @@ def postprocess_predictions(
             # is there a span with overlap to this spans allready predicted?
             is_overlap = _overlapping_span_exist(
                 start, end, label_gold, non_overlapping_spans, force_same_label
-            ) # Check function
+            )  # Check function
             if not is_overlap:
                 # a new predicted span!
                 non_overlapping_spans.append((start, end, prob, label_gold))
                 predict_ners[sentence_id].append((start, end, prob, label_gold))
-            
-            # count matches 
+
+            # count matches
             #  prediction is in gold: true positive
             is_tp = (sentence_id, (start, end), label_gold) in ner_golden_labels
             if is_tp:
@@ -251,7 +277,6 @@ def postprocess_predictions(
                     if prob >= 0.5:
                         fp_05 += 1
 
-    
     metrics = {}
     metrics |= _get_metrics(tp, fp, support, "")
     metrics |= _get_metrics(tp_05, fp_05, support, "_05")
@@ -259,20 +284,22 @@ def postprocess_predictions(
 
     return predict_ners, predict_ners_overlap, metrics
 
+
 def _get_metrics(tp, fp, support, suffix):
-    precision = recall = f1 = 0.
-    if tp + fp > 0.:
+    precision = recall = f1 = 0.0
+    if tp + fp > 0.0:
         precision = tp / (tp + fp)
-    if support > 0.:
+    if support > 0.0:
         recall = tp / support
-    if precision + recall > 0.:
+    if precision + recall > 0.0:
         f1 = 2 * (precision * recall) / (precision + recall)
     metrics = {
         f"precision{suffix}": precision,
         f"recall{suffix}": recall,
         f"f1{suffix}": f1,
-        }
+    }
     return metrics
+
 
 def _select_sent_spans(sent_spans, prune_config):
     """Apply a best_config dict (threshold_analysis.py format) to one sentence's span pool."""
@@ -282,7 +309,7 @@ def _select_sent_spans(sent_spans, prune_config):
         return [(s, e, p, l) for s, e, p, l in sent_spans if p >= t]
     elif method == "topk":
         params = prune_config["parameters"]
-        lam  = params["topk_ratio"]
+        lam = params["topk_ratio"]
         lmin = int(params["min_mentions_num"])
         lmax = int(params["max_mentions_num"])
         if not sent_spans:
@@ -295,14 +322,14 @@ def _select_sent_spans(sent_spans, prune_config):
 
 def _extract_best_config(pruner_metrics: dict) -> dict:
     """Convert pruner wandb metrics to a best_config dict (threshold_analysis.py format)."""
-    thresh_tn     = pruner_metrics.get("pruner/thresh/tn_rate", 0.0)
-    topk_tn       = pruner_metrics.get("pruner/topk/tn_rate",   0.0)
-    thresh_recall = pruner_metrics.get("pruner/thresh/recall",  0.0)
-    topk_recall   = pruner_metrics.get("pruner/topk/recall",    0.0)
-    target_recall = pruner_metrics.get("pruner/target_recall",  0.0)
+    thresh_tn = pruner_metrics.get("pruner/thresh/tn_rate", 0.0)
+    topk_tn = pruner_metrics.get("pruner/topk/tn_rate", 0.0)
+    thresh_recall = pruner_metrics.get("pruner/thresh/recall", 0.0)
+    topk_recall = pruner_metrics.get("pruner/topk/recall", 0.0)
+    target_recall = pruner_metrics.get("pruner/target_recall", 0.0)
 
     thresh_meets = thresh_recall >= target_recall
-    topk_meets   = topk_recall   >= target_recall
+    topk_meets = topk_recall >= target_recall
 
     if thresh_meets and topk_meets:
         best_method = "threshold" if thresh_tn >= topk_tn else "topk"
@@ -322,7 +349,7 @@ def _extract_best_config(pruner_metrics: dict) -> dict:
         return {
             "best_method": "topk",
             "parameters": {
-                "topk_ratio":       pruner_metrics["pruner/topk/lam"],
+                "topk_ratio": pruner_metrics["pruner/topk/lam"],
                 "min_mentions_num": int(pruner_metrics["pruner/topk/lmin"]),
                 "max_mentions_num": int(pruner_metrics["pruner/topk/lmax"]),
             },
@@ -330,7 +357,13 @@ def _extract_best_config(pruner_metrics: dict) -> dict:
 
 
 def save_results(
-    logger, results, eval_filename, args, file_path, predicted_ners, overlap=False,
+    logger,
+    results,
+    eval_filename,
+    args,
+    file_path,
+    predicted_ners,
+    overlap=False,
     prune_config=None,
 ):
     # pdb.set_trace()
@@ -361,7 +394,7 @@ def save_results(
         predicted_ner_proba = []
         for sentence_idx in range(num_sents):
             sentence_ner = predicted_ners.get((line_idx, sentence_idx), [])
-            #sentence_ner.sort(key=lambda x: -x[2])
+            # sentence_ner.sort(key=lambda x: -x[2])
             predicted_ner_proba.append(sentence_ner)
             # select spans for predicted_ner
             if prune_config is not None:
@@ -682,7 +715,7 @@ def _decode_pruner_topk(topk_infos, previous_infos):
     # assert torch.equal(ner_probs, ner_probs_1),pdb.set_trace()
     _, indices = torch.sort(ner_probs, dim=1, descending=True)
     _, n_entity = ner_probs.shape
-    
+
     # Determine max entities for each sentence
 
     # gold_entities_id_flat = gold_labels.masked_select(ent_masks)
@@ -697,9 +730,7 @@ def _decode_pruner_topk(topk_infos, previous_infos):
     max_topk_mask = n_ent_topk > max_mentions_num
     ### 3. select right value
     #  * select min_mention_num if min_menition_num is higher than min_topk else n_ent_topk
-    n_ent_topk = (
-        min_topk_mask * min_mentions_num + (~min_topk_mask) * n_ent_topk
-    )
+    n_ent_topk = min_topk_mask * min_mentions_num + (~min_topk_mask) * n_ent_topk
     #  * select max_mention_num if max_menition_num is higher than max_topk else n_ent_topk
     n_ent_topk = max_topk_mask * max_mentions_num + (~max_topk_mask) * n_ent_topk
 
@@ -793,29 +824,37 @@ def _compute_pruner_wandb_metrics(
         for idx, spans in sentences_predictions.items()
         for s, e, _p, _l in spans
     }
-    n_gold         = len(gold_set)
-    n_pool         = len(pool_set)
+    n_gold = len(gold_set)
+    n_pool = len(pool_set)
     n_gold_in_pool = len(gold_set & pool_set)
-    upper_bound    = n_gold_in_pool / n_gold if n_gold > 0 else 1.0
-    target_recall  = max(0.0, upper_bound - target_recall_diff)
+    upper_bound = n_gold_in_pool / n_gold if n_gold > 0 else 1.0
+    target_recall = max(0.0, upper_bound - target_recall_diff)
 
     def _metrics(predicted: set) -> dict:
-        n_pred       = len(predicted)
-        tp           = len(gold_set & predicted)
-        fp           = n_pred - tp
-        fn_in_pool   = n_gold_in_pool - tp
-        tn           = (n_pool - n_pred) - fn_in_pool
-        recall       = tp / n_gold if n_gold > 0 else 0.0
-        precision    = tp / n_pred if n_pred > 0 else 0.0
-        tn_rate      = tn / (fp + tn) if (fp + tn) > 0 else 1.0
-        return dict(recall=recall, precision=precision, tn_rate=tn_rate,
-                    tp=tp, fp=fp, tn=tn, n_pred=n_pred)
+        n_pred = len(predicted)
+        tp = len(gold_set & predicted)
+        fp = n_pred - tp
+        fn_in_pool = n_gold_in_pool - tp
+        tn = (n_pool - n_pred) - fn_in_pool
+        recall = tp / n_gold if n_gold > 0 else 0.0
+        precision = tp / n_pred if n_pred > 0 else 0.0
+        tn_rate = tn / (fp + tn) if (fp + tn) > 0 else 1.0
+        return dict(
+            recall=recall,
+            precision=precision,
+            tn_rate=tn_rate,
+            tp=tp,
+            fp=fp,
+            tn=tn,
+            n_pred=n_pred,
+        )
 
     def _predicted_threshold(t: float) -> set:
         return {
             (idx, s, e)
             for idx, spans in sentences_predictions.items()
-            for s, e, p, _l in spans if p >= t
+            for s, e, p, _l in spans
+            if p >= t
         }
 
     # Binary search for highest threshold that still meets target_recall
@@ -840,13 +879,13 @@ def _compute_pruner_wandb_metrics(
         for idx, spans in sentences_predictions.items():
             if not spans:
                 continue
-            n = max(e for _s, e, _p, _l in spans) + 1   # inferred sent length
+            n = max(e for _s, e, _p, _l in spans) + 1  # inferred sent length
             k = max(lmin, min(int(lam * n), lmax))
             for s, e, _p, _l in sorted(spans, key=lambda x: x[2], reverse=True)[:k]:
                 predicted.add((idx, s, e))
         return predicted
 
-    topk_ratio_values       = [round(v * 0.1, 1) for v in range(1, 11)]
+    topk_ratio_values = [round(v * 0.1, 1) for v in range(1, 11)]
     min_mentions_num_values = [1, 2, 3, 4, 5]
     max_mentions_num_values = [10, 15, 20, 25, 30]
 
@@ -867,21 +906,23 @@ def _compute_pruner_wandb_metrics(
 
     out = {
         "pruner/upper_bound_recall": upper_bound,
-        "pruner/target_recall":      target_recall,
-        "pruner/thresh/threshold":   best_threshold,
-        "pruner/thresh/recall":      thresh_m["recall"],
-        "pruner/thresh/precision":   thresh_m["precision"],
-        "pruner/thresh/tn_rate":     thresh_m["tn_rate"],
+        "pruner/target_recall": target_recall,
+        "pruner/thresh/threshold": best_threshold,
+        "pruner/thresh/recall": thresh_m["recall"],
+        "pruner/thresh/precision": thresh_m["precision"],
+        "pruner/thresh/tn_rate": thresh_m["tn_rate"],
     }
     if best_topk:
-        out.update({
-            "pruner/topk/lam":       best_topk["lam"],
-            "pruner/topk/lmin":      best_topk["lmin"],
-            "pruner/topk/lmax":      best_topk["lmax"],
-            "pruner/topk/recall":    best_topk["recall"],
-            "pruner/topk/precision": best_topk["precision"],
-            "pruner/topk/tn_rate":   best_topk["tn_rate"],
-        })
+        out.update(
+            {
+                "pruner/topk/lam": best_topk["lam"],
+                "pruner/topk/lmin": best_topk["lmin"],
+                "pruner/topk/lmax": best_topk["lmax"],
+                "pruner/topk/recall": best_topk["recall"],
+                "pruner/topk/precision": best_topk["precision"],
+                "pruner/topk/tn_rate": best_topk["tn_rate"],
+            }
+        )
     return out
 
 
