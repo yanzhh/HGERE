@@ -1,12 +1,10 @@
 import argparse
 import glob
-import math
 
 # from transformers.modeling_albert import
 import json
 import logging
-from itertools import combinations
-
+import math
 
 # from multiprocessing.sharedctypes import Value
 import os
@@ -15,19 +13,22 @@ import shutil
 import socket
 import timeit
 from collections import defaultdict
+from itertools import combinations
 from pathlib import Path
 
 import torch
-from torch.amp import autocast, GradScaler
+from hgere.models.model_ere import BertForHyperGNN
+from torch.amp import GradScaler, autocast
+from torch.optim import AdamW
+from tqdm import tqdm, trange
 
 # from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 # from torch.utils.data.distributed import DistributedSampler
 # from torch.nn.utils.rnn import pad_sequence
 import wandb
-
-from tqdm import tqdm, trange
-
-from torch.optim import AdamW
+from hgere.data.relation_dataset import RelationDataset
+from hgere.labels import LABELS
+from hgere.utils import get_logger, set_seed
 from transformers import (
     # BertForACEBothOneDropoutSub,
     AlbertConfig,
@@ -37,6 +38,7 @@ from transformers import (
     #   BertForHyperGNNwithUnifyEntity,
     # AlbertForHyperGNN,
     AlbertTokenizer,
+    AutoTokenizer,
     # WEIGHTS_NAME,
     BertConfig,
     # BertForACEBothOneDropoutSubNoNer,
@@ -44,15 +46,10 @@ from transformers import (
     #   BertForAttnHyperGNN,
     # BertForHyperGNN,
     BertTokenizer,
-    AutoTokenizer,
     # RobertaConfig,
     # RobertaTokenizer,
     get_linear_schedule_with_warmup,
 )
-from utils.model_ere import BertForHyperGNN
-from utils.data import RelationDataset
-from utils.misc import get_logger, set_seed
-from utils.labels import LABELS
 
 WEIGHTS_NAME = "pytorch_model.bin"
 TRAIN_KEYS = [
@@ -95,8 +92,11 @@ def train(model, train_dataset, eval_dataset, args, logger):
         #ner_prediction_dir_name = Path(args.ner_prediction_dir).name
         #output_dir_name = Path(args.output_dir).name
         #tb_writer = SummaryWriter(
+        # ner_prediction_dir_name = Path(args.ner_prediction_dir).name
+        # output_dir_name = Path(args.output_dir).name
+        # tb_writer = SummaryWriter(
         #    f"logs/{ner_prediction_dir_name}_re_logs/{output_dir_name}"
-        #)
+        # )
 
     train_dataloader = train_dataset.loader
 
@@ -176,6 +176,7 @@ def train(model, train_dataset, eval_dataset, args, logger):
     scaler = GradScaler(device=args.device_name, enabled=args.fp16)
 
     import warnings
+
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", "Detected call of `lr_scheduler.step\\(\\)`")
         scheduler = get_linear_schedule_with_warmup(
@@ -267,13 +268,19 @@ def train(model, train_dataset, eval_dataset, args, logger):
             # Compute loss weighting alpha (RE share): static or dynamic sigmoid schedule
             if args.train_time_loss_weighting:
                 t = global_step / max(t_total, 1)
-                alpha = 1.0 / (1.0 + math.exp(
-                    -args.train_time_loss_steepness * (t - args.train_time_loss_turn)
-                ))
+                alpha = 1.0 / (
+                    1.0
+                    + math.exp(
+                        -args.train_time_loss_steepness
+                        * (t - args.train_time_loss_turn)
+                    )
+                )
             else:
                 alpha = args.loss_re_weight_alpha
 
-            with autocast(device_type=args.device_name, dtype=torch.float16, enabled=args.fp16):
+            with autocast(
+                device_type=args.device_name, dtype=torch.float16, enabled=args.fp16
+            ):
                 outputs = model(**inputs)
 
                 # model outputs are always tuple in pytorch-transformers (see doc)
@@ -284,12 +291,14 @@ def train(model, train_dataset, eval_dataset, args, logger):
                 loss = alpha * re_loss + (1 - alpha) * ner_loss
 
                 if args.n_gpu > 1:
-                    loss = loss.mean()  # mean() to average on multi-gpu parallel training
+                    loss = (
+                        loss.mean()
+                    )  # mean() to average on multi-gpu parallel training
                 if args.gradient_accumulation_steps > 1:
                     loss = loss / args.gradient_accumulation_steps
                     re_loss = re_loss / args.gradient_accumulation_steps
                     ner_loss = ner_loss / args.gradient_accumulation_steps
-                    
+
                 tr_loss += loss.item()
                 if re_loss > 0:
                     tr_re_loss += re_loss.item()
@@ -301,12 +310,12 @@ def train(model, train_dataset, eval_dataset, args, logger):
 
             scaler.scale(loss).backward()
 
-
             # t3 = timeit.default_timer()
             # logger.info(f"time for loss backward: {t3-t2}s")
 
-
-            if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
+            if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == len(
+                train_dataloader
+            ):
                 if args.max_grad_norm > 0:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(
@@ -319,9 +328,9 @@ def train(model, train_dataset, eval_dataset, args, logger):
                 old_scale = scaler.get_scale()
                 scaler.update()
                 new_scale = scaler.get_scale()
-                if new_scale == old_scale: # == => successfull optimization 
+                if new_scale == old_scale:  # == => successfull optimization
                     scheduler.step()
-                
+
                 optimizer.zero_grad()
                 global_step += 1
 
@@ -353,8 +362,10 @@ def train(model, train_dataset, eval_dataset, args, logger):
                         "train/lr": lr,
                         "train/lr_cls": lr_cls,
                         "train/loss": (tr_loss - logging_loss) / args.logging_steps,
-                        "train/loss/re": (tr_re_loss - logging_re_loss) / args.logging_steps,
-                        "train/loss/ner": (tr_ner_loss - logging_ner_loss) / args.logging_steps,
+                        "train/loss/re": (tr_re_loss - logging_re_loss)
+                        / args.logging_steps,
+                        "train/loss/ner": (tr_ner_loss - logging_ner_loss)
+                        / args.logging_steps,
                         "train/loss_weight/alpha_re": alpha,
                         "train/loss_weight/alpha_ner": 1 - alpha,
                     }
@@ -372,7 +383,7 @@ def train(model, train_dataset, eval_dataset, args, logger):
             # EVALUATE AFTER EACH EPOCH
             # -------------------------
             if args.evaluate_during_training and (
-            (   epoch_num + 1) % args.eval_epochs == 0
+                (epoch_num + 1) % args.eval_epochs == 0
                 or epoch_num + 1 == args.num_train_epochs
             ):  # Only evaluate when single GPU otherwise metrics may not average well
                 results = evaluate(model, eval_dataset, args, logger)
@@ -380,10 +391,9 @@ def train(model, train_dataset, eval_dataset, args, logger):
                 f1_re = results["re_f1"]
                 f1_ner = results["ner_f1"]
                 if log_wandb:
-                    metrics_to_log = {
-                        f"eval/{k}": v for k, v in results.items()}
+                    metrics_to_log = {f"eval/{k}": v for k, v in results.items()}
                     # @TODO Delete if not needed anymore:
-                    metrics_to_log |= { # Old format to keep it the same. for new projects this could be deleted. 
+                    metrics_to_log |= {  # Old format to keep it the same. for new projects this could be deleted.
                         "f1/train/re_strict": f1_re_plus,
                         "f1/train/re": f1_re,
                         "f1/train/ner": f1_ner,
@@ -397,7 +407,15 @@ def train(model, train_dataset, eval_dataset, args, logger):
                     logger.info(f"New Best F1+: {best_f1}")
                     # @TODO: also save optimizer, scheduler, scaler and best_f1
                     #        Then further training from a checkpoint is possible
-                    _save_model(model, optimizer, scheduler, global_step, epoch_num, args, logger)
+                    _save_model(
+                        model,
+                        optimizer,
+                        scheduler,
+                        global_step,
+                        epoch_num,
+                        args,
+                        logger,
+                    )
 
         logger.info(f">>> current global steps: {global_step}")
         logger.info(f">>> lr of epoch {epoch_num}: {scheduler.get_last_lr()[0]:.4e}")
@@ -413,7 +431,7 @@ def train(model, train_dataset, eval_dataset, args, logger):
             break
 
     if args.local_rank in [-1, 0]:
-        #tb_writer.close()
+        # tb_writer.close()
         pass
 
     return global_step, tr_loss / global_step, best_f1, best_result
@@ -433,7 +451,7 @@ def get_gold_ner_with_nolabel(ner_golden_labels):
 
 def load_dataset(split, tokenizer, args, logger):
     """
-        assert split in {"train", "dev", "test"}
+    assert split in {"train", "dev", "test"}
     """
     if split == "train":
         batch_size = args.train_batch_size
@@ -446,7 +464,6 @@ def load_dataset(split, tokenizer, args, logger):
             file_path = Path(args.ner_prediction_dir) / args.test_file
     logger.info(f"{split} file: {file_path}")
     assert os.path.isfile(file_path)
-
 
     label_set = args.label_set
     logger.info(f"    Evaluation using label set: {label_set}.")
@@ -477,7 +494,6 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
     if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
         os.makedirs(eval_output_dir)
 
-
     logger.info(f"***** Running evaluation {prefix} *****")
 
     model.eval()
@@ -488,7 +504,7 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
 
     ner_predictions = {}
     rel_predictions = defaultdict(list)
-    
+
     rel_label_list = list(eval_dataset.label_list)
     n_rel_label = len(rel_label_list)
     sym_labels = list(eval_dataset.sym_labels)
@@ -500,8 +516,8 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
         for batch in tqdm(eval_dataset.loader, desc="Evaluating"):
             sent_indices = batch["indexs"]
             obj_mentions = batch["obj_token_pos"]
-            #subjs = batch["sub"]
-            #print(subjs)
+            # subjs = batch["sub"]
+            # print(subjs)
 
             # rel_labels = batch["rel_labels"]
             # ner_labels = batch["ner_labels"]
@@ -516,52 +532,58 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
 
             outputs = model(**inputs)
 
-            rel_logits = outputs[0] 
-            #print("# bs * n_ent * n_ent * num_rel_labels")
-            #print(rel_logits.shape)
+            rel_logits = outputs[0]
+            # print("# bs * n_ent * n_ent * num_rel_labels")
+            # print(rel_logits.shape)
             ner_logits = outputs[1]
 
-            rel_logits = torch.nn.functional.log_softmax(rel_logits, dim=-1) 
+            rel_logits = torch.nn.functional.log_softmax(rel_logits, dim=-1)
 
-
-
-            #print("rel_logits")
+            # print("rel_logits")
             # 2 * 10 * 10 * 23
             # n_sents, n_ents, n_ents, n_rel_label
-            #print(rel_logits.shape)
-            #print(rel_logits)
+            # print(rel_logits.shape)
+            # print(rel_logits)
             ner_preds = torch.argmax(ner_logits, dim=-1)
 
-            #print("ner")
-            #print(ner_preds_label)
-            #print(sent_indices)
-            #rel_logits = (
+            # print("ner")
+            # print(ner_preds_label)
+            # print(sent_indices)
+            # rel_logits = (
             #    rel_logits.cpu().numpy()
-            #)  # for plmk, n_ent_total * max_n_ent * num_rel_labels
-            #ner_preds = (
+            # )  # for plmk, n_ent_total * max_n_ent * num_rel_labels
+            # ner_preds = (
             #    ner_preds.cpu().numpy()
-            #)  # for plmk, n_ent_total * num_ner_labels
+            # )  # for plmk, n_ent_total * num_ner_labels
             # print(f'indexs:{indexs}')
             # print(f'ner_labels: {ner_labels}')
             # if args.baseline not in {'firstorder', 'mfvi', 'gnn'}:
             #     rel_logits_split = torch.split(rel_logits, ent_numbers)
             #     rel_logits = pad_sequence(rel_logits_split, batch_first=True, padding_value=0)
-           
+
             # NER Label for entities
             for sample_idx, sent_id in enumerate(sent_indices):
                 n_ent = ent_counts[sample_idx]
 
                 sent_id = tuple(sent_id)
                 sample_obj_mentions = obj_mentions[sample_idx]
-                sample_ner_preds = ner_preds[sample_idx][:len(sample_obj_mentions)]
-                sample_ner_logits = ner_logits[sample_idx][:len(sample_obj_mentions)]
-                sample_ner_softmax = torch.nn.functional.softmax(sample_ner_logits, dim=-1)
-                sample_ner_probs = sample_ner_softmax.gather(-1, sample_ner_preds.unsqueeze(-1)).squeeze(-1)
+                sample_ner_preds = ner_preds[sample_idx][: len(sample_obj_mentions)]
+                sample_ner_logits = ner_logits[sample_idx][: len(sample_obj_mentions)]
+                sample_ner_softmax = torch.nn.functional.softmax(
+                    sample_ner_logits, dim=-1
+                )
+                sample_ner_probs = sample_ner_softmax.gather(
+                    -1, sample_ner_preds.unsqueeze(-1)
+                ).squeeze(-1)
                 sample_ner_probs = sample_ner_probs.cpu().numpy()
-                sample_ner_labels = [eval_dataset.ner_label_list[label_idx]
-                       for label_idx in ner_preds[sample_idx]]
+                sample_ner_labels = [
+                    eval_dataset.ner_label_list[label_idx]
+                    for label_idx in ner_preds[sample_idx]
+                ]
                 ner_predictions[sent_id] = {}
-                for ent_span, label, score in zip(sample_obj_mentions, sample_ner_labels, sample_ner_probs):
+                for ent_span, label, score in zip(
+                    sample_obj_mentions, sample_ner_labels, sample_ner_probs
+                ):
                     ent_span = tuple(ent_span)
                     score = float(score)
                     ner_predictions[sent_id][ent_span] = label, score
@@ -589,12 +611,19 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
                     # Calc best score (incl. inverse label)
                     sample_rel_scores = rel_logits[sample_idx, subj_idx, obj_idx]
                     sample_rel_scores_inv = rel_logits[sample_idx, obj_idx, subj_idx]
-                    sample_rel_scores_inv = torch.concat([
-                        sample_rel_scores_inv[:n_syms],
-                        sample_rel_scores_inv[n_rel_label:],
-                        sample_rel_scores_inv[n_syms:n_rel_label]])
-                    sample_rel_scores = torch.add(sample_rel_scores, sample_rel_scores_inv)
-                    sample_rel_probs = torch.nn.functional.softmax(sample_rel_scores, dim=-1)
+                    sample_rel_scores_inv = torch.concat(
+                        [
+                            sample_rel_scores_inv[:n_syms],
+                            sample_rel_scores_inv[n_rel_label:],
+                            sample_rel_scores_inv[n_syms:n_rel_label],
+                        ]
+                    )
+                    sample_rel_scores = torch.add(
+                        sample_rel_scores, sample_rel_scores_inv
+                    )
+                    sample_rel_probs = torch.nn.functional.softmax(
+                        sample_rel_scores, dim=-1
+                    )
                     best_rel_label_idx = torch.argmax(sample_rel_probs)
                     score = sample_rel_probs[best_rel_label_idx].cpu().item()
                     # inverse = False
@@ -607,7 +636,9 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
                     if label != "NIL":
                         subj_label, subj_score = ner_predictions[sent_id][subj_span]
                         obj_label, obj_score = ner_predictions[sent_id][obj_span]
-                        rel_predictions[sent_id].append((subj_span, subj_label, obj_span, obj_label, label, score))
+                        rel_predictions[sent_id].append(
+                            (subj_span, subj_label, obj_span, obj_label, label, score)
+                        )
 
     # ---------------------------------------------------
     # decode
@@ -615,7 +646,6 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
     gold_rels = set(eval_dataset.golden_labels)
     gold_rels_with_ner = set(eval_dataset.golden_labels_with_ner)
     gold_ners = eval_dataset.ner_golden_labels
-
 
     tot_recall = eval_dataset.tot_recall
     n_pred_ner = 0
@@ -629,7 +659,6 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
     tot_predicted_relations_proba = {}
     tot_predicted_ners_proba = {}
 
-    
     for sent_id, sent_ents_pred in ner_predictions.items():
         sent_relations = rel_predictions[sent_id]
         # sort by prob
@@ -645,8 +674,8 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
         for subj_span, subj_label, obj_span, obj_label, label, score in sent_relations:
             sent_relation_keys.add((sent_id, subj_span, obj_span, label))
             sent_relation_keys_with_ner.add(
-                    (sent_id, subj_span + (subj_label,),
-                     obj_span + (obj_label,), label))
+                (sent_id, subj_span + (subj_label,), obj_span + (obj_label,), label)
+            )
             output_pred_rels.append(subj_span + obj_span + (label,))
             output_pred_rels_proba.append(subj_span + obj_span + (label, score))
         for ent_span, (label, score) in sent_ents_pred.items():
@@ -660,7 +689,6 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
         sent_tp_rel_with_ner = sent_relation_keys_with_ner & gold_rels_with_ner
         sent_tp_ner = sent_ent_keys & gold_ners
 
-
         n_pred_rel += len(sent_relation_keys)
         n_tp_rel += len(sent_tp_rel)
         n_tp_rel_with_ner += len(sent_tp_rel_with_ner)
@@ -668,10 +696,10 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
         n_pred_ner += len(sent_ent_keys)
         n_tp_ner += len(sent_tp_ner)
 
-        #pdb.set_trace()        
+        # pdb.set_trace()
         # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
         # TODO add tot_predicted by doc_id and sent_nr to save
-        #@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
         tot_predicted_relations[sent_id] = output_pred_rels
         tot_predicted_relations_proba[sent_id] = output_pred_rels_proba
         tot_predicted_ners[sent_id] = output_pred_ner
@@ -685,17 +713,17 @@ def evaluate(model, eval_dataset, args, logger, prefix="", persist_predictions=F
     )
 
     ner_p = n_tp_ner / n_pred_ner if n_pred_ner > 0 else 0
-    ner_r = n_tp_ner / len(gold_ners) if gold_ners else 0.
+    ner_r = n_tp_ner / len(gold_ners) if gold_ners else 0.0
     ner_f1 = 2 * (ner_p * ner_r) / (ner_p + ner_r) if n_tp_ner > 0 else 0.0
 
     p = n_tp_rel / n_pred_rel if n_pred_rel > 0 else 0
-    r = n_tp_rel / tot_recall if tot_recall > 0. else 0.
+    r = n_tp_rel / tot_recall if tot_recall > 0.0 else 0.0
     f1 = 2 * (p * r) / (p + r) if n_tp_rel > 0 else 0.0
 
     # assert(tot_recall==len(golden_labels))
 
     p_with_ner = n_tp_rel_with_ner / n_pred_rel if n_pred_rel > 0 else 0
-    r_with_ner = n_tp_rel_with_ner / tot_recall if tot_recall else 0.
+    r_with_ner = n_tp_rel_with_ner / tot_recall if tot_recall else 0.0
     # assert(tot_recall==len(golden_labels_with_ner))
     f1_with_ner = (
         2 * (p_with_ner * r_with_ner) / (p_with_ner + r_with_ner)
@@ -772,11 +800,11 @@ def main():
         help="Whether to log the training in wandb",
     )
     parser.add_argument(
-            "--label_set",
-            type=str,
-            default=None,
-            help="label set to use (e.g., gsap)",
-            )
+        "--label_set",
+        type=str,
+        default=None,
+        help="label set to use (e.g., gsap)",
+    )
     parser.add_argument(
         "--loss_re_weight_alpha",
         type=float,
@@ -880,13 +908,23 @@ def main():
         "--do_train", action="store_true", help="Whether to run training."
     )
     parser.add_argument(
-        "--eval_train", action="store_true", help="Whether to run eval on the train set and save the predictions."
+        "--eval_train",
+        action="store_true",
+        help="Whether to run eval on the train set and save the predictions.",
     )
     parser.add_argument(
-        "--eval_dev", action="store_true", help="Whether to run eval on the dev set and save the predictions."
+        "--eval_dev",
+        action="store_true",
+        help="Whether to run eval on the dev set and save the predictions.",
     )
-    parser.add_argument("--eval_test", action="store_true", help="want to test and save the predictions.")
-    parser.add_argument("--preload_dataset", action="store_true", help="preload dataset")
+    parser.add_argument(
+        "--eval_test",
+        action="store_true",
+        help="want to test and save the predictions.",
+    )
+    parser.add_argument(
+        "--preload_dataset", action="store_true", help="preload dataset"
+    )
 
     parser.add_argument(
         "--evaluate_during_training",
@@ -1192,9 +1230,11 @@ def main():
         )
     elif not args.do_train:
         exp_path = args.output_dir
-        assert os.path.exists(exp_path) # no training, output_dir need to exist with a model
+        assert os.path.exists(
+            exp_path
+        )  # no training, output_dir need to exist with a model
         logger = get_logger(args, exp_path, args.eval_test)
-        
+
     else:
         # if args.do_train and args.local_rank in [-1, 0]:
         exp_path = create_exp_dir(
@@ -1228,7 +1268,9 @@ def main():
 
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
-        device_name = "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
+        device_name = (
+            "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
+        )
         device = torch.device(device_name)
         args.n_gpu = torch.cuda.device_count()
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
@@ -1256,7 +1298,7 @@ def main():
     set_seed(args)
     label_set = args.label_set
     logger.info(f"    Evaluation using label set: {label_set}.")
-    assert label_set in LABELS # Please add your labels in utils/labals.py
+    assert label_set in LABELS  # Please add your labels in utils/labals.py
     labels = LABELS[label_set]
     args.num_ner_labels = labels.num_ner_labels
     args.num_rel_labels = labels.num_rel_labels(args.no_sym)
@@ -1330,7 +1372,8 @@ def main():
     args.global_step = global_step
 
     config = config_class.from_pretrained(
-        args.config_name if args.config_name else args.model_path, num_labels=args.num_rel_labels
+        args.config_name if args.config_name else args.model_path,
+        num_labels=args.num_rel_labels,
     )
     tokenizer = tokenizer_class.from_pretrained(
         args.model_name_or_path, do_lower_case=args.do_lower_case
@@ -1340,8 +1383,8 @@ def main():
     config.alpha = args.alpha
     config.num_ner_labels = args.num_ner_labels
 
-    #print(config)
-    #raise Exception()
+    # print(config)
+    # raise Exception()
     _transformers_logger = logging.getLogger("transformers.modeling_utils")
     _prev_level = _transformers_logger.level
     _transformers_logger.setLevel(logging.ERROR)
@@ -1355,13 +1398,12 @@ def main():
 
     adjust_tokenizer(tokenizer, model, args.num_ner_labels, args, logger)
 
-
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
     model.to(args.device)
 
-    #logger.info(f"Training/evaluation parameters {args}")
+    # logger.info(f"Training/evaluation parameters {args}")
     best_f1 = 0
     best_result = {}
     # Training
@@ -1371,7 +1413,9 @@ def main():
         # train_dataset = load_and_cache_examples(args,  tokenizer, evaluate=False)
         train_dataset = load_dataset("train", tokenizer, args, logger)
         dev_dataset = load_dataset("dev", tokenizer, args, logger)
-        global_step, tr_loss, best_f1, best_result = train(model, train_dataset, dev_dataset, args, logger)
+        global_step, tr_loss, best_f1, best_result = train(
+            model, train_dataset, dev_dataset, args, logger
+        )
         logger.info(f" global_step = {global_step}, average loss = {tr_loss}")
     else:
         logger.info("No Training")
@@ -1397,22 +1441,49 @@ def main():
         for checkpoint in checkpoints:
             report = {}
             if best_result:
-                report["best_dev_perfomance"] = dict(fn_dev=args.dev_file, result=best_result)
+                report["best_dev_perfomance"] = dict(
+                    fn_dev=args.dev_file, result=best_result
+                )
             global_step = checkpoint.split("-")[-1]
             if args.eval_test or args.eval_dev or args.eval_train:
-                model = model_class.from_pretrained(checkpoint, config=config, args=args)
+                model = model_class.from_pretrained(
+                    checkpoint, config=config, args=args
+                )
                 model.to(args.device)
             # eval train
             if args.eval_train:
-                report[args.dev_file] = evaluate(model, train_dataset, args, logger, prefix=global_step, persist_predictions=True)
+                report[args.dev_file] = evaluate(
+                    model,
+                    train_dataset,
+                    args,
+                    logger,
+                    prefix=global_step,
+                    persist_predictions=True,
+                )
             # eval dev
             if args.eval_dev:
-                report[args.dev_file] = evaluate(model, dev_dataset, args, logger, prefix=global_step, persist_predictions=True)
+                report[args.dev_file] = evaluate(
+                    model,
+                    dev_dataset,
+                    args,
+                    logger,
+                    prefix=global_step,
+                    persist_predictions=True,
+                )
             # eval train
             if args.eval_test:
-                report[args.test_file] = evaluate(model, test_dataset, args, logger, prefix=global_step, persist_predictions=True)
+                report[args.test_file] = evaluate(
+                    model,
+                    test_dataset,
+                    args,
+                    logger,
+                    prefix=global_step,
+                    persist_predictions=True,
+                )
 
-            output_test_file = os.path.join(args.output_dir, f"results_{global_step}.json")
+            output_test_file = os.path.join(
+                args.output_dir, f"results_{global_step}.json"
+            )
             with open(output_test_file, "w") as f:
                 json.dump(report, f, indent=4)
 
@@ -1493,6 +1564,7 @@ def get_scheme_depricated(path):
         raise Exception("Dataset unknown. Can't find labels.")
     return dataset_name
 
+
 def adjust_tokenizer(tokenizer, model, num_ner_labels, args, logger):
     if args.model_type.startswith("albert"):
         if args.use_typemarker:
@@ -1524,7 +1596,9 @@ def adjust_tokenizer(tokenizer, model, num_ner_labels, args, logger):
         assert len(mask_id) == 1
         mask_id = mask_id[0]
 
-        logger.info(f" subject_id = {subject_id}, object_id = {object_id}, mask_id = {mask_id}")
+        logger.info(
+            f" subject_id = {subject_id}, object_id = {object_id}, mask_id = {mask_id}"
+        )
 
         if args.lminit:
             if args.model_type.startswith("albert"):
@@ -1546,6 +1620,7 @@ def adjust_tokenizer(tokenizer, model, num_ner_labels, args, logger):
             word_embeddings[objs].copy_(word_embeddings[mask_id])
             word_embeddings[obje].copy_(word_embeddings[object_id])
 
+
 def get_checkpoints(args):
     checkpoints = [args.output_dir]
 
@@ -1558,8 +1633,6 @@ def get_checkpoints(args):
         )
     return checkpoints
 
-def _save_model(model, optimizer, scheduler, global_step, current_epoch, args, logger):
-    checkpoint_prefix = "checkpoint"
     output_dir = Path(args.output_dir) / f"{checkpoint_prefix}-{global_step}"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
