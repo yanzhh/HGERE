@@ -1621,18 +1621,16 @@ def adjust_tokenizer(tokenizer, model, num_ner_labels, args, logger):
             word_embeddings[obje].copy_(word_embeddings[object_id])
 
 
-def get_checkpoints(args):
-    checkpoints = [args.output_dir]
-
-    if args.eval_all_checkpoints:
-        checkpoints = list(
-            os.path.dirname(c)
-            for c in sorted(
-                glob.glob(args.output_dir + "/**/" + WEIGHTS_NAME, recursive=True)
-            )
-        )
-    return checkpoints
-
+def _save_model(
+    model,
+    optimizer,
+    scheduler,
+    global_step,
+    current_epoch,
+    args,
+    logger,
+    checkpoint_prefix="checkpoint",
+):
     output_dir = Path(args.output_dir) / f"{checkpoint_prefix}-{global_step}"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -1657,6 +1655,19 @@ def get_checkpoints(args):
     with open(args_file, "w") as f:
         f.write(str(vars(args)))
     _rotate_checkpoints(logger, args, checkpoint_prefix)
+
+
+def get_checkpoints(args):
+    checkpoints = [args.output_dir]
+
+    if args.eval_all_checkpoints:
+        checkpoints = list(
+            os.path.dirname(c)
+            for c in sorted(
+                glob.glob(args.output_dir + "/**/" + WEIGHTS_NAME, recursive=True)
+            )
+        )
+    return checkpoints
 
 
 if __name__ == "__main__":
