@@ -475,6 +475,11 @@ def run_train_span_classifier(args=None):
     )
     _transformers_logger.setLevel(_prev_level)
 
+    # from_pretrained zeros nn.Parameter objects not in the BERT checkpoint.
+    # Re-initialize BiSpanRepr's biaffine weight and bias after loading.
+    if hasattr(model, "span_encoder"):
+        model.span_encoder.reset_parameters()
+
     add_special_tokens(model, args, tokenizer, logger)
 
     if args.local_rank == 0:
@@ -482,6 +487,12 @@ def run_train_span_classifier(args=None):
         torch.distributed.barrier()
 
     model.to(args.device)
+
+    if getattr(args, "debug_overflow", False):
+        from transformers.debug_utils import DebugUnderflowOverflow
+        DebugUnderflowOverflow(model)
+        logger.info("DebugUnderflowOverflow enabled — will print first NaN/Inf location")
+
     best_result = 0
     # Training
     if args.do_train:
@@ -534,13 +545,14 @@ def run_train_span_classifier(args=None):
     # -------------------------------------------------------------
     # test all files
     if args.do_test and args.local_rank in [-1, 0]:
-        WEIGHTS_NAME = "pytorch_model.bin"
         checkpoints = list(
-            os.path.dirname(c)
-            for c in sorted(
-                glob.glob(f"{args.model_dir}/**/{WEIGHTS_NAME}", recursive=True)
-            )
+            {
+                os.path.dirname(c)
+                for pattern in ("pytorch_model.bin", "model.safetensors")
+                for c in glob.glob(f"{args.model_dir}/**/{pattern}", recursive=True)
+            }
         )
+        checkpoints = sorted(checkpoints)
         if not args.eval_all_checkpoints:
             print(checkpoints)
             checkpoints = checkpoints[-1:]

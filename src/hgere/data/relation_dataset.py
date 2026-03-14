@@ -807,7 +807,7 @@ class RelationDataset(Dataset):
 
 
     def build(
-        self, batch_size, shuffle=False, n_workers=0, pin_memory=True):
+        self, batch_size, shuffle=False, batch_by_size=False, n_workers=0, pin_memory=True):
         """
         @idea: make batches as big as possible
          * currently if one batch is of size 1, the next one is bigger than batch_size:
@@ -815,7 +815,9 @@ class RelationDataset(Dataset):
         sort: Bool Sort by number of items (Object candidates?)
         """
 
-        if shuffle:
+        if batch_by_size:
+            self.buckets = _create_size_sorted_batches(self.sizes, batch_size)
+        elif shuffle:
             self.buckets = _create_shuffled_batches(self.sizes, batch_size)
         else:
             self.buckets = _create_batches(self.sizes, batch_size)
@@ -1004,9 +1006,33 @@ def _create_batches(n_ents_by_sent, batch_size):
     return batches
 
 
+def _create_size_sorted_batches(n_ents_by_sent, batch_size):
+    """Sort sentences by entity count, pack consecutive (similar-size) sentences into
+    batches, then shuffle batch order.  Within each batch all sentences have similar
+    entity counts, minimising max_ent_num padding and making hypergraph iteration
+    uniform across the batch."""
+    ordered = sorted(enumerate(n_ents_by_sent), key=lambda x: x[1])
+    batches = []
+    current_batch = []
+    current_total = 0
+    for idx, size in ordered:
+        size = max(size, 1)
+        if current_total + size > batch_size and current_batch:
+            batches.append(current_batch)
+            current_batch = [idx]
+            current_total = size
+        else:
+            current_batch.append(idx)
+            current_total += size
+    if current_batch:
+        batches.append(current_batch)
+    random.shuffle(batches)
+    return batches
+
+
 def _create_shuffled_batches(n_ents_by_sent, batch_size):
-    random.shuffle(n_ents_by_sent)
     ordered = [(idx, max(size, 1)) for idx, size in enumerate(n_ents_by_sent)]
+    random.shuffle(ordered)
     ordered.sort(key=lambda x: x[1])
     batches = []
     sizes = []

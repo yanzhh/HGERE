@@ -76,6 +76,16 @@ class BertForSpanMarkerNerPruner(BertPreTrainedModel):
 
         self.init_weights()
 
+        # init_weights() does not handle raw nn.Parameter objects inside custom
+        # modules like BiSpanRepr (only nn.Linear / Embedding / LayerNorm).
+        # Re-run reset_parameters() to ensure weight and bias are properly set.
+        if self.biaf_span:
+            self.span_encoder.reset_parameters()
+
+    def get_extended_attention_mask(self, attention_mask, input_shape, device=None, dtype=None):
+        extended = super().get_extended_attention_mask(attention_mask, input_shape, device, dtype)
+        return extended.clamp(min=-1e4)
+
     def forward(
         self,
         input_ids=None,
@@ -156,7 +166,7 @@ class BertForSpanMarkerNerPruner(BertPreTrainedModel):
             ner_mask = labels > -1
             gold_entities = (labels > 0).float()
             masked_scores = (
-                ner_prediction_scores.squeeze(-1).masked_select(ner_mask).to(float)
+                ner_prediction_scores.squeeze(-1).masked_select(ner_mask).float()
             )
             masked_gold_entities = gold_entities.masked_select(ner_mask)
 

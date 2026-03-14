@@ -225,6 +225,7 @@ def parse_arguments():
         default=None,
         help="Limit number of documents loaded (useful for quick testing).",
     )
+    parser.add_argument("--debug_overflow", action="store_true", help="Enable DebugUnderflowOverflow to locate first NaN/Inf.")
     parser.add_argument("--train_file", default="train.json", type=str)
     parser.add_argument("--dev_file", default="dev.json", type=str)
     parser.add_argument("--test_file", default="test.json", type=str)
@@ -304,6 +305,16 @@ def parse_arguments():
     )
     parser.add_argument(
         "--extra_repr", type=str, default=None, help="use extra span repr"
+    )
+    parser.add_argument(
+        "--rulebased-pruner-file",
+        dest="rulebased_pruner_file",
+        default=None,
+        type=str,
+        help=(
+            "Path to a trained rule-based pruner JSON file. When set, spans matching "
+            "its patterns are filtered out before the neural pruner sees them."
+        ),
     )
 
     # for biaf span repr
