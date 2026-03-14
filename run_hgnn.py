@@ -1275,14 +1275,7 @@ def main():
             args.output_dir,
             scripts_to_save=[
                 os.path.basename(__file__),
-<<<<<<< HEAD
-               # "utils/data.py",
-               # "transformers/src/transformers/modules.py",
-               # "transformers/src/transformers/modeling_bert.py",
-               # "transformers/src/transformers/modeling_albert.py",
-=======
                 "src/hgere/data/relation_dataset.py",
->>>>>>> refs/remotes/origin/standard-transformer
             ],
         )
 
