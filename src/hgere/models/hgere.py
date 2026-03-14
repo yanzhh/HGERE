@@ -268,19 +268,31 @@ class BertForHyperGNN(BertPreTrainedModel):
         re_prediction_scores = re_prediction_scores.float()
 
         if rel_labels is not None:
-            loss_fct_re = CrossEntropyLoss(ignore_index=-1)
-            loss_fct_ner = CrossEntropyLoss(ignore_index=-1)
+            re_logits = re_prediction_scores.reshape(-1, self.num_labels)
+            re_targets = rel_labels.reshape(-1)
+            if getattr(self.args, "re_focal_loss", False):
+                gamma = getattr(self.args, "re_focal_gamma", 2.0)
+                mask = re_targets != -1
+                logits_m = re_logits[mask]
+                targets_m = re_targets[mask]
+                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
+                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
+                re_loss = (-(1 - p_t) ** gamma * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)).mean()
+            else:
+                re_loss = CrossEntropyLoss(ignore_index=-1)(re_logits, re_targets)
 
-            re_loss = loss_fct_re(
-                re_prediction_scores.reshape(-1, self.num_labels),
-                rel_labels.reshape(-1),
-            )
-
-            # if self.args.hgnn in {'firstorder', 'mfvi','htnn'}:
-            ner_loss = loss_fct_ner(
-                ner_prediction_scores.reshape(-1, self.num_ner_labels),
-                ner_labels.reshape(-1),
-            )
+            ner_logits = ner_prediction_scores.reshape(-1, self.num_ner_labels)
+            ner_targets = ner_labels.reshape(-1)
+            if getattr(self.args, "ner_focal_loss", False):
+                gamma = getattr(self.args, "ner_focal_gamma", 2.0)
+                mask = ner_targets != -1
+                logits_m = ner_logits[mask]
+                targets_m = ner_targets[mask]
+                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
+                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
+                ner_loss = (-(1 - p_t) ** gamma * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)).mean()
+            else:
+                ner_loss = CrossEntropyLoss(ignore_index=-1)(ner_logits, ner_targets)
             # else:
             #     ner_labels_exp = ner_labels.unsqueeze(0).repeat(bsz,1)
             #     ner_loss = loss_fct_ner(ner_prediction_scores.view(-1, self.num_ner_labels), ner_labels_exp.view(-1))

@@ -1,7 +1,7 @@
 GPU_ID=1
 
 
-for seed in 43; do 
+for seed in 43; do
 for epoch in 30; do
 for bs in 18; do
 #for bs in 18; do
@@ -9,7 +9,7 @@ for lr in 2e-5; do
 for lr1 in 1e-4; do
 for seq in 512; do
 for entdim in 400; do
-for reldim in 400; do 
+for reldim in 400; do
 for memdim in 400; do
 for facenc in biaf; do
 for factor in tersibcop; do
@@ -23,7 +23,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID  python  run_hgnn.py \
     --model_name_or_path  pretrained_models/scibert_scivocab_uncased   --do_lower_case  \
     --learning_rate $lr   --learning_rate_cls $lr1 \
     --num_train_epochs $epoch \
-    --eval_epochs 3 \
+    --eval_epochs 1 \
     --per_gpu_train_batch_size  $bs \
     --per_gpu_eval_batch_size 32 \
     --gradient_accumulation_steps 1  \

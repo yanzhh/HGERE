@@ -33,15 +33,9 @@ class RuleBasedPruner:
 
     def __init__(self, prune_patterns: Set[Tuple[str, ...]]):
         self.prune_patterns: FrozenSet[Tuple[str, ...]] = frozenset(prune_patterns)
-        # Determine max context lengths needed to avoid iterating more than necessary
-        self._max_before = max(
-            (sum(1 for t in p if t != BEFORE) for p in prune_patterns if p[-1] == BEFORE),
-            default=0,
-        )
-        self._max_after = max(
-            (sum(1 for t in p if t != AFTER) for p in prune_patterns if p[0] == AFTER),
-            default=0,
-        )
+        # Computed lazily on first call to should_prune (skipped during sweep)
+        self._max_before: int = None
+        self._max_after: int = None
 
     def should_prune(
         self,
@@ -61,14 +55,26 @@ class RuleBasedPruner:
         for ngram in _iter_ngrams(marked, len(marked)):
             if ngram in self.prune_patterns:
                 return True
-        if self._max_before and context_before:
-            for ngram in _iter_before_ngrams(context_before, self._max_before):
-                if ngram in self.prune_patterns:
-                    return True
-        if self._max_after and context_after:
-            for ngram in _iter_after_ngrams(context_after, self._max_after):
-                if ngram in self.prune_patterns:
-                    return True
+        if context_before:
+            if self._max_before is None:
+                self._max_before = max(
+                    (sum(1 for t in p if t != BEFORE) for p in self.prune_patterns if p[-1] == BEFORE),
+                    default=0,
+                )
+            if self._max_before:
+                for ngram in _iter_before_ngrams(context_before, self._max_before):
+                    if ngram in self.prune_patterns:
+                        return True
+        if context_after:
+            if self._max_after is None:
+                self._max_after = max(
+                    (sum(1 for t in p if t != AFTER) for p in self.prune_patterns if p[0] == AFTER),
+                    default=0,
+                )
+            if self._max_after:
+                for ngram in _iter_after_ngrams(context_after, self._max_after):
+                    if ngram in self.prune_patterns:
+                        return True
         return False
 
     def save(self, path: str) -> None:

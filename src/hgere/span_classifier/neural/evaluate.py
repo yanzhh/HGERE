@@ -174,16 +174,21 @@ def evaluate(
     results.update(pruner_metrics)
     logger.info(
         f"  Pruner pool: upper_bound_recall={pruner_metrics['pruner/upper_bound_recall']:.4f}  "
+        f"rulebased/upper_bound_recall={pruner_metrics['pruner/rulebased/upper_bound_recall']:.4f}  "
         f"target_recall={pruner_metrics['pruner/target_recall']:.4f}\n"
         f"  Threshold method @target: threshold={pruner_metrics['pruner/thresh/threshold']:.6f}  "
         f"recall={pruner_metrics['pruner/thresh/recall']:.4f}  "
         f"precision={pruner_metrics['pruner/thresh/precision']:.4f}  "
+        f"FP={pruner_metrics['pruner/thresh/fp']}  "
+        f"FN={pruner_metrics['pruner/thresh/fn']}  "
         f"TN/(FP+TN)={pruner_metrics['pruner/thresh/tn_rate']:.4f}\n"
         f"  Top-K method @target:     lam={pruner_metrics.get('pruner/topk/lam')}  "
         f"lmin={pruner_metrics.get('pruner/topk/lmin')}  "
         f"lmax={pruner_metrics.get('pruner/topk/lmax')}  "
         f"recall={pruner_metrics.get('pruner/topk/recall', 0):.4f}  "
         f"precision={pruner_metrics.get('pruner/topk/precision', 0):.4f}  "
+        f"FP={pruner_metrics.get('pruner/topk/fp', 'n/a')}  "
+        f"FN={pruner_metrics.get('pruner/topk/fn', 'n/a')}  "
         f"TN/(FP+TN)={pruner_metrics.get('pruner/topk/tn_rate', 0):.4f}"
     )
 
@@ -240,8 +245,6 @@ def postprocess_predictions(
 
     tp = 0
     fp = 0
-    tp_05 = 0
-    fp_05 = 0
     tp_overlap = 0
     fp_overlap = 0
     for sentence_id, sentence_spans in sentences_predictions.items():
@@ -267,19 +270,14 @@ def postprocess_predictions(
                 tp_overlap += 1
                 if not is_overlap:
                     tp += 1
-                    if prob >= 0.5:
-                        tp_05 += 1
             else:
                 # False Positive
                 fp_overlap += 1
                 if not is_overlap:
                     fp += 1
-                    if prob >= 0.5:
-                        fp_05 += 1
 
     metrics = {}
     metrics |= _get_metrics(tp, fp, support, "")
-    metrics |= _get_metrics(tp_05, fp_05, support, "_05")
     metrics |= _get_metrics(tp_overlap, fp_overlap, support, "_overlap")
 
     return predict_ners, predict_ners_overlap, metrics
@@ -904,15 +902,20 @@ def _compute_pruner_wandb_metrics(
     infeasible.sort(key=lambda x: -x["recall"])
     best_topk = (feasible or infeasible or [None])[0]
 
+    thresh_fn = n_gold - thresh_m["tp"]
     out = {
         "pruner/upper_bound_recall": upper_bound,
+        "pruner/rulebased/upper_bound_recall": upper_bound,
         "pruner/target_recall": target_recall,
         "pruner/thresh/threshold": best_threshold,
         "pruner/thresh/recall": thresh_m["recall"],
         "pruner/thresh/precision": thresh_m["precision"],
         "pruner/thresh/tn_rate": thresh_m["tn_rate"],
+        "pruner/thresh/fp": thresh_m["fp"],
+        "pruner/thresh/fn": thresh_fn,
     }
     if best_topk:
+        topk_fn = n_gold - best_topk["tp"]
         out.update(
             {
                 "pruner/topk/lam": best_topk["lam"],
@@ -921,6 +924,8 @@ def _compute_pruner_wandb_metrics(
                 "pruner/topk/recall": best_topk["recall"],
                 "pruner/topk/precision": best_topk["precision"],
                 "pruner/topk/tn_rate": best_topk["tn_rate"],
+                "pruner/topk/fp": best_topk["fp"],
+                "pruner/topk/fn": topk_fn,
             }
         )
     return out

@@ -26,20 +26,26 @@ from .statistics import AFTER, BEFORE, END, START
 VALID_PATTERN_TYPES = {"prefix", "suffix", "full", "infix", "before", "after"}
 
 
-def _pattern_type(ngram: tuple) -> str:
-    if ngram[-1] == BEFORE:
-        return "before"
-    if ngram[0] == AFTER:
-        return "after"
-    has_start = ngram[0] == START
-    has_end = ngram[-1] == END
-    if has_start and has_end:
-        return "full"
-    if has_start:
-        return "prefix"
-    if has_end:
-        return "suffix"
-    return "infix"
+def _build_type_mask(stats: pd.DataFrame, pattern_types: Set[str]) -> pd.Series:
+    """Vectorized type mask using has_start/has_end/has_before/has_after columns."""
+    hs = stats["has_start"]
+    he = stats["has_end"]
+    hb = stats["has_before"]
+    ha = stats["has_after"]
+    mask = hs & False  # all-False series aligned to stats index
+    if "full" in pattern_types:
+        mask |= hs & he
+    if "prefix" in pattern_types:
+        mask |= hs & ~he
+    if "suffix" in pattern_types:
+        mask |= ~hs & he
+    if "infix" in pattern_types:
+        mask |= ~hs & ~he & ~hb & ~ha
+    if "before" in pattern_types:
+        mask |= hb
+    if "after" in pattern_types:
+        mask |= ha
+    return mask
 
 
 def fit(
@@ -73,13 +79,14 @@ def fit(
     if unknown:
         raise ValueError(f"Unknown pattern types: {unknown}. Choose from {VALID_PATTERN_TYPES}")
 
+    type_mask = _build_type_mask(stats, pattern_types)
     mask = (
         (stats["purity"] >= purity_threshold)
         & (stats["frequency"] >= min_count)
         & (stats["n_tokens"] <= max_ngram_tokens)
+        & type_mask
     )
-    candidates = stats.loc[mask, "ngram"]
-    patterns = {ng for ng in candidates if _pattern_type(ng) in pattern_types}
+    patterns = set(stats.loc[mask, "ngram"])
     return RuleBasedPruner(patterns)
 
 

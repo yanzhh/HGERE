@@ -10,6 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
+from hgere.span_classifier.rulebased import RuleBasedPruner
+
 NER_LABEL_LISTS = dict(
     ace=[
         "NIL",
@@ -133,6 +135,18 @@ class ACEDatasetNER(Dataset):
         self.max_pair_length = args.max_pair_length
 
         self.max_entity_length = args.max_pair_length * 2
+
+        rulebased_pruner_file = getattr(args, "rulebased_pruner_file", None)
+        if rulebased_pruner_file:
+            self.rulebased_pruner = RuleBasedPruner.load(rulebased_pruner_file)
+            self.logger.info(
+                "Loaded rule-based pruner from %s (%d patterns)",
+                rulebased_pruner_file,
+                len(self.rulebased_pruner),
+            )
+        else:
+            self.rulebased_pruner = None
+
         self.initialize()
 
     def initialize(self):
@@ -386,16 +400,28 @@ class ACEDatasetNER(Dataset):
                         label = entity_labels.get((doc_entity_start, doc_entity_end), 0)
                         # every entity only onces
                         entity_labels.pop((doc_entity_start, doc_entity_end), None)
+
+                        token_start = subword2token[doc_entity_start]
+                        token_end = subword2token[doc_entity_end - 1]
+
+                        if self.rulebased_pruner is not None:
+                            sent_token_start = sentence_boundaries[sentence_idx]
+                            sent_token_end = sentence_boundaries[sentence_idx + 1]
+                            span_words = tokens[token_start : token_end + 1]
+                            context_before = tokens[sent_token_start : token_start]
+                            context_after = tokens[token_end + 1 : sent_token_end]
+                            if self.rulebased_pruner.should_prune(
+                                span_words, context_before, context_after
+                            ):
+                                continue
+
                         # entity_start+1: target_tokens[0] is [CLS], entity_start should be right shifted by 1.
-                        # entity_info: ( (start_in_context, end_in_context), label_id, (span_begin, span_end)) 
+                        # entity_info: ( (start_in_context, end_in_context), label_id, (span_begin, span_end))
                         entity_infos.append(
                             (
                                 (context_entity_start + 1, context_entity_end),
                                 label,
-                                (
-                                    subword2token[doc_entity_start],
-                                    subword2token[doc_entity_end - 1],
-                                ),
+                                (token_start, token_end),
                             )
                         )
                         # for x in entity_infos, x[0]:(start subtoken, end subtoken) x[2]: (start token, end token)
@@ -548,6 +574,14 @@ class ACEDatasetNER(Dataset):
             )
             # max_entity_length = max_pair_length * 2
             attention_mask[:L, :L] = 1
+            # Ensure no all-zero rows: padded span marker positions must self-attend.
+            # In transformers 4.x the masked value is torch.finfo.min (~-3.4e38), which
+            # overflows to -inf in fp16.  Numerically stable softmax then computes
+            # max(-inf) - (-inf) = NaN, which propagates through subsequent layers.
+            # Setting the diagonal to 1 prevents all-zero rows; sentence tokens and
+            # active entity markers already have self-attention set, so only padded
+            # markers are affected (they are excluded from the loss via label == -1).
+            attention_mask.fill_diagonal_(1)
             position_ids = (
                 list(range(position_plus_pad, position_plus_pad + self.max_seq_length))
                 + [0] * self.max_entity_length

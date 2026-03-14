@@ -202,33 +202,27 @@ def collect_stats(
                         ngrams += list(_iter_after_ngrams(ctx_after, max_after_tokens))
 
                     if is_entity:
-                        for ng in ngrams:
-                            count_entity[ng] += 1
+                        count_entity.update(ngrams)
                     else:
-                        for ng in ngrams:
-                            count_nil[ng] += 1
+                        count_nil.update(ngrams)
 
-    all_ngrams = set(count_entity.keys()) | set(count_nil.keys())
-    rows = []
-    for ngram in all_ngrams:
-        c_ent = count_entity[ngram]
-        c_nil = count_nil[ngram]
-        freq = c_ent + c_nil
-        rows.append(
-            {
-                "ngram": ngram,
-                "count_entity": c_ent,
-                "count_nil": c_nil,
-                "frequency": freq,
-                "purity": c_nil / freq,
-                "n_tokens": sum(1 for t in ngram if t not in _MARKERS),
-                "has_start": ngram[0] == START,
-                "has_end": ngram[-1] == END,
-            }
-        )
-
+    all_ngrams = list(set(count_entity.keys()) | set(count_nil.keys()))
+    c_ent_list = [count_entity[ng] for ng in all_ngrams]
+    c_nil_list = [count_nil[ng] for ng in all_ngrams]
+    freq_list = [e + n for e, n in zip(c_ent_list, c_nil_list)]
     return (
-        pd.DataFrame(rows)
+        pd.DataFrame({
+            "ngram":        all_ngrams,
+            "count_entity": c_ent_list,
+            "count_nil":    c_nil_list,
+            "frequency":    freq_list,
+            "purity":       [n / f for n, f in zip(c_nil_list, freq_list)],
+            "n_tokens":     [sum(1 for t in ng if t not in _MARKERS) for ng in all_ngrams],
+            "has_start":    [ng[0] == START for ng in all_ngrams],
+            "has_end":      [ng[-1] == END for ng in all_ngrams],
+            "has_before":   [ng[-1] == BEFORE for ng in all_ngrams],
+            "has_after":    [ng[0] == AFTER for ng in all_ngrams],
+        })
         .sort_values("frequency", ascending=False)
         .reset_index(drop=True)
     )

@@ -17,7 +17,7 @@ from itertools import combinations
 from pathlib import Path
 
 import torch
-from hgere.models.model_ere import BertForHyperGNN
+from hgere.models.hgere import BertForHyperGNN
 from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from tqdm import tqdm, trange
@@ -481,6 +481,7 @@ def load_dataset(split, tokenizer, args, logger):
     dataset.build(
         batch_size=batch_size,
         shuffle=args.shuffle,
+        batch_by_size=getattr(args, "batch_by_size", False),
         n_workers=32,
         pin_memory=True,
     )
@@ -1067,6 +1068,15 @@ def main():
     parser.add_argument("--eval_logsoftmax", action="store_true")
     parser.add_argument("--eval_softmax", action="store_true")
     parser.add_argument("--shuffle", action="store_true")
+    parser.add_argument(
+        "--batch_by_size",
+        action="store_true",
+        help=(
+            "Sort sentences by entity count before batching, then shuffle batch order. "
+            "Produces batches of similar-sized sentences, reducing padding and making "
+            "hypergraph iteration more uniform. Mutually exclusive with --shuffle."
+        ),
+    )
     parser.add_argument("--lminit", action="store_true")
     parser.add_argument("--no_sym", action="store_true")
     parser.add_argument("--att_left", action="store_true")
@@ -1138,6 +1148,28 @@ def main():
         "--mem_dim", type=int, default=200, help="for BiaffineRelationCls"
     )
     parser.add_argument("--iter", type=int, default=3, help="for BiaffineRelationCls")
+    parser.add_argument(
+        "--re_focal_loss",
+        action="store_true",
+        help="Use focal loss for relation classification instead of CrossEntropyLoss.",
+    )
+    parser.add_argument(
+        "--re_focal_gamma",
+        type=float,
+        default=2.0,
+        help="Focusing parameter γ for RE focal loss (only used with --re_focal_loss).",
+    )
+    parser.add_argument(
+        "--ner_focal_loss",
+        action="store_true",
+        help="Use focal loss for NER classification instead of CrossEntropyLoss.",
+    )
+    parser.add_argument(
+        "--ner_focal_gamma",
+        type=float,
+        default=2.0,
+        help="Focusing parameter γ for NER focal loss (only used with --ner_focal_loss).",
+    )
     parser.add_argument("--layernorm", action="store_true", help="")
     parser.add_argument(
         "--layernorm_1st", action="store_true", help="layernorm for first order"
@@ -1241,10 +1273,7 @@ def main():
             args.output_dir,
             scripts_to_save=[
                 os.path.basename(__file__),
-                "utils/data.py",
-                "transformers/src/transformers/modules.py",
-                "transformers/src/transformers/modeling_bert.py",
-                "transformers/src/transformers/modeling_albert.py",
+                "src/hgere/data/relation_dataset.py",
             ],
         )
 
