@@ -16,7 +16,7 @@ for iter in 3; do
 for eps in 1e-8; do
 for turn in -; do # 0.2
 for steepness in -; do #20
-for epoch in 8; do
+for epoch in 10; do
 NICK_NAME=scierc-topk-factor0.5-hgere-lr${lr}-lr_cls${lr_cls}-ep${epoch}-dynamic-turn${turn}-steep${steepness}-batch_by_size
 OUTPUT_DIR=saves/scierc/HGERE/$NICK_NAME
 mkdir -p $OUTPUT_DIR
@@ -25,8 +25,10 @@ cp $0 $OUTPUT_DIR/train_script.sh
 #    --train_time_loss_turn $turn \
 #    --train_time_loss_steepness $steepness \
 CUDA_VISIBLE_DEVICES=$GPU_ID  python  run_hgnn.py  \
+    --loss_re_weight_alpha 0.8 \
     --batch_by_size \
     --re_focal_loss \
+    --ner_focal_loss \
     --project_name scierc-hgere \
     --run_name $NICK_NAME \
     --output_dir $OUTPUT_DIR \

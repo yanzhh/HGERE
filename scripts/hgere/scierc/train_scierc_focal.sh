@@ -12,20 +12,20 @@ for reldim in 400; do
 for memdim in 400; do
 for facenc in biaf; do
 for factor in tersibcop; do
-for iter in 3; do
+for iter in 1; do
 for eps in 1e-8; do
 for turn in -; do # 0.2
 for steepness in -; do #20
 for epoch in 8; do
-NICK_NAME=scierc-focal-prefilter-2e-5-hgere-lr${lr}-lr_cls${lr_cls}-ep${epoch}-dynamic-turn${turn}-steep${steepness}-batch_by_size
+NICK_NAME=scierc-re-focal-iter_1
 OUTPUT_DIR=saves/scierc/HGERE/$NICK_NAME
 mkdir -p $OUTPUT_DIR
 cp $0 $OUTPUT_DIR/train_script.sh
 #--train_time_loss_weighting \
 #    --train_time_loss_turn $turn \
 #    --train_time_loss_steepness $steepness \
+# --shuffle \
 CUDA_VISIBLE_DEVICES=$GPU_ID  python  run_hgnn.py  \
-    --batch_by_size \
     --re_focal_loss \
     --project_name scierc-hgere \
     --run_name $NICK_NAME \

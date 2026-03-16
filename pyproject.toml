@@ -24,6 +24,9 @@ dependencies = [
 [project.scripts]
 train-span-classifier = "hgere.commands.train_span_classifier:cli"
 eval-rulebased-pruner = "hgere.commands.eval_rulebased_pruner:cli"
+plot-ner-candidates = "hgere.commands.plot_ner_candidates_by_sent_len:main"
+infer-fixed-spans = "hgere.commands.infer_fixed_spans:cli"
+infer-pruner-augmented = "hgere.commands.infer_pruner_augmented:cli"
 
 [dependency-groups]
 dev = [
