@@ -15,8 +15,8 @@ for iter in 1; do
 for eps in 1e-8; do
 for turn in -; do # 0.2
 for steepness in -; do #20
-for epoch in 10; do
-NICK_NAME=scierc-re-focal-threshold
+for epoch in 20; do
+NICK_NAME=hai
 PRUNER_DIR=pruner_predictions/scierc/focal-prefilter-2e-5
 OUTPUT_DIR=saves/scierc/HGERE/$NICK_NAME
 mkdir -p $OUTPUT_DIR
