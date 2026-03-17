@@ -25,7 +25,12 @@ Supporting modules
     LinearMessegePasser – single linear message-passing step
 """
 
-from transformers import BertModel, BertPreTrainedModel
+from transformers import (
+    BertModel,
+    BertPreTrainedModel,
+    ModernBertModel,
+    ModernBertPreTrainedModel,
+)
 import torch
 from torch import nn
 from torch.nn import (
@@ -161,7 +166,9 @@ class BertForHyperGNN(BertPreTrainedModel):
         # Explicitly pass zeros of the correct shape to avoid the buffer expansion error.
         if token_type_ids is None:
             ids = input_ids if input_ids is not None else inputs_embeds
-            token_type_ids = torch.zeros(ids.shape[:2], dtype=torch.long, device=ids.device)
+            token_type_ids = torch.zeros(
+                ids.shape[:2], dtype=torch.long, device=ids.device
+            )
 
         outputs = self.bert(
             input_ids=input_ids,
@@ -277,7 +284,10 @@ class BertForHyperGNN(BertPreTrainedModel):
                 targets_m = re_targets[mask]
                 log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
                 p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                re_loss = (-(1 - p_t) ** gamma * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)).mean()
+                re_loss = (
+                    -((1 - p_t) ** gamma)
+                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
+                ).mean()
             else:
                 re_loss = CrossEntropyLoss(ignore_index=-1)(re_logits, re_targets)
 
@@ -290,7 +300,10 @@ class BertForHyperGNN(BertPreTrainedModel):
                 targets_m = ner_targets[mask]
                 log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
                 p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ner_loss = (-(1 - p_t) ** gamma * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)).mean()
+                ner_loss = (
+                    -((1 - p_t) ** gamma)
+                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
+                ).mean()
             else:
                 ner_loss = CrossEntropyLoss(ignore_index=-1)(ner_logits, ner_targets)
             # else:
@@ -299,6 +312,279 @@ class BertForHyperGNN(BertPreTrainedModel):
 
             loss = re_loss + ner_loss
 
+            outputs = (loss, re_loss, ner_loss) + outputs
+
+        return outputs
+
+
+class ModernBertForHyperGNN(ModernBertPreTrainedModel):
+    """ModernBERT-backed HGERE model.
+
+    Identical task head (HyperGNN layers, NER/RE classifiers) to
+    BertForHyperGNN; only the encoder and base class differ.
+    ModernBERT does not use token_type_ids.
+
+    ModernBERT init note
+    --------------------
+    Any custom head or extra Linear on top of ModernBERT must be treated as
+    manual-init territory:
+
+    1. Set ``_supports_assign_param_buffer = False`` — disables the fast-init
+       path in ``from_pretrained`` that leaves missing-checkpoint parameters as
+       raw uninitialized memory.
+    2. Call ``post_init()`` at the end of ``__init__`` — triggers the
+       module-wide ``_init_weights`` pass.
+    3. Override ``_init_weights`` to initialize every custom layer explicitly,
+       especially nested Linears not covered by ModernBERT's built-in module
+       checks (ModernBertMLP, ModernBertAttention, …).  ModernBERT's default
+       ``_init_weights`` zeroes biases for any ``nn.Linear`` but only gives
+       weights a real distribution for its own recognized internal types; a
+       plain custom ``nn.Linear`` in a task head gets garbage weights otherwise.
+    """
+
+    # Disable Transformers' "superfast init" path so that custom head
+    # parameters absent from the pretrained checkpoint are properly
+    # initialized instead of left as raw uninitialized memory.
+    _supports_assign_param_buffer = False
+
+    def _init_weights(self, module):
+        super()._init_weights(module)
+        # ModernBERT's _init_weights only initialises weights for its own
+        # recognised internal types; custom task-head linears get their bias
+        # zeroed but their weight is never touched, leaving garbage memory.
+        # Catch every nn.Linear outside self.bert and give it the same scale
+        # ModernBERT uses for built-in classification heads.
+        if isinstance(module, nn.Linear) and not any(
+            module is m for m in self.bert.modules()
+        ):
+            nn.init.normal_(
+                module.weight, mean=0.0, std=self.config.hidden_size**-0.5
+            )
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+    def __init__(self, config, args=None):
+        super().__init__(config)
+        self.max_seq_length = config.max_seq_length
+        self.num_labels = config.num_labels
+        self.num_ner_labels = config.num_ner_labels
+
+        self.bert = ModernBertModel(config)
+        _dropout = getattr(config, "hidden_dropout_prob", 0.1)
+        self.dropout = Dropout(_dropout)
+
+        self.args = args
+
+        self.sub_encoder = CatEncoder(
+            input_dims=[config.hidden_size] * 2, output_dim=args.ent_dim
+        )
+        self.obj_encoder = CatEncoder(
+            input_dims=[config.hidden_size] * 2, output_dim=args.ent_dim
+        )
+        sub_dim = args.ent_dim
+        obj_dim = args.ent_dim
+        self.rel_encoder = CatEncoder(
+            input_dims=[sub_dim, obj_dim], output_dim=args.rel_dim
+        )
+        rel_dim = args.rel_dim
+        ent_dim = args.ent_dim
+
+        if args.factor_type == "ternary":
+            self.htnnlayer = HyperGNNTernaryGraph(
+                ent_dim=ent_dim,
+                rel_dim=rel_dim,
+                dropout=_dropout,
+                args=args,
+            )
+        elif self.args.factor_type in {
+            "sib",
+            "cop",
+            "gp",
+            "sibcop",
+            "sibgp",
+            "copgp",
+            "sibcopgp",
+        }:
+            self.htnnlayer = HyperGNNBinaryGraph(
+                rel_dim=rel_dim, dropout=_dropout, args=args
+            )
+        elif self.args.factor_type in {
+            "tersib",
+            "tercop",
+            "tergp",
+            "tersibcop",
+            "tersibgp",
+            "tercopgp",
+            "tersibcopgp",
+        }:
+            self.htnnlayer = HyperGNNHybridGraph(
+                ent_dim=ent_dim,
+                rel_dim=rel_dim,
+                dropout=_dropout,
+                args=args,
+            )
+        else:
+            print(f"No valid factor_type specified: {self.args.factor_type}")
+            raise Exception()
+
+        self.rel_cls = Linear(rel_dim, self.num_labels)
+
+        if args.ent_repr == "mix":
+            self.ner_cls = CatEncoder(
+                input_dims=[ent_dim] * 2, output_dim=self.num_ner_labels
+            )
+        else:
+            self.ner_cls = Linear(ent_dim, self.num_ner_labels)
+
+        self.alpha = torch.tensor(
+            [config.alpha] + [1.0] * (self.num_labels - 1), dtype=torch.float32
+        )
+
+        if self.args.layernorm_1st:
+            self.sub_layernorm = (
+                LayerNorm(ent_dim, eps=1e-6) if args.layernorm else Identity()
+            )
+            self.obj_layernorm = (
+                LayerNorm(ent_dim, eps=1e-6) if args.layernorm else Identity()
+            )
+            self.rel_layernorm = (
+                LayerNorm(rel_dim, eps=1e-6) if args.layernorm else Identity()
+            )
+
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        mentions=None,
+        token_type_ids=None,  # accepted but not forwarded (ModernBERT has no segment embeddings)
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        sub_positions=None,
+        rel_labels=None,
+        ner_labels=None,
+        ent_numbers=None,
+    ):
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+        )
+
+        hidden_states = outputs[0]
+        hidden_states = self.dropout(hidden_states)
+        seq_len = self.max_seq_length
+        max_ent_num = max(ent_numbers)
+        tot_seq_len = input_ids.shape[-1]
+
+        ent_len = (tot_seq_len - seq_len) // 2
+        obj_start_states = hidden_states[:, seq_len : seq_len + ent_len][
+            :, :max_ent_num, :
+        ]
+        obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
+
+        sub_start_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+        ]
+        sub_end_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
+        ]
+
+        sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)
+        obj_reprs = self.obj_encoder(obj_start_states, obj_end_states)
+
+        rel_reprs = self.rel_encoder(
+            sub_reprs.unsqueeze(-2).expand(obj_reprs.shape), obj_reprs
+        )
+        rel_reprs_split = torch.split(rel_reprs, ent_numbers.tolist())
+        rel_reprs = pad_sequence(rel_reprs_split, batch_first=True, padding_value=0)
+
+        obj_reprs_split = torch.split(obj_reprs, ent_numbers.tolist())
+        obj_reprs = pad_sequence(obj_reprs_split, batch_first=True, padding_value=-1e4)
+        uni_obj_reprs = torch.max(obj_reprs, dim=1)[0]
+
+        sub_reprs_split = torch.split(sub_reprs, ent_numbers.tolist())
+        sub_reprs = pad_sequence(sub_reprs_split, batch_first=True, padding_value=0)
+
+        mask1d = get_ent_mask1d(ent_numbers)
+        mask2d = get_ent_mask2d(ent_numbers)
+        uni_obj_reprs *= mask1d.unsqueeze(-1)
+        rel_reprs *= mask2d.unsqueeze(-1)
+
+        if self.args.layernorm_1st:
+            sub_reprs = self.sub_layernorm(sub_reprs)
+            uni_obj_reprs = self.obj_layernorm(uni_obj_reprs)
+            rel_reprs = self.rel_layernorm(rel_reprs)
+
+        if self.args.factor_type in {
+            "ternary",
+            "tersib",
+            "tercop",
+            "tergp",
+            "tersibcop",
+            "tersibgp",
+            "tercopgp",
+            "tersibcopgp",
+        }:
+            sub_reprs, uni_obj_reprs, rel_reprs = self.htnnlayer(
+                sub_reprs, uni_obj_reprs, rel_reprs, ent_numbers
+            )
+        elif self.args.factor_type in {"sib", "cop", "gp", "sibcop", "sibgp", "copgp"}:
+            rel_reprs = self.htnnlayer(rel_reprs, ent_numbers)
+
+        re_prediction_scores = self.rel_cls(rel_reprs)
+
+        if self.args.ent_repr == "mix":
+            ner_prediction_scores = self.ner_cls(sub_reprs, uni_obj_reprs)
+        elif self.args.ent_repr == "sub":
+            ner_prediction_scores = self.ner_cls(sub_reprs)
+        elif self.args.ent_repr == "obj":
+            ner_prediction_scores = self.ner_cls(uni_obj_reprs)
+        else:
+            pdb.set_trace()
+
+        outputs = (re_prediction_scores, ner_prediction_scores)
+
+        ner_prediction_scores = ner_prediction_scores.float()
+        re_prediction_scores = re_prediction_scores.float()
+
+        if rel_labels is not None:
+            re_logits = re_prediction_scores.reshape(-1, self.num_labels)
+            re_targets = rel_labels.reshape(-1)
+            if getattr(self.args, "re_focal_loss", False):
+                gamma = getattr(self.args, "re_focal_gamma", 2.0)
+                mask = re_targets != -1
+                logits_m = re_logits[mask]
+                targets_m = re_targets[mask]
+                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
+                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
+                re_loss = (
+                    -((1 - p_t) ** gamma)
+                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
+                ).mean()
+            else:
+                re_loss = CrossEntropyLoss(ignore_index=-1)(re_logits, re_targets)
+
+            ner_logits = ner_prediction_scores.reshape(-1, self.num_ner_labels)
+            ner_targets = ner_labels.reshape(-1)
+            if getattr(self.args, "ner_focal_loss", False):
+                gamma = getattr(self.args, "ner_focal_gamma", 2.0)
+                mask = ner_targets != -1
+                logits_m = ner_logits[mask]
+                targets_m = ner_targets[mask]
+                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
+                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
+                ner_loss = (
+                    -((1 - p_t) ** gamma)
+                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
+                ).mean()
+            else:
+                ner_loss = CrossEntropyLoss(ignore_index=-1)(ner_logits, ner_targets)
+
+            loss = re_loss + ner_loss
             outputs = (loss, re_loss, ner_loss) + outputs
 
         return outputs

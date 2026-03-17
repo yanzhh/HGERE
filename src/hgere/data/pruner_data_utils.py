@@ -53,20 +53,20 @@ NER_LABEL_LISTS = dict(
     ],
     somd=[
         "Unknown",
-        'Abbreviation',
-        'AlternativeName',
-        'Application',
-        'Citation',
-        'Developer',
-        'Extension',
-        'License',
-        'OperatingSystem',
-        'PlugIn',
-        'ProgrammingEnvironment',
-        'Release',
-        'SoftwareCoreference',
-        'URL',
-        'Version',
+        "Abbreviation",
+        "AlternativeName",
+        "Application",
+        "Citation",
+        "Developer",
+        "Extension",
+        "License",
+        "OperatingSystem",
+        "PlugIn",
+        "ProgrammingEnvironment",
+        "Release",
+        "SoftwareCoreference",
+        "URL",
+        "Version",
     ],
     scinlp=[
         "NIL",
@@ -127,7 +127,9 @@ class ACEDatasetNER(Dataset):
         self.model_type = args.model_type
         if args.label_set not in NER_LABEL_LISTS:
             valid_label_sets = list(NER_LABEL_LISTS.keys())
-            raise Exception(f"No valid --label_set parameter '{args.label_set}' not in {valid_label_sets}")
+            raise Exception(
+                f"No valid --label_set parameter '{args.label_set}' not in {valid_label_sets}"
+            )
         else:
             self.ner_label_list = NER_LABEL_LISTS[args.label_set]
 
@@ -172,6 +174,7 @@ class ACEDatasetNER(Dataset):
         f = open(self.file_path, "r", encoding="utf-8")
         self.data = []
         self.tot_recall = 0
+        self.n_gold_in_candidates = 0  # gold entities that survive rule-based pre-filter
         self.ner_golden_labels = set([])
         maxL = 0  # maximum number of words per document(not sub_words)
         maxR = 0  # maximum number of subword tokens incl. context per document
@@ -271,12 +274,12 @@ class ACEDatasetNER(Dataset):
             ]
             ## @todo shouldn't the number of sentences be equal to the number of sentence_boundaries?
             ## I think we have a boundary at the very end is this wanted? Yes, it is the ending of the last sentence
-            assert (
-                len(subword_sentence_boundaries) == len(sentences) + 1
-            ), pdb.set_trace()
-            assert len(sentence_boundaries) == len(
-                subword_sentence_boundaries
-            ), pdb.set_trace()
+            assert len(subword_sentence_boundaries) == len(sentences) + 1, (
+                pdb.set_trace()
+            )
+            assert len(sentence_boundaries) == len(subword_sentence_boundaries), (
+                pdb.set_trace()
+            )
 
             # iterate through the sentences by sentence_idx
             for sentence_idx in range(len(subword_sentence_boundaries) - 1):
@@ -296,7 +299,9 @@ class ACEDatasetNER(Dataset):
                     #    print(token2subword[7000:])
                     key = token2subword[start], token2subword[end + 1]
 
-                    entity_labels[key] = ner_label_map.get(label, 0) # defaults to zero (NIL) 
+                    entity_labels[key] = ner_label_map.get(
+                        label, 0
+                    )  # defaults to zero (NIL)
                     self.ner_golden_labels.add(
                         ((line_idx, sentence_idx), (start, end), label)
                     )
@@ -324,7 +329,7 @@ class ACEDatasetNER(Dataset):
                     # What to do now?
                     # problem with evaluation when just cut?
                     print(
-                        f'Sentence to long ({sentence_length}): {" ".join(sentences[sentence_idx])}'
+                        f"Sentence to long ({sentence_length}): {' '.join(sentences[sentence_idx])}"
                     )
                     doc_sent_end -= sentence_length - max_num_subwords
                     sentence_length = doc_sent_end - doc_sent_start
@@ -408,7 +413,7 @@ class ACEDatasetNER(Dataset):
                             sent_token_start = sentence_boundaries[sentence_idx]
                             sent_token_end = sentence_boundaries[sentence_idx + 1]
                             span_words = tokens[token_start : token_end + 1]
-                            context_before = tokens[sent_token_start : token_start]
+                            context_before = tokens[sent_token_start:token_start]
                             context_after = tokens[token_end + 1 : sent_token_end]
                             if self.rulebased_pruner.should_prune(
                                 span_words, context_before, context_after
@@ -424,6 +429,8 @@ class ACEDatasetNER(Dataset):
                                 (token_start, token_end),
                             )
                         )
+                        if label > 0:
+                            self.n_gold_in_candidates += 1
                         # for x in entity_infos, x[0]:(start subtoken, end subtoken) x[2]: (start token, end token)
 
                 # if len(entity_labels):
@@ -521,9 +528,10 @@ class ACEDatasetNER(Dataset):
         )  # turn input tokens into indices
         L = len(input_ids)
 
-        input_ids += [0] * (
-            self.max_seq_length - len(input_ids)
-        )  # padding with 0        # shape: max_seq_length
+        if not self.model_type.startswith("modernbert"):
+            input_ids += [0] * (
+                self.max_seq_length - len(input_ids)
+            )  # padding with 0        # shape: max_seq_length
         position_plus_pad = (
             int(self.model_type.find("roberta") != -1) * 2
         )  # pad 2 for 'Roberta', 0 for others
@@ -541,6 +549,23 @@ class ACEDatasetNER(Dataset):
                     input_ids
                     + [30001] * (len(entry["examples"]))
                     + [0] * (self.max_pair_length - len(entry["examples"]))
+                )
+            elif self.model_type.startswith("modernbert"):
+                # Compact layout: markers immediately follow sentence tokens so
+                # they fall within ModernBERT's local attention window (128 tokens).
+                # Structure: [sentence:L] + [start_markers:max_pair_length] +
+                #            [end_markers:max_pair_length] + [PAD:(max_seq_length-L)]
+                # Total length: max_seq_length + max_entity_length  (same as BERT path)
+                unused0_id = self.tokenizer.convert_tokens_to_ids("[unused0]")
+                unused1_id = self.tokenizer.convert_tokens_to_ids("[unused1]")
+                n_active = len(entry["examples"])
+                input_ids = (
+                    input_ids  # length L (unpadded sentence)
+                    + [unused0_id] * n_active
+                    + [0] * (self.max_pair_length - n_active)
+                    + [unused1_id] * n_active
+                    + [0] * (self.max_pair_length - n_active)
+                    + [0] * (self.max_seq_length - L)  # sentence padding at end
                 )
             elif self.model_type.startswith("roberta"):
                 input_ids = (
@@ -582,11 +607,20 @@ class ACEDatasetNER(Dataset):
             # active entity markers already have self-attention set, so only padded
             # markers are affected (they are excluded from the loss via label == -1).
             attention_mask.fill_diagonal_(1)
-            position_ids = (
-                list(range(position_plus_pad, position_plus_pad + self.max_seq_length))
-                + [0] * self.max_entity_length
-            )
-
+            if self.model_type.startswith("modernbert"):
+                # Compact layout: positions 0..L-1 for sentence, then zeros for
+                # markers (overwritten per-entity below) and end padding.
+                position_ids = (
+                    list(range(L))
+                    + [0] * (self.max_seq_length + self.max_entity_length - L)
+                )
+                marker_offset = L
+            else:
+                position_ids = (
+                    list(range(position_plus_pad, position_plus_pad + self.max_seq_length))
+                    + [0] * self.max_entity_length
+                )
+                marker_offset = self.max_seq_length
 
         else:
             attention_mask = [1] * L + [0] * (self.max_seq_length - L)
@@ -595,6 +629,7 @@ class ACEDatasetNER(Dataset):
                 list(range(position_plus_pad, position_plus_pad + self.max_seq_length))
                 + [0] * self.max_entity_length
             )
+            marker_offset = self.max_seq_length
 
         # print(f'input_ids length: {len(input_ids)}')
 
@@ -619,10 +654,8 @@ class ACEDatasetNER(Dataset):
             w1 = x_idx  # for start subtoken of an entity
             w2 = w1 + num_pair  # for end subtoken of an entity
 
-            w1 += (
-                self.max_seq_length
-            )  # max_seq_length|w1(0), w1(1), ...|w2(0), w2(1), ...;
-            w2 += self.max_seq_length
+            w1 += marker_offset  # compact layout (ModernBERT): L; standard: max_seq_length
+            w2 += marker_offset
             position_ids[w1] = m1[0]
             position_ids[w2] = m1[1]
 
@@ -630,6 +663,18 @@ class ACEDatasetNER(Dataset):
                 for yy in [w1, w2]:
                     attention_mask[xx, yy] = 1
                 attention_mask[xx, :L] = 1
+
+        if self.model_type.startswith("modernbert") and attention_mask.dim() == 2:
+            # ModernBERT cannot use a 2D (seq, seq) custom attention matrix.
+            # Use an all-ones 1D mask so every position — including padded span
+            # markers — has at least one valid attendee in its local attention
+            # window.  Without this, padded markers whose entire local window is
+            # also masked get softmax(-inf, ..., -inf) = NaN, which propagates
+            # into the span encoder even though those positions are excluded from
+            # the loss via labels == -1.
+            attention_mask = torch.ones(
+                attention_mask.shape[0], dtype=attention_mask.dtype
+            )
 
         labels += [-1] * (num_pair - len(labels))  # padding with -1
         mention_pos += [(0, 0)] * (num_pair - len(mention_pos))  # padding with (0, 0)
@@ -640,14 +685,15 @@ class ACEDatasetNER(Dataset):
             torch.tensor(position_ids),
             torch.tensor(labels, dtype=torch.int64),
             torch.tensor(mention_pos),
+            torch.tensor(L, dtype=torch.int64),  # field 5: sent_subword_length (always)
         ]
 
         if self.evaluate:
             # ------add sent lengths-------
-            item.append(torch.tensor(entry["sent_length"]))
+            item.append(torch.tensor(entry["sent_length"]))  # field 6 (eval only)
             # -----------------------------
-            item.append(entry["example_index"])
-            item.append(mentions)
+        item.append(entry["example_index"])  # metadata (always)
+        item.append(mentions)                # metadata (always)
         return item
 
     def is_punctuation(self, char):

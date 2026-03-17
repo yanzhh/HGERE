@@ -16,7 +16,12 @@ Supporting modules
     CatEncoder         – concatenation + optional linear projection
 """
 
-from transformers import BertPreTrainedModel, BertModel
+from transformers import (
+    BertPreTrainedModel,
+    BertModel,
+    ModernBertPreTrainedModel,
+    ModernBertModel,
+)
 import torch
 from torch import nn
 from torch.nn import BCEWithLogitsLoss
@@ -82,8 +87,12 @@ class BertForSpanMarkerNerPruner(BertPreTrainedModel):
         if self.biaf_span:
             self.span_encoder.reset_parameters()
 
-    def get_extended_attention_mask(self, attention_mask, input_shape, device=None, dtype=None):
-        extended = super().get_extended_attention_mask(attention_mask, input_shape, device, dtype)
+    def get_extended_attention_mask(
+        self, attention_mask, input_shape, device=None, dtype=None
+    ):
+        extended = super().get_extended_attention_mask(
+            attention_mask, input_shape, device, dtype
+        )
         return extended.clamp(min=-1e4)
 
     def forward(
@@ -196,6 +205,220 @@ class BertForSpanMarkerNerPruner(BertPreTrainedModel):
         return outputs
 
 
+class ModernBertForSpanMarkerNerPruner(ModernBertPreTrainedModel):
+    """ModernBERT-backed span marker pruner.
+
+    Identical task head to BertForSpanMarkerNerPruner; only the encoder and
+    base class differ.  ModernBERT does not use token_type_ids.
+
+    ModernBERT init note
+    --------------------
+    Any custom head or extra Linear on top of ModernBERT must be treated as
+    manual-init territory:
+
+    1. Set ``_supports_assign_param_buffer = False`` — disables the fast-init
+       path in ``from_pretrained`` that leaves missing-checkpoint parameters as
+       raw uninitialized memory.
+    2. Call ``post_init()`` at the end of ``__init__`` — triggers the
+       module-wide ``_init_weights`` pass.
+    3. Override ``_init_weights`` to initialize every custom layer explicitly,
+       especially nested Linears not covered by ModernBERT's built-in module
+       checks (ModernBertMLP, ModernBertAttention, …).  ModernBERT's default
+       ``_init_weights`` zeroes biases for any ``nn.Linear`` but only gives
+       weights a real distribution for its own recognized internal types; a
+       plain custom ``nn.Linear`` in a task head gets garbage weights otherwise.
+    """
+
+    # Disable Transformers' "superfast init" path, which leaves parameters
+    # that are absent from the pretrained checkpoint as raw uninitialized
+    # memory.  With this flag False, from_pretrained falls back to the safe
+    # init path and _init_weights is applied to every submodule including our
+    # custom head layers.
+    _supports_assign_param_buffer = False
+
+    def _init_weights(self, module):
+        super()._init_weights(module)
+        # ModernBERT's _init_weights zeroes nn.Linear biases for all layers
+        # but only initialises weights for its own recognised internal types
+        # (ModernBertMLP, ModernBertAttention, …).  Custom task-head linears
+        # are not among those types so their weights keep whatever garbage was
+        # in the freshly-allocated tensor.  Catch every nn.Linear that is not
+        # part of self.bert and give it a clean init with the same scale
+        # ModernBERT uses for its built-in classification heads.
+        if isinstance(module, nn.Linear) and not any(
+            module is m for m in self.bert.modules()
+        ):
+            nn.init.normal_(
+                module.weight, mean=0.0, std=self.config.hidden_size**-0.5
+            )
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+    def __init__(self, config, args=None):
+        super().__init__(config)
+        self.args = args
+        self.max_seq_length = config.max_seq_length
+        self.num_labels = config.num_labels
+
+        self.biaf_span = args.biaf_span
+
+        self.bert = ModernBertModel(config)
+        _dropout = getattr(config, "hidden_dropout_prob", 0.1)
+        self.dropout = nn.Dropout(_dropout)
+
+        if self.biaf_span:
+            self.span_encoder = BiSpanRepr(
+                input_size=config.hidden_size,
+                span_dim=args.span_size,
+                hidden_size=args.span_hidden_size,
+            )
+            if self.args.extra_repr == "attn":
+                self.extra_encoder = AttnSpanRepr(
+                    input_dim=config.hidden_size,
+                    proj_dim=args.span_hidden_size,
+                    output_dim=args.span_size,
+                    dropout=_dropout,
+                )
+                self.ner_classifier = nn.Linear(
+                    self.span_encoder.output_dim + self.extra_encoder.output_dim, 1
+                )
+            elif self.args.extra_repr == "cat":
+                self.extra_encoder = CatEncoder(
+                    input_dims=[config.hidden_size] * 4,
+                    output_dim=args.span_size,
+                    proj=True,
+                )
+                self.ner_classifier = nn.Linear(
+                    self.span_encoder.output_dim + self.extra_encoder.output_dim, 1
+                )
+            else:
+                self.ner_classifier = nn.Linear(self.span_encoder.output_dim, 1)
+        else:
+            self.ner_classifier = nn.Linear(config.hidden_size * 4, self.num_labels)
+
+        self.alpha = torch.tensor([config.alpha], dtype=torch.float32)
+        self.onedropout = config.onedropout
+
+        self.post_init()
+
+        if self.biaf_span:
+            self.span_encoder.reset_parameters()
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        mentions=None,
+        token_type_ids=None,  # accepted but not forwarded (ModernBERT has no segment embeddings)
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        mention_pos=None,
+        sent_subword_length=None,
+    ):
+        # ModernBERT requires a 2D (batch, seq_len) padding mask, not the 2D
+        # per-sample (seq, seq) attention matrix that BERT supports.  The data
+        # loader already collapses the mask for modernbert model types, but as
+        # a safety net we handle a stray 3D tensor here.
+        if attention_mask is not None and attention_mask.dim() == 3:
+            attention_mask = attention_mask[:, :, 0]
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+        )
+
+        hidden_states = outputs[0]
+        if self.onedropout:
+            hidden_states = self.dropout(hidden_states)
+
+        seq_len = self.max_seq_length
+        bsz, tot_seq_len = input_ids.shape
+        ent_len = (tot_seq_len - seq_len) // 2
+
+        if sent_subword_length is not None:
+            # Compact layout: markers sit at [L .. L+ent_len) and [L+ent_len .. L+2*ent_len)
+            # where L is the per-sample actual subword sentence length.
+            # Use gather so each sample uses its own offset.
+            hidden_dim = hidden_states.shape[-1]
+            arange = torch.arange(ent_len, device=hidden_states.device, dtype=torch.long)
+            e1_offsets = sent_subword_length.unsqueeze(1) + arange.unsqueeze(0)  # (bsz, ent_len)
+            e2_offsets = e1_offsets + ent_len
+            expand = lambda o: o.unsqueeze(-1).expand(-1, -1, hidden_dim)
+            e1_hidden_states = torch.gather(hidden_states, 1, expand(e1_offsets))
+            e2_hidden_states = torch.gather(hidden_states, 1, expand(e2_offsets))
+        else:
+            e1_hidden_states = hidden_states[:, seq_len : seq_len + ent_len]
+            e2_hidden_states = hidden_states[:, seq_len + ent_len :]
+
+        m1_start_states = hidden_states[
+            torch.arange(bsz).unsqueeze(-1), mention_pos[:, :, 0]
+        ]
+        m1_end_states = hidden_states[
+            torch.arange(bsz).unsqueeze(-1), mention_pos[:, :, 1]
+        ]
+
+        if self.biaf_span:
+            feature_vector = self.span_encoder(
+                e1_hidden_states, e2_hidden_states, m1_start_states, m1_end_states
+            )
+            if self.args.extra_repr == "attn":
+                extra_feature = self.extra_encoder(hidden_states, mention_pos)
+                feature_vector = torch.cat([feature_vector, extra_feature], dim=-1)
+            elif self.args.extra_repr == "cat":
+                extra_feature = self.extra_encoder(
+                    e1_hidden_states, e2_hidden_states, m1_start_states, m1_end_states
+                )
+                feature_vector = torch.cat([feature_vector, extra_feature], dim=-1)
+        else:
+            feature_vector = torch.cat(
+                [e1_hidden_states, e2_hidden_states, m1_start_states, m1_end_states],
+                dim=2,
+            )
+
+        if not self.onedropout:
+            feature_vector = self.dropout(feature_vector)
+
+        ner_prediction_scores = self.ner_classifier(feature_vector)
+
+        outputs = (ner_prediction_scores,) + outputs[2:]
+
+        if labels is not None:
+            ner_mask = labels > -1
+            gold_entities = (labels > 0).float()
+            masked_scores = (
+                ner_prediction_scores.squeeze(-1).masked_select(ner_mask).float()
+            )
+            masked_gold_entities = gold_entities.masked_select(ner_mask)
+
+            pruner_loss = getattr(self.args, "pruner_loss", "bce")
+            if pruner_loss == "focal":
+                gamma = getattr(self.args, "focal_gamma", 2.0)
+                alpha = getattr(self.args, "focal_alpha", 0.25)
+                bce = BCEWithLogitsLoss(reduction="none")(
+                    masked_scores, masked_gold_entities
+                )
+                p_t = torch.exp(-bce)
+                alpha_t = alpha * masked_gold_entities + (1 - alpha) * (
+                    1 - masked_gold_entities
+                )
+                ner_loss = (alpha_t * (1 - p_t) ** gamma * bce).sum() / ner_mask.sum()
+            else:
+                ner_loss = (
+                    BCEWithLogitsLoss(reduction="none")(
+                        masked_scores, masked_gold_entities
+                    ).sum()
+                    / ner_mask.sum()
+                )
+
+            outputs = (ner_loss,) + outputs
+
+        return outputs
+
+
 class CatEncoder(nn.Module):
     def __init__(self, input_dims, output_dim=None, proj=True):
         super().__init__()
@@ -274,6 +497,15 @@ class BiSpanRepr(nn.Module):
         for w in [self.weight]:
             torch.nn.init.xavier_normal_(w)
         self.bias.data.fill_(0)
+        # Explicitly reset all projection linears so that the fast-init path
+        # in from_pretrained (which may leave missing-key params as garbage
+        # memory) cannot produce corrupt weights or biases at forward time.
+        for proj in [
+            self.proj11, self.proj12,
+            self.proj21, self.proj22,
+            self.proj1, self.proj2,
+        ]:
+            proj.reset_parameters()
         return
 
     def forward(self, e1, e2, m1, m2):

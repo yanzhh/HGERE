@@ -18,17 +18,21 @@ from tqdm import tqdm, trange
 
 import wandb
 from transformers import (
+    AutoTokenizer,
     BertConfig,
     # AlbertConfig,
     # AlbertTokenizer,
     # AlbertForSpanMarkerNerPruner,
     BertTokenizer,
-    RobertaConfig,
+    ModernBertConfig,
     get_linear_schedule_with_warmup,
 )
 
 from ...data.pruner_data_utils import ACEDatasetNER
-from ...models.span_classifier import BertForSpanMarkerNerPruner
+from ...models.span_classifier import (
+    BertForSpanMarkerNerPruner,
+    ModernBertForSpanMarkerNerPruner,
+)
 from ...utils import get_logger, set_seed
 from .evaluate import evaluate
 
@@ -42,6 +46,11 @@ warnings.filterwarnings("ignore", "Detected call of `lr_scheduler.step\\(\\)`")
 
 MODEL_CLASSES = {
     "bertspanmarkerpruner": (BertConfig, BertForSpanMarkerNerPruner, BertTokenizer),
+    "modernbertspanmarkerpruner": (
+        ModernBertConfig,
+        ModernBertForSpanMarkerNerPruner,
+        AutoTokenizer,
+    ),
     # "albertspanmarkerpruner": (
     #    AlbertConfig,
     #    AlbertForSpanMarkerNerPruner,
@@ -84,7 +93,9 @@ def train(logger, args, model, tokenizer):
         )
         for step, batch in enumerate(epoch_iterator):
             model.train()
-            batch = tuple(t.to(args.device) for t in batch)
+            batch = tuple(
+                t.to(args.device) if isinstance(t, torch.Tensor) else t for t in batch
+            )
 
             inputs = {
                 "input_ids": batch[0],
@@ -95,6 +106,8 @@ def train(logger, args, model, tokenizer):
 
             if args.model_type.find("span") != -1:
                 inputs["mention_pos"] = batch[4]
+            if args.model_type.startswith("modernbert") and args.model_type.find("span") != -1:
+                inputs["sent_subword_length"] = batch[5]
             with autocast(
                 device_type=args.device_name, dtype=torch.float16, enabled=args.fp16
             ):
@@ -142,9 +155,21 @@ def train(logger, args, model, tokenizer):
                     and global_step % args.logging_steps == 0
                 ):
                     # Log metrics
+                    encoder_norm = sum(
+                        p.grad.norm().item() ** 2
+                        for n, p in model.named_parameters()
+                        if p.grad is not None and n.startswith("bert.")
+                    ) ** 0.5
+                    head_norm = sum(
+                        p.grad.norm().item() ** 2
+                        for n, p in model.named_parameters()
+                        if p.grad is not None and not n.startswith("bert.")
+                    ) ** 0.5
                     metrics_to_log = {
                         "train/lr": scheduler.get_last_lr()[0],
                         "train/loss": (tr_loss - logging_loss) / args.logging_steps,
+                        "train/grad_norm_encoder": encoder_norm,
+                        "train/grad_norm_head": head_norm,
                     }
                     wandb.log(metrics_to_log, global_step)
                     logging_loss = tr_loss
@@ -225,6 +250,7 @@ def load_data(args, tokenizer, logger):
         train_dataset,
         sampler=train_sampler,
         batch_size=args.train_batch_size,
+        collate_fn=ACEDatasetNER.collate_fn,
         num_workers=1,
     )
     return train_sampler, train_data_loader
@@ -237,6 +263,7 @@ def setup_training(args, model, len_train, logger):
         if args.run_name is not None:
             wandb_params["name"] = args.run_name
         wandb.init(**wandb_params)
+        wandb.watch(model, log="gradients", log_freq=50)
     if args.max_steps > 0:
         t_total = args.max_steps
         args.num_train_epochs = (
@@ -475,7 +502,6 @@ def run_train_span_classifier(args=None):
     )
     _transformers_logger.setLevel(_prev_level)
 
-    # from_pretrained zeros nn.Parameter objects not in the BERT checkpoint.
     # Re-initialize BiSpanRepr's biaffine weight and bias after loading.
     if hasattr(model, "span_encoder"):
         model.span_encoder.reset_parameters()
@@ -490,8 +516,11 @@ def run_train_span_classifier(args=None):
 
     if getattr(args, "debug_overflow", False):
         from transformers.debug_utils import DebugUnderflowOverflow
+
         DebugUnderflowOverflow(model)
-        logger.info("DebugUnderflowOverflow enabled — will print first NaN/Inf location")
+        logger.info(
+            "DebugUnderflowOverflow enabled — will print first NaN/Inf location"
+        )
 
     best_result = 0
     # Training
@@ -637,16 +666,34 @@ def add_special_tokens(model, args, tokenizer, logger):
         }
         tokenizer.add_special_tokens(special_tokens_dict)
         model.albert.resize_token_embeddings(len(tokenizer))
+    elif args.model_type.startswith("modernbert"):
+        # ModernBERT (BPE tokenizer) has no [unused*] slots — add them explicitly.
+        special_tokens_dict = {"additional_special_tokens": ["[unused0]", "[unused1]"]}
+        tokenizer.add_special_tokens(special_tokens_dict)
+        model.bert.resize_token_embeddings(len(tokenizer))
 
     if args.do_train and args.lminit:
-        # not roberta: BERT or ALBERTA (or SciBERT)
+        mask_id = tokenizer.encode("[MASK]", add_special_tokens=False)
+        assert len(mask_id) == 1
+        mask_id = mask_id[0]
+
+        if args.model_type.startswith("modernbert"):
+            # BPE tokenizer: "entity" may be multi-token; fall back to [MASK] if so.
+            entity_ids = tokenizer.encode("entity", add_special_tokens=False)
+            entity_id = entity_ids[0] if len(entity_ids) == 1 else mask_id
+            logger.info("mask_id: %d, entity_id: %d", mask_id, entity_id)
+            word_embeddings = model.bert.embeddings.tok_embeddings.weight.data
+            unused0_id = tokenizer.convert_tokens_to_ids("[unused0]")
+            unused1_id = tokenizer.convert_tokens_to_ids("[unused1]")
+            word_embeddings[unused0_id].copy_(word_embeddings[mask_id])
+            word_embeddings[unused1_id].copy_(word_embeddings[entity_id])
+            return
+
+        # not roberta: BERT or AlBERT (or SciBERT)
         if args.model_type.find("roberta") == -1:
             entity_id = tokenizer.encode("entity", add_special_tokens=False)
             assert len(entity_id) == 1
             entity_id = entity_id[0]
-            mask_id = tokenizer.encode("[MASK]", add_special_tokens=False)
-            assert len(mask_id) == 1
-            mask_id = mask_id[0]
         else:  # Roberta: Hard Coded
             entity_id = 10014
             mask_id = 50264

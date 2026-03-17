@@ -38,7 +38,10 @@ from pathlib import Path
 import torch
 
 from hgere.data.relation_dataset import RelationDataset
-from hgere.hgere.infer_fixed_spans import infer_fixed_spans, make_augmented_candidate_file
+from hgere.hgere.infer_fixed_spans import (
+    infer_fixed_spans,
+    make_augmented_candidate_file,
+)
 from hgere.labels import LABELS
 from hgere.utils import set_seed
 from transformers import AutoTokenizer, BertConfig
@@ -56,12 +59,17 @@ def _build_parser():
     )
 
     # --- required ---
-    p.add_argument("--model_type", type=str, default="hyper",
-                   choices=list(MODEL_CLASSES.keys()))
+    p.add_argument(
+        "--model_type", type=str, default="hyper", choices=list(MODEL_CLASSES.keys())
+    )
     p.add_argument("--model_name_or_path", type=str, required=True)
     p.add_argument("--label_set", type=str, required=True)
-    p.add_argument("--input_file", type=str, required=True,
-                   help="ent_pred_*.json file with predicted_ner (pipeline) and ner (gold).")
+    p.add_argument(
+        "--input_file",
+        type=str,
+        required=True,
+        help="ent_pred_*.json file with predicted_ner (pipeline) and ner (gold).",
+    )
     p.add_argument("--output_file", type=str, required=True)
 
     # --- tokenizer / sequences ---
@@ -132,7 +140,9 @@ def cli():
 
     # --- device ---
     if args.local_rank == -1 or args.no_cuda:
-        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+        device = torch.device(
+            "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
+        )
         args.n_gpu = torch.cuda.device_count()
     else:
         torch.cuda.set_device(args.local_rank)
@@ -157,16 +167,24 @@ def cli():
         raise FileNotFoundError(f"Model path does not exist: {model_path}")
     if not (model_path / "config.json").exists():
         checkpoints = sorted(
-            [p for p in model_path.iterdir() if p.is_dir() and p.name.startswith("checkpoint-")],
+            [
+                p
+                for p in model_path.iterdir()
+                if p.is_dir() and p.name.startswith("checkpoint-")
+            ],
             key=lambda p: int(p.name.split("-")[-1]),
         )
         if not checkpoints:
-            raise FileNotFoundError(f"No config.json and no checkpoint-* subdirs in {model_path}")
+            raise FileNotFoundError(
+                f"No config.json and no checkpoint-* subdirs in {model_path}"
+            )
         model_path = checkpoints[-1]
         logger.info("Using checkpoint: %s", model_path)
     args.model_name_or_path = str(model_path)
 
-    config = config_class.from_pretrained(args.model_name_or_path, num_labels=args.num_rel_labels)
+    config = config_class.from_pretrained(
+        args.model_name_or_path, num_labels=args.num_rel_labels
+    )
     config.max_seq_length = args.max_seq_length
     config.alpha = args.alpha
     config.num_ner_labels = args.num_ner_labels
@@ -176,11 +194,16 @@ def cli():
         or getattr(config, "_name_or_path", None)
         or args.model_name_or_path
     )
-    if not (tokenizer_path / "vocab.txt").exists():
+    if (
+        not (tokenizer_path / "vocab.txt").exists()
+        and not (tokenizer_path / "tokenizer.json").exists()
+    ):
         raise FileNotFoundError(
-            f"No vocab.txt in '{tokenizer_path}'. Pass --tokenizer_path."
+            f"No vocab.txt or tokenizer.json in '{tokenizer_path}'. Pass --tokenizer_path."
         )
-    tokenizer = tokenizer_class.from_pretrained(str(tokenizer_path), do_lower_case=args.do_lower_case)
+    tokenizer = tokenizer_class.from_pretrained(
+        str(tokenizer_path), do_lower_case=args.do_lower_case
+    )
 
     args.do_train = False
     args.lminit = False
@@ -188,7 +211,9 @@ def cli():
     _tf_logger = logging.getLogger("transformers.modeling_utils")
     _prev = _tf_logger.level
     _tf_logger.setLevel(logging.ERROR)
-    model = model_class.from_pretrained(args.model_name_or_path, config=config, args=args)
+    model = model_class.from_pretrained(
+        args.model_name_or_path, config=config, args=args
+    )
     _tf_logger.setLevel(_prev)
 
     model.to(device)

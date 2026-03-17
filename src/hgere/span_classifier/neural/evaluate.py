@@ -82,7 +82,7 @@ def evaluate(
         # mentions
 
         # -------for pruner------------
-        sent_lens = batch[5]
+        sent_lens = batch[6]  # word-level sentence lengths (field 6); field 5 = sent_subword_length
 
         split_ranges, sent_lens_simple, indexs_simple, batch_m2s_simple = (
             _exact_boundaries(indexs, sent_lens, batch_m2s)
@@ -91,7 +91,7 @@ def evaluate(
 
         # batch_mentions = _get_batch_mentions(batch_m2s_simple, args.device)
 
-        batch = tuple(t.to(args.device) for t in batch[:5])
+        batch = tuple(t.to(args.device) for t in batch[:6])
 
         with torch.no_grad():
             inputs = {
@@ -103,6 +103,8 @@ def evaluate(
 
             if args.model_type.find("span") != -1:
                 inputs["mention_pos"] = batch[4]
+            if args.model_type.startswith("modernbert") and args.model_type.find("span") != -1:
+                inputs["sent_subword_length"] = batch[5]
 
             outputs = model(**inputs)
 
@@ -168,8 +170,14 @@ def evaluate(
     )
 
     target_recall_diff = getattr(args, "target_recall_diff", 0.01)
+    rulebased_upper_bound = (
+        eval_dataset.n_gold_in_candidates / eval_dataset.tot_recall
+        if eval_dataset.tot_recall > 0
+        else 1.0
+    )
     pruner_metrics = _compute_pruner_wandb_metrics(
-        sentences_predictions, ner_golden_labels, target_recall_diff
+        sentences_predictions, ner_golden_labels, target_recall_diff,
+        rulebased_upper_bound=rulebased_upper_bound,
     )
     results.update(pruner_metrics)
     logger.info(
@@ -796,6 +804,7 @@ def _compute_pruner_wandb_metrics(
     sentences_predictions: dict,
     ner_golden_labels: set,
     target_recall_diff: float,
+    rulebased_upper_bound: float = 1.0,
 ) -> dict:
     """Compute pruner analysis metrics for wandb logging during training.
 
@@ -905,7 +914,7 @@ def _compute_pruner_wandb_metrics(
     thresh_fn = n_gold - thresh_m["tp"]
     out = {
         "pruner/upper_bound_recall": upper_bound,
-        "pruner/rulebased/upper_bound_recall": upper_bound,
+        "pruner/rulebased/upper_bound_recall": rulebased_upper_bound,
         "pruner/target_recall": target_recall,
         "pruner/thresh/threshold": best_threshold,
         "pruner/thresh/recall": thresh_m["recall"],

@@ -28,13 +28,6 @@ import wandb
 
 from transformers import (
     # BertForACEBothOneDropoutSub,
-    AlbertConfig,
-    # AlbertForACEBothOneDropoutSub,
-    # AlBertForBaselines,
-    #   BertForHyperGNNPlus,
-    #   BertForHyperGNNwithUnifyEntity,
-    # AlbertForHyperGNN,
-    AlbertTokenizer,
     AutoTokenizer,
     # WEIGHTS_NAME,
     BertConfig,
@@ -42,13 +35,13 @@ from transformers import (
     # BertForBaselines,
     #   BertForAttnHyperGNN,
     # BertForHyperGNN,
-    BertTokenizer,
+    ModernBertConfig,
     # RobertaConfig,
     # RobertaTokenizer,
     get_linear_schedule_with_warmup,
 )
 
-from hgere.models.hgere import BertForHyperGNN
+from hgere.models.hgere import BertForHyperGNN, ModernBertForHyperGNN
 from hgere.data.relation_dataset import RelationDataset
 from hgere.labels import LABELS
 from hgere.utils import get_logger, set_seed
@@ -77,6 +70,7 @@ MODEL_CLASSES = {
     # "baseline": (BertConfig, BertForBaselines, BertTokenizer),
     # "albertbaseline": (AlbertConfig, AlBertForBaselines, AlbertTokenizer),
     "hyper": (BertConfig, BertForHyperGNN, AutoTokenizer),
+    "modernberthyper": (ModernBertConfig, ModernBertForHyperGNN, AutoTokenizer),
     # "alberthyper": (AlbertConfig, AlbertForHyperGNN, AlbertTokenizer),
 }
 
@@ -91,9 +85,9 @@ def train(model, train_dataset, eval_dataset, args, logger):
             wandb_params["name"] = args.run_name
         wandb.init(**wandb_params)
         log_wandb = True
-        #ner_prediction_dir_name = Path(args.ner_prediction_dir).name
-        #output_dir_name = Path(args.output_dir).name
-        #tb_writer = SummaryWriter(
+        # ner_prediction_dir_name = Path(args.ner_prediction_dir).name
+        # output_dir_name = Path(args.output_dir).name
+        # tb_writer = SummaryWriter(
         # ner_prediction_dir_name = Path(args.ner_prediction_dir).name
         # output_dir_name = Path(args.output_dir).name
         # tb_writer = SummaryWriter(
@@ -1614,18 +1608,47 @@ def adjust_tokenizer(tokenizer, model, num_ner_labels, args, logger):
         # print ('add tokens:', tokenizer.additional_special_tokens)
         # print ('add ids:', tokenizer.additional_special_tokens_ids)
         model.albert.resize_token_embeddings(len(tokenizer))
+    elif args.model_type.startswith("modernbert"):
+        # ModernBERT (BPE tokenizer) has no [unused*] slots — add them explicitly.
+        n_markers = num_ner_labels * 4 + 2 if args.use_typemarker else 4
+        special_tokens_dict = {
+            "additional_special_tokens": [f"[unused{x}]" for x in range(n_markers)]
+        }
+        tokenizer.add_special_tokens(special_tokens_dict)
+        model.bert.resize_token_embeddings(len(tokenizer))
 
     if args.do_train:
+        mask_id = tokenizer.encode("[MASK]", add_special_tokens=False)
+        assert len(mask_id) == 1
+        mask_id = mask_id[0]
+
+        if args.model_type.startswith("modernbert"):
+            # BPE tokenizer: "subject"/"object" may be multi-token; fall back to [MASK].
+            subject_ids = tokenizer.encode("subject", add_special_tokens=False)
+            subject_id = subject_ids[0] if len(subject_ids) == 1 else mask_id
+            object_ids = tokenizer.encode("object", add_special_tokens=False)
+            object_id = object_ids[0] if len(object_ids) == 1 else mask_id
+            logger.info(
+                f" subject_id = {subject_id}, object_id = {object_id}, mask_id = {mask_id}"
+            )
+            if args.lminit:
+                word_embeddings = model.bert.embeddings.tok_embeddings.weight.data
+                subs = tokenizer.convert_tokens_to_ids("[unused0]")
+                sube = tokenizer.convert_tokens_to_ids("[unused1]")
+                objs = tokenizer.convert_tokens_to_ids("[unused2]")
+                obje = tokenizer.convert_tokens_to_ids("[unused3]")
+                word_embeddings[subs].copy_(word_embeddings[mask_id])
+                word_embeddings[sube].copy_(word_embeddings[subject_id])
+                word_embeddings[objs].copy_(word_embeddings[mask_id])
+                word_embeddings[obje].copy_(word_embeddings[object_id])
+            return
+
         subject_id = tokenizer.encode("subject", add_special_tokens=False)
         assert len(subject_id) == 1
         subject_id = subject_id[0]
         object_id = tokenizer.encode("object", add_special_tokens=False)
         assert len(object_id) == 1
         object_id = object_id[0]
-
-        mask_id = tokenizer.encode("[MASK]", add_special_tokens=False)
-        assert len(mask_id) == 1
-        mask_id = mask_id[0]
 
         logger.info(
             f" subject_id = {subject_id}, object_id = {object_id}, mask_id = {mask_id}"
