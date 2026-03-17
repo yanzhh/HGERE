@@ -23,12 +23,13 @@ from transformers import (
     # AlbertConfig,
     # AlbertTokenizer,
     # AlbertForSpanMarkerNerPruner,
-    BertTokenizer,
+    BertTokenizerFast,
     ModernBertConfig,
     get_linear_schedule_with_warmup,
 )
 
-from ...data.pruner_data_utils import ACEDatasetNER
+from ...data.collators import PrunerCollator
+from ...data.pruner_dataset import PrunerDataset
 from ...models.span_classifier import (
     BertForSpanMarkerNerPruner,
     ModernBertForSpanMarkerNerPruner,
@@ -45,7 +46,7 @@ ALL_MODELS = []  # pretrained_config_archive_map removed in transformers 4.x
 warnings.filterwarnings("ignore", "Detected call of `lr_scheduler.step\\(\\)`")
 
 MODEL_CLASSES = {
-    "bertspanmarkerpruner": (BertConfig, BertForSpanMarkerNerPruner, BertTokenizer),
+    "bertspanmarkerpruner": (BertConfig, BertForSpanMarkerNerPruner, BertTokenizerFast),
     "modernbertspanmarkerpruner": (
         ModernBertConfig,
         ModernBertForSpanMarkerNerPruner,
@@ -106,7 +107,10 @@ def train(logger, args, model, tokenizer):
 
             if args.model_type.find("span") != -1:
                 inputs["mention_pos"] = batch[4]
-            if args.model_type.startswith("modernbert") and args.model_type.find("span") != -1:
+            if (
+                args.model_type.startswith("modernbert")
+                and args.model_type.find("span") != -1
+            ):
                 inputs["sent_subword_length"] = batch[5]
             with autocast(
                 device_type=args.device_name, dtype=torch.float16, enabled=args.fp16
@@ -155,16 +159,22 @@ def train(logger, args, model, tokenizer):
                     and global_step % args.logging_steps == 0
                 ):
                     # Log metrics
-                    encoder_norm = sum(
-                        p.grad.norm().item() ** 2
-                        for n, p in model.named_parameters()
-                        if p.grad is not None and n.startswith("bert.")
-                    ) ** 0.5
-                    head_norm = sum(
-                        p.grad.norm().item() ** 2
-                        for n, p in model.named_parameters()
-                        if p.grad is not None and not n.startswith("bert.")
-                    ) ** 0.5
+                    encoder_norm = (
+                        sum(
+                            p.grad.norm().item() ** 2
+                            for n, p in model.named_parameters()
+                            if p.grad is not None and n.startswith("bert.")
+                        )
+                        ** 0.5
+                    )
+                    head_norm = (
+                        sum(
+                            p.grad.norm().item() ** 2
+                            for n, p in model.named_parameters()
+                            if p.grad is not None and not n.startswith("bert.")
+                        )
+                        ** 0.5
+                    )
                     metrics_to_log = {
                         "train/lr": scheduler.get_last_lr()[0],
                         "train/loss": (tr_loss - logging_loss) / args.logging_steps,
@@ -238,8 +248,20 @@ def load_data(args, tokenizer, logger):
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     train_file = Path(args.data_dir) / args.train_file
     logger.info(f"Train file: {train_file.name}")
-    train_dataset = ACEDatasetNER(
-        logger=logger, tokenizer=tokenizer, file_path=train_file, args=args
+    train_dataset = PrunerDataset(
+        file_path=train_file,
+        tokenizer=tokenizer,
+        max_seq_length=args.max_seq_length,
+        max_pair_length=args.max_pair_length,
+        max_mention_ori_length=args.max_mention_ori_length,
+        model_type=args.model_type,
+        label_set=args.label_set,
+        rulebased_pruner_file=getattr(args, "rulebased_pruner_file", None),
+        shuffle=getattr(args, "shuffle", False),
+        group_sort=getattr(args, "group_sort", False),
+        group_edge=getattr(args, "group_edge", False),
+        group_axis=getattr(args, "group_axis", -1),
+        nocross=getattr(args, "nocross", False),
     )
     train_sampler = (
         RandomSampler(train_dataset)
@@ -250,7 +272,7 @@ def load_data(args, tokenizer, logger):
         train_dataset,
         sampler=train_sampler,
         batch_size=args.train_batch_size,
-        collate_fn=ACEDatasetNER.collate_fn,
+        collate_fn=PrunerCollator(),
         num_workers=1,
     )
     return train_sampler, train_data_loader

@@ -10,7 +10,8 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, SequentialSampler
 from tqdm import tqdm
 
-from ...data.pruner_data_utils import ACEDatasetNER
+from ...data.collators import PrunerCollator
+from ...data.pruner_dataset import PrunerDataset
 
 
 def evaluate(
@@ -33,12 +34,17 @@ def evaluate(
         eval_output_dir.mkdir(parents=True, exist_ok=True)
 
     # -- load dataset and labels --
-    eval_dataset = ACEDatasetNER(
-        logger=logger,
-        tokenizer=tokenizer,
+    eval_dataset = PrunerDataset(
         file_path=file_path,
-        args=args,
+        tokenizer=tokenizer,
+        max_seq_length=args.max_seq_length,
+        max_pair_length=args.max_pair_length,
+        max_mention_ori_length=args.max_mention_ori_length,
+        model_type=args.model_type,
+        label_set=args.label_set,
         evaluate=True,
+        rulebased_pruner_file=getattr(args, "rulebased_pruner_file", None),
+        nocross=getattr(args, "nocross", False),
     )
     ner_golden_labels = set(eval_dataset.ner_golden_labels)
 
@@ -51,7 +57,7 @@ def evaluate(
         eval_dataset,
         sampler=eval_sampler,
         batch_size=args.eval_batch_size,
-        collate_fn=ACEDatasetNER.collate_fn,
+        collate_fn=PrunerCollator(),
         num_workers=1,
     )
 
@@ -82,7 +88,9 @@ def evaluate(
         # mentions
 
         # -------for pruner------------
-        sent_lens = batch[6]  # word-level sentence lengths (field 6); field 5 = sent_subword_length
+        sent_lens = batch[
+            6
+        ]  # word-level sentence lengths (field 6); field 5 = sent_subword_length
 
         split_ranges, sent_lens_simple, indexs_simple, batch_m2s_simple = (
             _exact_boundaries(indexs, sent_lens, batch_m2s)
@@ -103,7 +111,10 @@ def evaluate(
 
             if args.model_type.find("span") != -1:
                 inputs["mention_pos"] = batch[4]
-            if args.model_type.startswith("modernbert") and args.model_type.find("span") != -1:
+            if (
+                args.model_type.startswith("modernbert")
+                and args.model_type.find("span") != -1
+            ):
                 inputs["sent_subword_length"] = batch[5]
 
             outputs = model(**inputs)
@@ -176,7 +187,9 @@ def evaluate(
         else 1.0
     )
     pruner_metrics = _compute_pruner_wandb_metrics(
-        sentences_predictions, ner_golden_labels, target_recall_diff,
+        sentences_predictions,
+        ner_golden_labels,
+        target_recall_diff,
         rulebased_upper_bound=rulebased_upper_bound,
     )
     results.update(pruner_metrics)
@@ -312,7 +325,7 @@ def _select_sent_spans(sent_spans, prune_config):
     method = prune_config["best_method"]
     if method == "threshold":
         t = prune_config["parameters"]
-        return [(s, e, p, l) for s, e, p, l in sent_spans if p >= t]
+        return [(s, e, p, lbl) for s, e, p, lbl in sent_spans if p >= t]
     elif method == "topk":
         params = prune_config["parameters"]
         lam = params["topk_ratio"]
@@ -777,7 +790,12 @@ def _get_batch_mentions(batch_m2s, model_device):
     batch_size = len(batch_m2s)
     batch_mentions = []
     for batch_idx in range(batch_size):
-        batch_mentions.append(torch.tensor(batch_m2s[batch_idx], device=model_device))
+        mentions = batch_m2s[batch_idx]
+        if len(mentions) == 0:
+            t = torch.zeros((0, 2), device=model_device, dtype=torch.long)
+        else:
+            t = torch.tensor(mentions, device=model_device)
+        batch_mentions.append(t)
     batch_mentions = pad_sequence(batch_mentions, padding_value=-1).permute(1, 0, 2)
 
     return batch_mentions

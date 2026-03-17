@@ -1,0 +1,17 @@
+ner:
+  - WEA
+  - LOC
+  - VEH
+  - GPE
+  - ORG
+  - PER
+
+relations:
+  symmetric:
+    - PER-SOC
+  non_symmetric:
+    - OTHER-AFF
+    - ART
+    - GPE-AFF
+    - EMP-ORG
+    - PHYS

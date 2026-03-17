@@ -58,6 +58,15 @@ Data lives in `/home/ottowg/projects/gsap/related_datasets/` (external to this r
 - When adding dependencies, only edit `pyproject.toml` and tell the user to run `uv sync`.
 - Always use `uv run` to execute scripts and tools (e.g. `uv run pytest`, `uv run python script.py`).
 
+## Development Workflow
+
+- **Test-driven development (TDD)**: always write tests first, then implement or restructure code.
+  - Tests go in `tests/` mirroring the `src/` structure (e.g. `tests/hgere/data/test_pruner_dataset.py`).
+  - Run tests with `uv run pytest`.
+- **Typed signatures**: all functions and methods must have complete type annotations (parameters + return type).
+- **Code formatting**: run `uv run ruff format <file>` after writing or editing any Python file.
+- **Linting**: run `uv run ruff check <file>` and fix all issues before considering work done.
+
 ## Other
 
 - `pipeline/` — preprocessing utilities

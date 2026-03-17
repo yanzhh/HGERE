@@ -1,0 +1,24 @@
+# Generic English NER types (spaCy-style). Used as a fallback by the pruner.
+ner:
+  - CARDINAL
+  - DATE
+  - EVENT
+  - FAC
+  - GPE
+  - LANGUAGE
+  - LAW
+  - LOC
+  - MONEY
+  - NORP
+  - ORDINAL
+  - ORG
+  - PERCENT
+  - PERSON
+  - PRODUCT
+  - QUANTITY
+  - TIME
+  - WORK_OF_ART
+
+relations:
+  symmetric: []
+  non_symmetric: []

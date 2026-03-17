@@ -1,0 +1,19 @@
+# Alias for ace05 — used by pruner scripts targeting ACE data.
+ner:
+  - FAC
+  - WEA
+  - LOC
+  - VEH
+  - GPE
+  - ORG
+  - PER
+
+relations:
+  symmetric:
+    - PER-SOC
+  non_symmetric:
+    - ART
+    - ORG-AFF
+    - GEN-AFF
+    - PHYS
+    - PART-WHOLE

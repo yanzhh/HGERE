@@ -11,7 +11,7 @@
 # --purity_threshold 1.0  (default): only patterns that are 100% NIL in
 #                  training are candidates at all.
 
-DATADIR=/home/ottowg/projects/gsap/related_datasets/scierc/dataset/
+DATADIR=datasets/scierc
 OUTDIR=saves/scierc/pruner_rulebased
 mkdir -p $OUTDIR
 

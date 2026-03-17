@@ -1,0 +1,30 @@
+ner:
+  - Abbreviation
+  - AlternativeName
+  - Application
+  - Citation
+  - Developer
+  - Extension
+  - License
+  - OperatingSystem
+  - PlugIn
+  - ProgrammingEnvironment
+  - Release
+  - SoftwareCoreference
+  - URL
+  - Version
+
+relations:
+  symmetric: []
+  non_symmetric:
+    - Version_of
+    - Developer_of
+    - Citation_of
+    - URL_of
+    - PlugIn_of
+    - Release_of
+    - Abbreviation_of
+    - Specification_of
+    - Extension_of
+    - License_of
+    - AlternativeName_of

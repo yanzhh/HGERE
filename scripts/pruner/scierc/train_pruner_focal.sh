@@ -1,6 +1,6 @@
 # SciERC with scibert + rule-based pre-filter + focal loss
 GPU_ID=0
-DATADIR=/home/ottowg/projects/gsap/related_datasets/scierc/dataset/
+DATADIR=datasets/scierc/
 seed=43
 for bs in 32; do
 for minent in 1; do
@@ -13,8 +13,9 @@ MODEL_DIR=saves/scierc/pruner/${NICK_NAME}
 OUTPUT_DIR=saves/scierc/pruner/${NICK_NAME}
 # --prune_config ${OUTPUT_DIR} \
 CUDA_VISIBLE_DEVICES=$GPU_ID  python3  run_pruner.py  \
+    --limit 10 \
     --pruner_loss focal \
-    --rulebased-pruner-file scierc_rulebased.json \
+    --rulebased-pruner-file saves/scierc/pruner_rulebased/scierc_rulebased.json \
     --project_name SciERC-Pruner \
     --run_name $NICK_NAME \
     --seed $seed \
@@ -31,7 +32,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID  python3  run_pruner.py  \
     --base_model_name_or_path  pretrained_models/scibert_scivocab_uncased  \
     --do_lower_case  \
     --learning_rate $lr  \
-    --num_train_epochs 8  \
+    --num_train_epochs 3  \
     --eval_epochs 1   \
     --per_gpu_train_batch_size  $bs  \
     --per_gpu_eval_batch_size $bs \

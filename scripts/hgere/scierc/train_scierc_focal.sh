@@ -1,8 +1,7 @@
 # SciERC HGERE — train on focal pruner predictions (focal-prefilter-2e-5)
 GPU_ID=0
-PRUNER_DIR=pruner_predictions/scierc/focal-prefilter-2e-5
 for seed in 43; do
-for bs in 18; do
+for bs in 24; do
 for lr in 2e-5; do
 for lr_cls in 1e-4; do
 for seq in 512; do
@@ -16,8 +15,9 @@ for iter in 1; do
 for eps in 1e-8; do
 for turn in -; do # 0.2
 for steepness in -; do #20
-for epoch in 8; do
-NICK_NAME=scierc-re-focal-iter_1
+for epoch in 10; do
+NICK_NAME=scierc-re-focal-threshold
+PRUNER_DIR=pruner_predictions/scierc/focal-prefilter-2e-5
 OUTPUT_DIR=saves/scierc/HGERE/$NICK_NAME
 mkdir -p $OUTPUT_DIR
 cp $0 $OUTPUT_DIR/train_script.sh
@@ -25,8 +25,10 @@ cp $0 $OUTPUT_DIR/train_script.sh
 #    --train_time_loss_turn $turn \
 #    --train_time_loss_steepness $steepness \
 # --shuffle \
-CUDA_VISIBLE_DEVICES=$GPU_ID  python  run_hgnn.py  \
+CUDA_VISIBLE_DEVICES=$GPU_ID uv run python run_hgnn.py \
     --re_focal_loss \
+    --preload \
+    --shuffle \
     --project_name scierc-hgere \
     --run_name $NICK_NAME \
     --output_dir $OUTPUT_DIR \

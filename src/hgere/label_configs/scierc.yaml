@@ -1,0 +1,18 @@
+ner:
+  - Method
+  - OtherScientificTerm
+  - Task
+  - Generic
+  - Material
+  - Metric
+
+relations:
+  symmetric:
+    - CONJUNCTION
+    - COMPARE
+  non_symmetric:
+    - PART-OF
+    - USED-FOR
+    - FEATURE-OF
+    - EVALUATE-FOR
+    - HYPONYM-OF
