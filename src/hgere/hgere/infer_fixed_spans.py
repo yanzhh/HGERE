@@ -27,8 +27,16 @@ _EVAL_KEYS = [
 ]
 
 
-def infer_fixed_spans(model, eval_dataset, args, logger, source_file_path, output_path,
-                      gold_only: bool = False):
+def infer_fixed_spans(
+    model,
+    eval_dataset,
+    args,
+    logger,
+    source_file_path,
+    output_path,
+    gold_only: bool = False,
+    disable_progress: bool = False,
+):
     """Run inference using fixed (gold) entity spans as candidates.
 
     For NER: masks the NIL class from the logits so every span receives the
@@ -63,7 +71,12 @@ def infer_fixed_spans(model, eval_dataset, args, logger, source_file_path, outpu
     nil_index = eval_dataset.ner_label_list.index("NIL")
 
     with torch.no_grad():
-        for batch in tqdm(eval_dataset.loader, desc="Fixed-span inference"):
+        for batch in tqdm(
+            eval_dataset.loader,
+            desc="Fixed-span inference",
+            total=len(eval_dataset.loader),
+            disable=disable_progress,
+        ):
             sent_indices = batch["indexs"]
             obj_mentions = batch["obj_token_pos"]
             ent_counts = batch["ent_numbers"]
@@ -158,9 +171,7 @@ def infer_fixed_spans(model, eval_dataset, args, logger, source_file_path, outpu
     for sent_id, sent_ents in ner_predictions.items():
         sent_rels = sorted(rel_predictions[sent_id], key=lambda x: -x[-1])
 
-        pred_ner = sorted(
-            span + (label,) for span, (label, _, __) in sent_ents.items()
-        )
+        pred_ner = sorted(span + (label,) for span, (label, _, __) in sent_ents.items())
         # predicted_ner_proba entries: [start, end, label, prob_total, prob_no_nil]
         # prob_total  = P(label | all classes incl. NIL)
         # prob_no_nil = P(label | non-NIL classes only)
@@ -168,12 +179,8 @@ def infer_fixed_spans(model, eval_dataset, args, logger, source_file_path, outpu
             span + (label, p_total, p_no_nil)
             for span, (label, p_total, p_no_nil) in sent_ents.items()
         )
-        pred_rel = sorted(
-            s + o + (lbl,) for s, _, o, __, lbl, ___ in sent_rels
-        )
-        pred_rel_proba = sorted(
-            s + o + (lbl, sc) for s, _, o, __, lbl, sc in sent_rels
-        )
+        pred_rel = sorted(s + o + (lbl,) for s, _, o, __, lbl, ___ in sent_rels)
+        pred_rel_proba = sorted(s + o + (lbl, sc) for s, _, o, __, lbl, sc in sent_rels)
 
         tot_ner[sent_id] = pred_ner
         tot_ner_proba[sent_id] = pred_ner_proba
@@ -188,18 +195,34 @@ def infer_fixed_spans(model, eval_dataset, args, logger, source_file_path, outpu
             num_sents = len(data["sentences"])
 
             pred_ner = [tot_ner.get((l_idx, n), []) for n in range(num_sents)]
-            pred_ner_proba = [tot_ner_proba.get((l_idx, n), []) for n in range(num_sents)]
+            pred_ner_proba = [
+                tot_ner_proba.get((l_idx, n), []) for n in range(num_sents)
+            ]
             pred_rel = [tot_rel.get((l_idx, n), []) for n in range(num_sents)]
-            pred_rel_proba = [tot_rel_proba.get((l_idx, n), []) for n in range(num_sents)]
+            pred_rel_proba = [
+                tot_rel_proba.get((l_idx, n), []) for n in range(num_sents)
+            ]
 
             if gold_only:
                 gold_ner = data.get("ner", [[] for _ in range(num_sents)])
                 for n in range(num_sents):
-                    gold_spans = {(e[0], e[1]) for e in (gold_ner[n] if n < len(gold_ner) else [])}
+                    gold_spans = {
+                        (e[0], e[1]) for e in (gold_ner[n] if n < len(gold_ner) else [])
+                    }
                     pred_ner[n] = [e for e in pred_ner[n] if (e[0], e[1]) in gold_spans]
-                    pred_ner_proba[n] = [e for e in pred_ner_proba[n] if (e[0], e[1]) in gold_spans]
-                    pred_rel[n] = [r for r in pred_rel[n] if (r[0], r[1]) in gold_spans and (r[2], r[3]) in gold_spans]
-                    pred_rel_proba[n] = [r for r in pred_rel_proba[n] if (r[0], r[1]) in gold_spans and (r[2], r[3]) in gold_spans]
+                    pred_ner_proba[n] = [
+                        e for e in pred_ner_proba[n] if (e[0], e[1]) in gold_spans
+                    ]
+                    pred_rel[n] = [
+                        r
+                        for r in pred_rel[n]
+                        if (r[0], r[1]) in gold_spans and (r[2], r[3]) in gold_spans
+                    ]
+                    pred_rel_proba[n] = [
+                        r
+                        for r in pred_rel_proba[n]
+                        if (r[0], r[1]) in gold_spans and (r[2], r[3]) in gold_spans
+                    ]
 
             data["predicted_ner"] = pred_ner
             data["predicted_ner_proba"] = pred_ner_proba

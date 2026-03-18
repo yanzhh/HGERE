@@ -1,10 +1,10 @@
-"""CLI command: train-hgere
+"""CLI command: train-pruner
 
-Trains the HGERE model from a YAML training config.
+Trains the span pruner from a YAML training config.
 
 Usage
 -----
-    uv run train-hgere --config configs/train/gsap/train_gsap.yaml
+    uv run train-pruner --config configs/train/gsap/train_gsap.yaml
 """
 
 from __future__ import annotations
@@ -18,64 +18,46 @@ from typing import Any
 
 import yaml
 
-# Keys under hgere: that are inference-only and must not be forwarded to the trainer.
-_HGERE_SKIP_KEYS: frozenset[str] = frozenset({"train_params"})
+# Keys under pruner: that are inference-only and must not be forwarded to the trainer.
+_PRUNER_SKIP_KEYS: frozenset[str] = frozenset({"final_pruning", "train_params"})
 
-# Boolean store_true flags accepted by run_hgnn.py.
+# Boolean store_true flags accepted by train-span-classifier.
 _BOOL_FLAGS: frozenset[str] = frozenset(
     {
         "do_train",
-        "eval_train",
-        "eval_dev",
-        "eval_test",
+        "do_eval",
+        "do_test",
         "do_lower_case",
-        "log_wandb",
-        "fp16",
         "evaluate_during_training",
         "eval_all_checkpoints",
-        "overwrite_output_dir",
-        "no_cuda",
-        "overwrite_cache",
-        "attn_self",
-        "ner_focal_loss",
-        "re_focal_loss",
-        "layernorm",
-        "layernorm_1st",
-        "no_sym",
+        "overwrite_model_dir",
+        "fp16",
+        "onedropout",
         "lminit",
         "nocross",
+        "biaf_span",
+        "biaf_factorize",
+        "output_results",
+        "no_cuda",
+        "overwrite_cache",
+        "norm_emb",
         "shuffle",
-        "batch_by_size",
-        "save_results",
+        "group_edge",
+        "group_sort",
         "no_test",
-        "att_left",
-        "att_right",
-        "use_ner_results",
-        "use_typemarker",
-        "eval_unidirect",
-        "rel_factorize",
-        "uni_ent",
-        "pred_sub",
-        "agg_with_self",
-        "fix_obj",
-        "attn_res",
-        "eval_logits",
-        "eval_logsoftmax",
-        "eval_softmax",
-        "preload_dataset",
-        "train_time_loss_weighting",
     }
 )
 
-# YAML key → CLI flag name (only where they differ from key.replace("_", "-")).
+# YAML key → CLI flag name (only where they differ).
 _KEY_REMAP: dict[str, str] = {
-    "model_dir": "output-dir",
-    "base_model_name_or_path": "model-name-or-path",
+    "rulebased_pruner_file": "rulebased-pruner-file",
+    "prune_config": "prune-config",
+    "base_model_name_or_path": "base-model-name-or-path",
 }
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Train the HGERE model from a YAML config.")
+    p = argparse.ArgumentParser(description="Train the span pruner from a YAML config.")
     p.add_argument(
         "--config", type=str, required=True, help="Path to training YAML config."
     )
@@ -90,15 +72,19 @@ def _config_to_argv(
     flat: dict[str, Any] = {
         k: v
         for k, v in shared.items()
-        if k not in _HGERE_SKIP_KEYS and not isinstance(v, dict)
+        if k not in _PRUNER_SKIP_KEYS and not isinstance(v, dict)
     }
     flat.update(train_params)
     flat["label_set"] = label_set
 
+    # pruner trainer expects both --model_dir and --output_dir; use model_dir for both.
+    if "model_dir" in flat and "output_dir" not in flat:
+        flat["output_dir"] = flat["model_dir"]
+
     # Always enable training + evaluation modes.
     flat.setdefault("do_train", True)
-    flat.setdefault("eval_dev", True)
-    flat.setdefault("eval_test", True)
+    flat.setdefault("do_eval", True)
+    flat.setdefault("do_test", True)
 
     argv: list[str] = []
     for key, value in flat.items():
@@ -132,11 +118,11 @@ def cli() -> None:
         cfg = yaml.safe_load(f)
 
     label_set: str = cfg.get("label_set", "")
-    hgere_cfg: dict[str, Any] = cfg.get("hgere", {})
-    train_params: dict[str, Any] = hgere_cfg.get("train_params", {})
+    pruner_cfg: dict[str, Any] = cfg.get("pruner", {})
+    train_params: dict[str, Any] = pruner_cfg.get("train_params", {})
 
-    argv = _config_to_argv(hgere_cfg, train_params, label_set)
-    cmd = ["uv", "run", "python", "run_hgnn.py"] + argv
+    argv = _config_to_argv(pruner_cfg, train_params, label_set)
+    cmd = ["uv", "run", "train-span-classifier"] + argv
     logger.info("Running: %s", " ".join(cmd))
     result = subprocess.run(cmd)
     sys.exit(result.returncode)

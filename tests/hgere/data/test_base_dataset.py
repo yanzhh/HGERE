@@ -103,6 +103,47 @@ class TestIsPunctuation:
 
 
 # ---------------------------------------------------------------------------
+# _load_raw_document: doc_key / doc_id fallback
+# ---------------------------------------------------------------------------
+
+
+class TestLoadRawDocumentDocKey:
+    def test_doc_id_accepted(self, tmp_path: Path, mock_tokenizer: MagicMock) -> None:
+        """Documents using 'doc_id' instead of 'doc_key' should load fine."""
+        p = tmp_path / "doc_id.jsonl"
+        p.write_text(json.dumps({"doc_id": "my_doc", "sentences": [["hello"]]}) + "\n")
+        ds = _ConcreteDataset(p, mock_tokenizer, max_seq_length=128)
+        doc = ds._load_raw_document(0)
+        assert doc.doc_key == "my_doc"
+
+    def test_doc_key_still_accepted(
+        self, tiny_jsonl_path: Path, mock_tokenizer: MagicMock
+    ) -> None:
+        ds = _ConcreteDataset(tiny_jsonl_path, mock_tokenizer, max_seq_length=128)
+        doc = ds._load_raw_document(0)
+        assert doc.doc_key == "doc_0"
+
+    def test_both_fields_raise(self, tmp_path: Path, mock_tokenizer: MagicMock) -> None:
+        """Having both 'doc_key' and 'doc_id' is ambiguous and must raise."""
+        p = tmp_path / "both.jsonl"
+        p.write_text(
+            json.dumps({"doc_key": "a", "doc_id": "b", "sentences": [["hello"]]}) + "\n"
+        )
+        ds = _ConcreteDataset(p, mock_tokenizer, max_seq_length=128)
+        with pytest.raises(KeyError, match="both"):
+            ds._load_raw_document(0)
+
+    def test_neither_field_raises(
+        self, tmp_path: Path, mock_tokenizer: MagicMock
+    ) -> None:
+        p = tmp_path / "neither.jsonl"
+        p.write_text(json.dumps({"sentences": [["hello"]]}) + "\n")
+        ds = _ConcreteDataset(p, mock_tokenizer, max_seq_length=128)
+        with pytest.raises(KeyError, match="neither"):
+            ds._load_raw_document(0)
+
+
+# ---------------------------------------------------------------------------
 # Step 4 — _tokenize_document: subword alignment
 # ---------------------------------------------------------------------------
 

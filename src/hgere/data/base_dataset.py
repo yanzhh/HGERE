@@ -115,7 +115,22 @@ class DocumentDataset(Dataset, ABC):
             )
             sentences.append(Sentence(tokens=tokens, ner=ner, relations=relations))
 
-        return Document(doc_key=raw["doc_key"], sentences=tuple(sentences))
+        has_doc_key = "doc_key" in raw
+        has_doc_id = "doc_id" in raw
+        if has_doc_key and has_doc_id:
+            raise KeyError(
+                f"Document at line {line_idx} has both 'doc_key' and 'doc_id' fields; "
+                "use exactly one."
+            )
+        if has_doc_key:
+            doc_key = raw["doc_key"]
+        elif has_doc_id:
+            doc_key = raw["doc_id"]
+        else:
+            raise KeyError(
+                f"Document at line {line_idx} has neither 'doc_key' nor 'doc_id'."
+            )
+        return Document(doc_key=doc_key, sentences=tuple(sentences))
 
     # ------------------------------------------------------------------
     # Subword alignment
@@ -135,9 +150,14 @@ class DocumentDataset(Dataset, ABC):
             all_tokens.extend(sent.tokens)
             sentence_boundaries.append(len(all_tokens))
 
+        # Whitespace-only tokens produce no subwords and break the word_id
+        # alignment.  Replace them with "." so every position gets at least one
+        # subword; the original all_tokens list (and all span indices) are unchanged.
+        tokens_for_tokenizer = [tok if tok.strip() else "." for tok in all_tokens]
+
         # Single tokenizer call for the whole document
         enc = self.tokenizer(
-            all_tokens, is_split_into_words=True, add_special_tokens=False
+            tokens_for_tokenizer, is_split_into_words=True, add_special_tokens=False
         )
         word_ids_list: list[int] = enc.word_ids()
         subword_tokens: list[str] = enc.tokens()
@@ -149,7 +169,16 @@ class DocumentDataset(Dataset, ABC):
                 token2subword.append(j)
         token2subword.append(len(word_ids_list))
 
-        assert len(token2subword) == len(all_tokens) + 1
+        if len(token2subword) != len(all_tokens) + 1:
+            seen_ids = set(word_ids_list)
+            missing = [
+                (i, repr(tok)) for i, tok in enumerate(all_tokens) if i not in seen_ids
+            ]
+            raise ValueError(
+                f"Tokenizer produced no subwords for {len(missing)} token(s) "
+                f"in document '{doc.doc_key}': {missing[:10]}. "
+                "Check for empty strings or unsupported characters in the input."
+            )
 
         subword2token: list[int] = word_ids_list
         subword_start_positions: frozenset[int] = frozenset(token2subword[:-1])

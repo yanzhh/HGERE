@@ -31,6 +31,10 @@ plot-ner-candidates = "hgere.commands.plot_ner_candidates_by_sent_len:main"
 infer-fixed-spans = "hgere.commands.infer_fixed_spans:cli"
 infer-pruner-augmented = "hgere.commands.infer_pruner_augmented:cli"
 download-dataset = "hgere.commands.download_dataset:cli"
+run-pipeline = "hgere.commands.run_pipeline:cli"
+benchmark-pipeline = "hgere.commands.benchmark_pipeline:cli"
+train-pruner = "hgere.commands.train_pruner:cli"
+train-hgere = "hgere.commands.train_hgere:cli"
 
 [dependency-groups]
 dev = [

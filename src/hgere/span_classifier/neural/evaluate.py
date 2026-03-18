@@ -14,6 +14,151 @@ from ...data.collators import PrunerCollator
 from ...data.pruner_dataset import PrunerDataset
 
 
+def run_pruner_inference(
+    args: object,
+    model: object,
+    tokenizer: object,
+    file_path: str,
+) -> dict[tuple[int, int], list[tuple[int, int, float, str]]]:
+    """Run pruner inference and return the span candidate pool per sentence.
+
+    This is a lean version of evaluate() without metric computation.
+    Returns a dict mapping (line_idx, sent_idx) to a list of non-overlapping
+    candidate spans: [(start, end, prob, gold_label), ...], sorted by descending
+    probability (top-K decoder already applied).
+
+    Args:
+        args: Namespace with pruner inference params (device, model_type,
+            max_seq_length, max_pair_length, max_mention_ori_length, label_set,
+            topk_ratio, max_mentions_num, min_mentions_num, per_gpu_eval_batch_size,
+            n_gpu).
+        model: Loaded BertForSpanMarkerNerPruner in eval mode.
+        tokenizer: Matching tokenizer.
+        file_path: Path to JSONL input file.
+
+    Returns:
+        Dict mapping (line_idx, sent_idx) -> list of (start, end, prob, gold_label).
+    """
+    eval_dataset = PrunerDataset(
+        file_path=file_path,
+        tokenizer=tokenizer,
+        max_seq_length=args.max_seq_length,
+        max_pair_length=args.max_pair_length,
+        max_mention_ori_length=args.max_mention_ori_length,
+        model_type=args.model_type,
+        label_set=args.label_set,
+        evaluate=True,
+        nocross=getattr(args, "nocross", False),
+    )
+
+    goldspan2label = _span2label(set(eval_dataset.ner_golden_labels))
+    eval_sampler = SequentialSampler(eval_dataset)
+    eval_batch_size = args.per_gpu_eval_batch_size * max(1, getattr(args, "n_gpu", 1))
+    eval_dataloader = DataLoader(
+        eval_dataset,
+        sampler=eval_sampler,
+        batch_size=eval_batch_size,
+        collate_fn=PrunerCollator(),
+        num_workers=1,
+    )
+
+    topk_infos = (
+        args.topk_ratio,
+        args.min_mentions_num,
+        args.max_mentions_num,
+    )
+
+    sentences_predictions: dict = defaultdict(list)
+    model.eval()
+
+    closed_sentences: dict = {"probs": None}
+    open_sentence: dict = {"probs": None}
+
+    for batch in eval_dataloader:
+        indexs = batch[-2]
+        batch_m2s = batch[-1]
+        sent_lens = batch[6]
+
+        split_ranges, sent_lens_simple, indexs_simple, batch_m2s_simple = (
+            _exact_boundaries(indexs, sent_lens, batch_m2s)
+        )
+
+        batch = tuple(t.to(args.device) for t in batch[:6])
+
+        with torch.no_grad():
+            inputs = {
+                "input_ids": batch[0],
+                "attention_mask": batch[1],
+                "position_ids": batch[2],
+                "labels": batch[3],
+            }
+            if args.model_type.find("span") != -1:
+                inputs["mention_pos"] = batch[4]
+            if (
+                args.model_type.startswith("modernbert")
+                and args.model_type.find("span") != -1
+            ):
+                inputs["sent_subword_length"] = batch[5]
+
+            outputs = model(**inputs)
+            ent_masks = (inputs["labels"] > -1).bool()
+            ner_logits = outputs[1].squeeze(-1)
+            ner_probs = ner_logits.sigmoid()
+            ner_probs = ner_probs.masked_fill(~ent_masks, 0)
+
+            split_probs = torch.split(ner_probs, split_ranges, dim=0)
+            split_mask = torch.split(ent_masks, split_ranges, dim=0)
+            gold_labels = (inputs["labels"] > 0).int()
+            split_gold_labels = torch.split(gold_labels, split_ranges, dim=0)
+
+            split_probs_cat = [s.reshape(-1) for s in split_probs]
+            split_mask_cat = [s.reshape(-1) for s in split_mask]
+            split_gold_labels_cat = [s.reshape(-1) for s in split_gold_labels]
+
+            current_sentences = dict(
+                probs=split_probs_cat,
+                indexs=indexs_simple,
+                sent_lens=sent_lens_simple,
+                ent_masks=split_mask_cat,
+                gold_labels=split_gold_labels_cat,
+                mentions=batch_m2s_simple,
+            )
+
+            closed_sentences, open_sentence = _extent_tensor(
+                open_sentence, current_sentences
+            )
+            if closed_sentences["probs"] is not None:
+                pruned_ent_spans, _, __ = _decode_pruner_topk(
+                    topk_infos, closed_sentences
+                )
+                _update_sentences_predictions(
+                    sentences_predictions,
+                    closed_sentences,
+                    pruned_ent_spans,
+                    goldspan2label,
+                )
+
+    if open_sentence["probs"] is not None:
+        pruned_ent_spans, _, __ = _decode_pruner_topk(topk_infos, open_sentence)
+        _update_sentences_predictions(
+            sentences_predictions, open_sentence, pruned_ent_spans, goldspan2label
+        )
+
+    # Apply non-overlapping filter (same as postprocess_predictions but without metrics)
+    predict_ners: dict = defaultdict(list)
+    for sentence_id, sentence_spans in sentences_predictions.items():
+        sentence_spans.sort(key=lambda x: -x[2])
+        non_overlapping: list = []
+        for start, end, prob, label_gold in sentence_spans:
+            if not _overlapping_span_exist(
+                start, end, label_gold, non_overlapping, force_same_label=True
+            ):
+                non_overlapping.append((start, end, prob, label_gold))
+                predict_ners[sentence_id].append((start, end, prob, label_gold))
+
+    return dict(predict_ners)
+
+
 def evaluate(
     logger,
     args,
