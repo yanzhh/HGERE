@@ -1,5 +1,6 @@
 # Project related
 reports/
+pipeline/
 
 # ML related
 wandb/
@@ -176,3 +177,4 @@ datasets/
 pretrained_models/
 uv.lock
 pruner_predictions/
+pipeline/
