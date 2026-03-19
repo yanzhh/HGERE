@@ -2,6 +2,18 @@
 reports/
 pipeline/
 
+# ignore saves
+saves/
+datasets_copy/
+/models/
+slurm/
+logs/
+/data/
+datasets/
+pretrained_models/
+uv.lock
+pruner_predictions/
+pipeline/
 # ML related
 wandb/
 
@@ -167,14 +179,3 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# ignore saves
-saves/
-/models/
-slurm/
-logs/
-/data/
-datasets/
-pretrained_models/
-uv.lock
-pruner_predictions/
-pipeline/

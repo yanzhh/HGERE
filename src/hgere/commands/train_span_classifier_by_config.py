@@ -1,27 +1,38 @@
-"""CLI command: train-pruner
+"""CLI command: train-span-classifier-by-config
 
 Trains the span pruner from a YAML training config.
 
-Usage
------
-    uv run train-pruner --config configs/train/gsap/train_gsap.yaml
+The CLI is generated dynamically from :class:`~hgere.span_classifier.config.PrunerTrainConfig`
+so that the Pydantic model is the single source of truth for all parameters.
+
+Usage — config file only
+------------------------
+    uv run train-span-classifier-by-config --config configs/train/gsap/train_gsap.yaml
+
+Usage — override individual values via CLI
+------------------------------------------
+    uv run train-span-classifier-by-config \\
+        --config configs/train/gsap/train_gsap.yaml \\
+        --train_params__learning_rate 2e-6 \\
+        --train_params__fp16
+
+Priority: CLI flags > config file > Pydantic defaults.
 """
 
 from __future__ import annotations
 
-import argparse
 import logging
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
 
-import yaml
+from hgere.config.cli_gen import apply_config_and_cli, build_argparser
+from hgere.span_classifier.config import PrunerTrainConfig
 
-# Keys under pruner: that are inference-only and must not be forwarded to the trainer.
-_PRUNER_SKIP_KEYS: frozenset[str] = frozenset({"final_pruning", "train_params"})
+# ---------------------------------------------------------------------------
+# Boolean store_true flags accepted by train-span-classifier
+# ---------------------------------------------------------------------------
 
-# Boolean store_true flags accepted by train-span-classifier.
 _BOOL_FLAGS: frozenset[str] = frozenset(
     {
         "do_train",
@@ -40,57 +51,49 @@ _BOOL_FLAGS: frozenset[str] = frozenset(
         "output_results",
         "no_cuda",
         "overwrite_cache",
-        "norm_emb",
-        "shuffle",
-        "group_edge",
-        "group_sort",
-        "no_test",
     }
 )
 
-# YAML key → CLI flag name (only where they differ).
+# CLI flag remaps: field name → flag name used by train-span-classifier
 _KEY_REMAP: dict[str, str] = {
     "rulebased_pruner_file": "rulebased-pruner-file",
-    "prune_config": "prune-config",
-    "base_model_name_or_path": "base-model-name-or-path",
 }
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Train the span pruner from a YAML config.")
-    p.add_argument(
-        "--config", type=str, required=True, help="Path to training YAML config."
-    )
-    return p
+# ---------------------------------------------------------------------------
+# Model → subprocess argv for train-span-classifier
+# ---------------------------------------------------------------------------
 
 
-def _config_to_argv(
-    shared: dict[str, Any],
-    train_params: dict[str, Any],
-    label_set: str,
-) -> list[str]:
-    flat: dict[str, Any] = {
-        k: v
-        for k, v in shared.items()
-        if k not in _PRUNER_SKIP_KEYS and not isinstance(v, dict)
-    }
-    flat.update(train_params)
-    flat["label_set"] = label_set
+def model_to_argv(config: PrunerTrainConfig) -> list[str]:
+    """Translate a validated :class:`PrunerTrainConfig` to a flat argv list for
+    ``train-span-classifier``.
 
-    # pruner trainer expects both --model_dir and --output_dir; use model_dir for both.
-    if "model_dir" in flat and "output_dir" not in flat:
-        flat["output_dir"] = flat["model_dir"]
+    The pruner trainer (``train_span_classifier.py``) still uses a flat argparse
+    namespace.  This function bridges the two worlds by:
 
-    # Always enable training + evaluation modes.
+    1. Flattening ``train_params`` into the top-level dict (dropping the prefix).
+    2. Duplicating ``model_dir`` as ``output_dir`` (the trainer expects both).
+    3. Injecting the always-on training mode flags.
+    4. Converting booleans to ``store_true`` style flags.
+    """
+    flat: dict[str, Any] = config.model_dump(exclude={"schema_version", "train_params"})
+    flat.update(config.train_params.model_dump())
+
+    # The trainer expects --output_dir as well as --model_dir.
+    flat["output_dir"] = flat["model_dir"]
+
+    # Always-on training flags.
     flat.setdefault("do_train", True)
     flat.setdefault("do_eval", True)
     flat.setdefault("do_test", True)
+    flat.setdefault("output_results", True)
 
     argv: list[str] = []
     for key, value in flat.items():
         if value is None:
             continue
-        flag = _KEY_REMAP.get(key, key.replace("_", "-"))
+        flag = _KEY_REMAP.get(key, key)
         if key in _BOOL_FLAGS:
             if value:
                 argv.append(f"--{flag}")
@@ -99,8 +102,18 @@ def _config_to_argv(
     return argv
 
 
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+
 def cli() -> None:
-    parsed = _build_parser().parse_args()
+    parser = build_argparser(
+        PrunerTrainConfig,
+        description="Train the span pruner. Parameters are loaded from a YAML config "
+        "and can be overridden with individual CLI flags.",
+    )
+    namespace = parser.parse_args()
 
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -109,19 +122,19 @@ def cli() -> None:
     )
     logger = logging.getLogger(__name__)
 
-    config_path = Path(parsed.config)
-    if not config_path.exists():
-        logger.error("Config not found: %s", config_path)
+    # Require at least --config (individual flags alone are not enough to make
+    # a valid config without all required fields).
+    if namespace.config is None:
+        parser.error("--config is required.")
+
+    # Load + merge + validate.  Pydantic gives descriptive errors on bad input.
+    try:
+        config = apply_config_and_cli(namespace, PrunerTrainConfig)
+    except Exception as exc:
+        logger.error("Invalid config: %s", exc)
         sys.exit(1)
 
-    with open(config_path) as f:
-        cfg = yaml.safe_load(f)
-
-    label_set: str = cfg.get("label_set", "")
-    pruner_cfg: dict[str, Any] = cfg.get("pruner", {})
-    train_params: dict[str, Any] = pruner_cfg.get("train_params", {})
-
-    argv = _config_to_argv(pruner_cfg, train_params, label_set)
+    argv = model_to_argv(config)
     cmd = ["uv", "run", "train-span-classifier"] + argv
     logger.info("Running: %s", " ".join(cmd))
     result = subprocess.run(cmd)
