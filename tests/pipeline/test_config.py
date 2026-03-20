@@ -8,7 +8,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from hgere.pipeline.config import (
+from gsapere.pipeline.config import (
     FinalPruningConfig,
     HGEREConfig,
     PipelineConfig,

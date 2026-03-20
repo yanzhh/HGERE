@@ -8,8 +8,8 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 
-from hgere.pipeline.config import HGEREConfig
-from hgere.pipeline.hgere_runner import HGERERunner
+from gsapere.pipeline.config import HGEREConfig
+from gsapere.pipeline.hgere_runner import HGERERunner
 
 
 def _make_hgere_output_doc(doc: dict[str, Any]) -> dict[str, Any]:
@@ -53,7 +53,7 @@ class TestHGERERunner:
         runner._label_set = "gsap"
 
         with patch(
-            "hgere.pipeline.hgere_runner.HGERERunner._run_inference"
+            "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
         ) as mock_inf:
             mock_inf.return_value = [_make_hgere_output_doc(tiny_doc_with_candidates)]
             result = runner.run([tiny_doc_with_candidates])
@@ -72,7 +72,7 @@ class TestHGERERunner:
         runner._label_set = "gsap"
 
         with patch(
-            "hgere.pipeline.hgere_runner.HGERERunner._run_inference"
+            "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
         ) as mock_inf:
             mock_inf.return_value = [_make_hgere_output_doc(tiny_doc_with_candidates)]
             result = runner.run([tiny_doc_with_candidates])
@@ -91,7 +91,7 @@ class TestHGERERunner:
         runner._label_set = "gsap"
 
         with patch(
-            "hgere.pipeline.hgere_runner.HGERERunner._run_inference"
+            "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
         ) as mock_inf:
             mock_inf.return_value = [_make_hgere_output_doc(tiny_doc_with_candidates)]
             result = runner.run([tiny_doc_with_candidates])
@@ -110,7 +110,7 @@ class TestHGERERunner:
         runner._label_set = "gsap"
 
         with patch(
-            "hgere.pipeline.hgere_runner.HGERERunner._run_inference"
+            "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
         ) as mock_inf:
             mock_inf.return_value = [_make_hgere_output_doc(tiny_doc_with_candidates)]
             result = runner.run([tiny_doc_with_candidates])
@@ -131,7 +131,7 @@ class TestHGERERunner:
         runner._label_set = "gsap"
 
         with patch(
-            "hgere.pipeline.hgere_runner.HGERERunner._run_inference"
+            "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
         ) as mock_inf:
             mock_inf.return_value = [
                 _make_hgere_output_doc(d) for d in docs_with_candidates
@@ -155,7 +155,7 @@ class TestHGERERunner:
         created_paths: list[str] = []
 
         def _mock_infer_fixed_spans(
-            model, eval_dataset, args, logger, source_file_path, output_path, gold_only
+            model, eval_dataset, args, logger, source_file_path, output_path, gold_only, **kwargs
         ) -> None:
             created_paths.append(str(output_path))
             # Write minimal output
@@ -164,12 +164,12 @@ class TestHGERERunner:
                 f.write(json.dumps(out) + "\n")
 
         with (
-            patch("hgere.pipeline.hgere_runner.RelationDataset") as MockDS,
+            patch("gsapere.pipeline.hgere_runner.RelationDataset") as MockDS,
             patch(
-                "hgere.pipeline.hgere_runner.infer_fixed_spans",
+                "gsapere.pipeline.hgere_runner.infer_fixed_spans",
                 side_effect=_mock_infer_fixed_spans,
             ),
-            patch("hgere.pipeline.hgere_runner.LABELS") as MockLabels,
+            patch("gsapere.pipeline.hgere_runner.LABELS") as MockLabels,
         ):
             MockDS.return_value = MagicMock()
             MockDS.return_value.build = MagicMock()

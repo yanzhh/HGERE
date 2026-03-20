@@ -61,7 +61,7 @@ Data lives in `/home/ottowg/projects/gsap/related_datasets/` (external to this r
 ## Development Workflow
 
 - **Test-driven development (TDD)**: always write tests first, then implement or restructure code.
-  - Tests go in `tests/` mirroring the `src/` structure (e.g. `tests/hgere/data/test_pruner_dataset.py`).
+  - Tests go in `tests/` mirroring the `src/` structure (e.g. `tests/gsapere/data/test_pruner_dataset.py`).
   - Run tests with `uv run pytest`.
 - **Typed signatures**: all functions and methods must have complete type annotations (parameters + return type).
 - **Code formatting**: run `uv run ruff format <file>` after writing or editing any Python file.
@@ -72,12 +72,12 @@ Data lives in `/home/ottowg/projects/gsap/related_datasets/` (external to this r
 All CLI entry points must follow the **Pydantic-first** pattern — no duplicate argparse definitions:
 
 1. **Pydantic model is the single source of truth** for all parameters. Define fields in
-   `src/hgere/<model>/config.py` with `Field(description=...)`. Never hardcode the same parameter in
+   `src/gsapere/<model>/config.py` with `Field(description=...)`. Never hardcode the same parameter in
    both a config model and an argparse `add_argument` call.
 
-2. **Use `load_config_from_argv`** from `hgere.commands._cli_utils` to handle the two accepted forms:
+2. **Use `load_config_from_argv`** from `gsapere.commands._cli_utils` to handle the two accepted forms:
    - Positional shortcut: `train-<cmd> config.yaml` (single arg without `--`)
-   - Full CLI with overrides: `train-<cmd> --config config.yaml --train_params__learning_rate 2e-5`
+   - Pure CLI params: `train-<cmd> --model_dir saves/... --train_params__learning_rate 2e-5`
 
 3. **Bridge to legacy training code** via a `_config_to_namespace(config) -> argparse.Namespace`
    function that flattens the Pydantic model into a flat namespace. Apply any field remaps here
@@ -94,8 +94,8 @@ All CLI entry points must follow the **Pydantic-first** pattern — no duplicate
    ```
    Docs are written to `documentation/api/`.
 
-Reference implementations: `src/hgere/commands/train_hgere.py`,
-`src/hgere/commands/train_span_classifier.py`.
+Reference implementations: `src/gsapere/commands/train_hgere.py`,
+`src/gsapere/commands/train_span_classifier.py`.
 
 ## Other
 

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hgere.commands.run_pipeline import (
+from gsapere.commands.run_pipeline import (
     _collect_input_files,
     _resolve_output_path,
     _validate_input_output_types,
@@ -186,7 +186,7 @@ class TestCliSingleFile:
 
         mock_pipeline = _make_mock_pipeline(docs)
         with (
-            patch("hgere.commands.run_pipeline.Pipeline") as MockPipeline,
+            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
             patch.object(sys, "argv", [
                 "run-pipeline",
                 "--config", "fake.yaml",
@@ -210,7 +210,7 @@ class TestCliSingleFile:
 
         mock_pipeline = _make_mock_pipeline(docs)
         with (
-            patch("hgere.commands.run_pipeline.Pipeline") as MockPipeline,
+            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
             patch.object(sys, "argv", [
                 "run-pipeline",
                 "--config", "fake.yaml",
@@ -224,7 +224,7 @@ class TestCliSingleFile:
 
     def test_missing_input_exits(self, tmp_path: Path) -> None:
         with (
-            patch("hgere.commands.run_pipeline.Pipeline"),
+            patch("gsapere.commands.run_pipeline.Pipeline"),
             patch.object(sys, "argv", [
                 "run-pipeline",
                 "--config", "fake.yaml",
@@ -249,7 +249,7 @@ class TestCliDirectoryMode:
         mock_pipeline = _make_mock_pipeline(docs_a + docs_b)
 
         with (
-            patch("hgere.commands.run_pipeline.Pipeline") as MockPipeline,
+            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
             patch.object(sys, "argv", [
                 "run-pipeline",
                 "--config", "fake.yaml",
@@ -271,7 +271,7 @@ class TestCliDirectoryMode:
 
         mock_pipeline = _make_mock_pipeline([_make_doc("x")])
         with (
-            patch("hgere.commands.run_pipeline.Pipeline") as MockPipeline,
+            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
             patch.object(sys, "argv", [
                 "run-pipeline",
                 "--config", "fake.yaml",
@@ -292,7 +292,7 @@ class TestCliDirectoryMode:
 
         mock_pipeline = _make_mock_pipeline([_make_doc("x")])
         with (
-            patch("hgere.commands.run_pipeline.Pipeline") as MockPipeline,
+            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
             patch.object(sys, "argv", [
                 "run-pipeline",
                 "--config", "fake.yaml",
@@ -313,7 +313,7 @@ class TestCliDirectoryMode:
 
         mock_pipeline = _make_mock_pipeline([_make_doc("x")])
         with (
-            patch("hgere.commands.run_pipeline.Pipeline") as MockPipeline,
+            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
             patch.object(sys, "argv", [
                 "run-pipeline",
                 "--config", "fake.yaml",
@@ -335,7 +335,7 @@ class TestCliDirectoryMode:
 
         mock_pipeline = _make_mock_pipeline([_make_doc("a"), _make_doc("b")])
         with (
-            patch("hgere.commands.run_pipeline.Pipeline") as MockPipeline,
+            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
             patch.object(sys, "argv", [
                 "run-pipeline",
                 "--config", "fake.yaml",
@@ -356,7 +356,7 @@ class TestCliDirectoryMode:
         output_file.touch()
 
         with (
-            patch("hgere.commands.run_pipeline.Pipeline"),
+            patch("gsapere.commands.run_pipeline.Pipeline"),
             patch.object(sys, "argv", [
                 "run-pipeline",
                 "--config", "fake.yaml",

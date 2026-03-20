@@ -7,8 +7,8 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 
-from hgere.pipeline.config import FinalPruningConfig, PrunerConfig
-from hgere.pipeline.pruner_runner import (
+from gsapere.pipeline.config import FinalPruningConfig, PrunerConfig
+from gsapere.pipeline.pruner_runner import (
     PrunerRunner,
     apply_final_pruning,
     apply_threshold,
@@ -166,7 +166,7 @@ class TestApplyFinalPruning:
 
 class TestBuildPredictedNerFromPool:
     def test_strips_probability(self, sentences_predictions_fixture: dict) -> None:
-        from hgere.pipeline.pruner_runner import build_predicted_ner_from_pool
+        from gsapere.pipeline.pruner_runner import build_predicted_ner_from_pool
 
         pool = apply_threshold(sentences_predictions_fixture, threshold=0.5)
         result = build_predicted_ner_from_pool(pool, n_docs=1, n_sents_per_doc=[1])
@@ -175,7 +175,7 @@ class TestBuildPredictedNerFromPool:
             assert len(span) == 3
 
     def test_correct_doc_and_sent_assignment(self) -> None:
-        from hgere.pipeline.pruner_runner import build_predicted_ner_from_pool
+        from gsapere.pipeline.pruner_runner import build_predicted_ner_from_pool
 
         pool = {
             (0, 0): [(1, 2, 0.9, "Method")],
@@ -197,7 +197,7 @@ class TestBuildPredictedNerFromPool:
 
 class TestLoadPrefilterParams:
     def test_best_config_topk_format(self, tmp_path: Any) -> None:
-        from hgere.pipeline.pruner_runner import _load_prefilter_params
+        from gsapere.pipeline.pruner_runner import _load_prefilter_params
 
         cfg_file = tmp_path / "best_config.json"
         cfg_file.write_text(
@@ -218,7 +218,7 @@ class TestLoadPrefilterParams:
         assert params["max_mentions_num"] == 15
 
     def test_best_config_threshold_format_uses_defaults(self, tmp_path: Any) -> None:
-        from hgere.pipeline.pruner_runner import (
+        from gsapere.pipeline.pruner_runner import (
             _DEFAULT_PREFILTER,
             _load_prefilter_params,
         )
@@ -231,7 +231,7 @@ class TestLoadPrefilterParams:
         assert params == _DEFAULT_PREFILTER
 
     def test_plain_format(self, tmp_path: Any) -> None:
-        from hgere.pipeline.pruner_runner import _load_prefilter_params
+        from gsapere.pipeline.pruner_runner import _load_prefilter_params
 
         cfg_file = tmp_path / "prefilter.json"
         cfg_file.write_text(
@@ -260,7 +260,7 @@ class TestPrunerRunner:
 
     def test_run_empty_list_returns_empty(self, tmp_path: Any, tiny_doc: dict) -> None:
         cfg = self._make_config(tmp_path)
-        with patch("hgere.pipeline.pruner_runner.PrunerRunner._load_model"):
+        with patch("gsapere.pipeline.pruner_runner.PrunerRunner._load_model"):
             runner = PrunerRunner.__new__(PrunerRunner)
             runner._config = cfg
             runner._label_set = "gsap"
@@ -273,7 +273,7 @@ class TestPrunerRunner:
             runner._tokenizer = MagicMock()
             runner._device = "cpu"
 
-        with patch("hgere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
+        with patch("gsapere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
             mock_inf.return_value = {}
             result = runner.run([])
         assert result == []
@@ -296,7 +296,7 @@ class TestPrunerRunner:
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
-        with patch("hgere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
+        with patch("gsapere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
             mock_inf.return_value = fake_pool
             result = runner.run([tiny_doc])
 
@@ -318,7 +318,7 @@ class TestPrunerRunner:
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
-        with patch("hgere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
+        with patch("gsapere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
             mock_inf.return_value = fake_pool
             result = runner.run([tiny_doc])
 
@@ -343,7 +343,7 @@ class TestPrunerRunner:
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
-        with patch("hgere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
+        with patch("gsapere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
             mock_inf.return_value = fake_pool
             result = runner.run([tiny_doc])
 
@@ -377,7 +377,7 @@ class TestPrunerRunner:
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
-        with patch("hgere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
+        with patch("gsapere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
             mock_inf.return_value = fake_pool
             result = runner.run([tiny_doc])
 
@@ -403,7 +403,7 @@ class TestPrunerRunner:
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
-        with patch("hgere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
+        with patch("gsapere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
             mock_inf.return_value = fake_pool
             result = runner.run([tiny_doc])
 
@@ -426,7 +426,7 @@ class TestPrunerRunner:
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
-        with patch("hgere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
+        with patch("gsapere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
             mock_inf.return_value = {(0, 0): [(1, 2, 0.9, "Method")]}
             result = runner.run([tiny_doc])
 
@@ -451,7 +451,7 @@ class TestPrunerRunner:
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
-        with patch("hgere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
+        with patch("gsapere.pipeline.pruner_runner.run_pruner_inference") as mock_inf:
             mock_inf.return_value = fake_pool
             result = runner.run(tiny_docs)
 

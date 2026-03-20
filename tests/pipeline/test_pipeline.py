@@ -6,22 +6,22 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-from hgere.pipeline.pipeline import Pipeline
+from gsapere.pipeline.pipeline import Pipeline
 
 
 class TestPipelineFromYaml:
     def test_from_yaml_returns_pipeline(self, minimal_config_yaml: Path) -> None:
         with (
-            patch("hgere.pipeline.pruner_runner.PrunerRunner._load_model"),
-            patch("hgere.pipeline.hgere_runner.HGERERunner._load_model"),
+            patch("gsapere.pipeline.pruner_runner.PrunerRunner._load_model"),
+            patch("gsapere.pipeline.hgere_runner.HGERERunner._load_model"),
         ):
             pipeline = Pipeline.from_yaml(minimal_config_yaml)
         assert isinstance(pipeline, Pipeline)
 
     def test_from_yaml_string_path(self, minimal_config_yaml: Path) -> None:
         with (
-            patch("hgere.pipeline.pruner_runner.PrunerRunner._load_model"),
-            patch("hgere.pipeline.hgere_runner.HGERERunner._load_model"),
+            patch("gsapere.pipeline.pruner_runner.PrunerRunner._load_model"),
+            patch("gsapere.pipeline.hgere_runner.HGERERunner._load_model"),
         ):
             pipeline = Pipeline.from_yaml(str(minimal_config_yaml))
         assert isinstance(pipeline, Pipeline)
@@ -30,8 +30,8 @@ class TestPipelineFromYaml:
 class TestPipelineProcessDocument:
     def _make_pipeline(self, minimal_config_yaml: Path) -> Pipeline:
         with (
-            patch("hgere.pipeline.pruner_runner.PrunerRunner._load_model"),
-            patch("hgere.pipeline.hgere_runner.HGERERunner._load_model"),
+            patch("gsapere.pipeline.pruner_runner.PrunerRunner._load_model"),
+            patch("gsapere.pipeline.hgere_runner.HGERERunner._load_model"),
         ):
             return Pipeline.from_yaml(minimal_config_yaml)
 
@@ -105,8 +105,8 @@ class TestPipelineProcessDocument:
 class TestPipelineProcessDocuments:
     def _make_pipeline(self, minimal_config_yaml: Path) -> Pipeline:
         with (
-            patch("hgere.pipeline.pruner_runner.PrunerRunner._load_model"),
-            patch("hgere.pipeline.hgere_runner.HGERERunner._load_model"),
+            patch("gsapere.pipeline.pruner_runner.PrunerRunner._load_model"),
+            patch("gsapere.pipeline.hgere_runner.HGERERunner._load_model"),
         ):
             return Pipeline.from_yaml(minimal_config_yaml)
 
