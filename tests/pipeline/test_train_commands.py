@@ -5,16 +5,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import yaml
 
 from hgere.commands.train_hgere import cli as train_hgere_by_config_cli
-from hgere.commands.train_span_classifier_by_config import (
+from hgere.commands.train_span_classifier import (
     cli as train_span_classifier_by_config_cli,
 )
-from hgere.commands.train_span_classifier_by_config import model_to_argv
 from hgere.hgere.config import HGERETrainConfig, HGERETrainParams
 from hgere.span_classifier.config import PrunerTrainConfig, PrunerTrainParams
 
@@ -91,22 +90,6 @@ def _make_hgere_config(
     )
 
 
-def _minimal_flat_pruner_yaml() -> dict[str, Any]:
-    """A flat standalone pruner training YAML (not pipeline-style)."""
-    return {
-        "schema_version": "1.0",
-        "label_set": "gsap",
-        "model_dir": "saves/pruner",
-        "base_model_name_or_path": "pretrained_models/scibert",
-        "train_params": {
-            "data_dir": "datasets/gsap",
-            "learning_rate": 1e-6,
-            "num_train_epochs": 8,
-            "per_gpu_train_batch_size": 8,
-        },
-    }
-
-
 def _minimal_flat_hgere_yaml() -> dict[str, Any]:
     """A flat standalone HGERE training YAML (not pipeline-style)."""
     return {
@@ -123,77 +106,30 @@ def _minimal_flat_hgere_yaml() -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# model_to_argv (pruner)
-# ---------------------------------------------------------------------------
-
-
-class TestPrunerModelToArgv:
-    def test_model_dir_and_output_dir_both_present(self) -> None:
-        config = _make_pruner_config()
-        argv = model_to_argv(config)
-        assert "--model_dir" in argv
-        assert "--output_dir" in argv
-        assert argv[argv.index("--model_dir") + 1] == "saves/pruner"
-        assert argv[argv.index("--output_dir") + 1] == "saves/pruner"
-
-    def test_label_set_added(self) -> None:
-        config = _make_pruner_config(label_set="scier")
-        argv = model_to_argv(config)
-        assert "--label_set" in argv
-        assert argv[argv.index("--label_set") + 1] == "scier"
-
-    def test_do_train_added_by_default(self) -> None:
-        config = _make_pruner_config()
-        argv = model_to_argv(config)
-        assert "--do_train" in argv
-
-    def test_do_lower_case_boolean_flag(self) -> None:
-        config = _make_pruner_config()
-        argv = model_to_argv(config)
-        # do_lower_case defaults to True in PrunerTrainConfig
-        assert "--do_lower_case" in argv
-
-    def test_fp16_boolean_flag(self) -> None:
-        config = _make_pruner_config(fp16=True)
-        argv = model_to_argv(config)
-        assert "--fp16" in argv
-
-    def test_false_boolean_flag_not_included(self) -> None:
-        config = _make_pruner_config(fp16=False)
-        argv = model_to_argv(config)
-        assert "--fp16" not in argv
-
-    def test_none_values_omitted(self) -> None:
-        config = _make_pruner_config(rulebased_pruner_file=None)
-        argv = model_to_argv(config)
-        assert "--rulebased-pruner-file" not in argv
-        assert "--rulebased_pruner_file" not in argv
-
-    def test_rulebased_pruner_file_remapped(self) -> None:
-        config = _make_pruner_config(rulebased_pruner_file="gsap_rulebased.json")
-        argv = model_to_argv(config)
-        assert "--rulebased-pruner-file" in argv
-        assert argv[argv.index("--rulebased-pruner-file") + 1] == "gsap_rulebased.json"
-
-    def test_learning_rate_included(self) -> None:
-        config = _make_pruner_config(learning_rate=2e-6)
-        argv = model_to_argv(config)
-        assert "--learning_rate" in argv
-        assert argv[argv.index("--learning_rate") + 1] == str(2e-6)
-
-    def test_schema_version_excluded(self) -> None:
-        config = _make_pruner_config()
-        argv = model_to_argv(config)
-        assert "--schema_version" not in argv
+def _minimal_flat_pruner_yaml() -> dict[str, Any]:
+    """A flat standalone pruner training YAML (not pipeline-style)."""
+    return {
+        "schema_version": "1.0",
+        "label_set": "gsap",
+        "model_dir": "saves/pruner",
+        "base_model_name_or_path": "pretrained_models/scibert",
+        "train_params": {
+            "data_dir": "datasets/gsap",
+            "learning_rate": 1e-6,
+            "num_train_epochs": 8,
+            "per_gpu_train_batch_size": 8,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
-# CLI end-to-end (subprocess mocked)
+# train-span-classifier CLI tests
 # ---------------------------------------------------------------------------
 
 
-class TestTrainSpanClassifierByConfigCli:
+class TestTrainSpanClassifierCli:
+    """cli() is an alias for main() — tests verify it delegates correctly."""
+
     def _write_config(
         self, tmp_path: Path, overrides: dict[str, Any] | None = None
     ) -> Path:
@@ -204,26 +140,17 @@ class TestTrainSpanClassifierByConfigCli:
         _write_yaml(p, data)
         return p
 
-    def test_calls_train_span_classifier(self, tmp_path: Path) -> None:
+    def test_calls_main(self, tmp_path: Path) -> None:
+        """cli() delegates to main() with no arguments (main reads sys.argv)."""
         config_path = self._write_config(tmp_path)
-        mock_result = MagicMock(returncode=0)
         with (
-            patch(
-                "hgere.commands.train_span_classifier_by_config.subprocess.run",
-                return_value=mock_result,
-            ) as mock_run,
+            patch("hgere.commands.train_span_classifier.main") as mock_main,
             patch.object(
-                sys,
-                "argv",
-                ["train-span-classifier-by-config", "--config", str(config_path)],
+                sys, "argv", ["train-span-classifier", "--config", str(config_path)]
             ),
-            pytest.raises(SystemExit) as exc_info,
         ):
             train_span_classifier_by_config_cli()
-        assert exc_info.value.code == 0
-        cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "uv"
-        assert "train-span-classifier" in cmd
+        mock_main.assert_called_once_with()
 
     def test_missing_config_exits(self, tmp_path: Path) -> None:
         with (
@@ -231,7 +158,7 @@ class TestTrainSpanClassifierByConfigCli:
                 sys,
                 "argv",
                 [
-                    "train-span-classifier-by-config",
+                    "train-span-classifier",
                     "--config",
                     str(tmp_path / "missing.yaml"),
                 ],
@@ -241,31 +168,18 @@ class TestTrainSpanClassifierByConfigCli:
             train_span_classifier_by_config_cli()
         assert exc_info.value.code != 0
 
-    def test_propagates_subprocess_returncode(self, tmp_path: Path) -> None:
-        config_path = self._write_config(tmp_path)
-        mock_result = MagicMock(returncode=1)
-        with (
-            patch(
-                "hgere.commands.train_span_classifier_by_config.subprocess.run",
-                return_value=mock_result,
-            ),
-            patch.object(
-                sys,
-                "argv",
-                ["train-span-classifier-by-config", "--config", str(config_path)],
-            ),
-            pytest.raises(SystemExit) as exc_info,
-        ):
-            train_span_classifier_by_config_cli()
-        assert exc_info.value.code == 1
-
     def test_no_config_flag_exits(self, tmp_path: Path) -> None:
         with (
-            patch.object(sys, "argv", ["train-span-classifier-by-config"]),
+            patch.object(sys, "argv", ["train-span-classifier"]),
             pytest.raises(SystemExit) as exc_info,
         ):
             train_span_classifier_by_config_cli()
         assert exc_info.value.code != 0
+
+
+# ---------------------------------------------------------------------------
+# train-hgere CLI tests
+# ---------------------------------------------------------------------------
 
 
 class TestTrainHgereCli:

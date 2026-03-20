@@ -1,8 +1,7 @@
-"""Generate parameter documentation for the span pruner.
+"""Generate parameter documentation for the span pruner and HGERE model.
 
-Reads PrunerTrainConfig (the single source of truth) and renders a Markdown
-file with parameter tables — one for shared inference/training fields and one
-for training-only fields.
+Reads PrunerTrainConfig and HGERETrainConfig (the single sources of truth) and
+renders Markdown files with parameter tables.
 
 Run this script whenever the Pydantic models change to keep documentation in
 sync.
@@ -11,6 +10,7 @@ Usage
 -----
     uv run generate-pruner-docs
     uv run generate-pruner-docs --output docs/custom.md
+    uv run generate-pruner-docs --model hgere --output docs/hgere.md
 """
 
 from __future__ import annotations
@@ -27,13 +27,19 @@ except ImportError:  # pragma: no cover
     from typing_extensions import Literal  # type: ignore[assignment]
 
 from hgere.config.cli_gen import SEP, FlatField, collect_flat_fields
+from hgere.hgere.config import (
+    CURRENT_SCHEMA_VERSION as HGERE_SCHEMA_VERSION,
+    SUPPORTED_SCHEMA_VERSIONS as HGERE_SUPPORTED_VERSIONS,
+    HGERETrainConfig,
+)
 from hgere.span_classifier.config import (
-    CURRENT_SCHEMA_VERSION,
-    SUPPORTED_SCHEMA_VERSIONS,
+    CURRENT_SCHEMA_VERSION as PRUNER_SCHEMA_VERSION,
+    SUPPORTED_SCHEMA_VERSIONS as PRUNER_SUPPORTED_VERSIONS,
     PrunerTrainConfig,
 )
 
-_DEFAULT_OUTPUT = Path("documentation/api/pruner.md")
+_DEFAULT_PRUNER_OUTPUT = Path("documentation/api/pruner.md")
+_DEFAULT_HGERE_OUTPUT = Path("documentation/api/hgere.md")
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -106,12 +112,7 @@ def _render_table(fields: list[FlatField]) -> str:
 def _split_fields(
     model_cls: type,
 ) -> tuple[list[FlatField], list[FlatField]]:
-    """Return (top_level_fields, train_params_fields).
-
-    Top-level fields are those whose path has length 1 (direct fields of
-    PrunerTrainConfig, excluding schema_version which is internal).
-    Train-params fields are those whose first path component is 'train_params'.
-    """
+    """Return (top_level_fields, train_params_fields)."""
     all_fields = collect_flat_fields(model_cls)
 
     top: list[FlatField] = []
@@ -127,18 +128,14 @@ def _split_fields(
 
 
 # ---------------------------------------------------------------------------
-# Document renderer
+# Pruner document renderer
 # ---------------------------------------------------------------------------
 
 
-def render_document() -> str:
-    """Return the full Markdown documentation string."""
+def render_pruner_document() -> str:
+    """Return the full Markdown documentation string for the pruner."""
     top_fields, train_fields = _split_fields(PrunerTrainConfig)
 
-    # Collect section groups inside train_params by inspecting the model's
-    # field ordering and the comment-delimited groups we know exist.
-    # We expose the groups via a small explicit mapping so the doc stays
-    # readable without polluting the Pydantic model with extra metadata.
     _TRAIN_GROUPS: list[tuple[str, list[str]]] = [
         (
             "Data",
@@ -155,15 +152,30 @@ def render_document() -> str:
             [
                 "seed",
                 "learning_rate",
+                "learning_rate_span",
                 "num_train_epochs",
                 "eval_epochs",
                 "per_gpu_train_batch_size",
                 "gradient_accumulation_steps",
                 "adam_epsilon",
                 "weight_decay",
+                "max_grad_norm",
+                "max_steps",
+                "warmup_steps",
+                "logging_steps",
                 "save_steps",
+                "save_total_limit",
                 "fp16",
                 "local_rank",
+            ],
+        ),
+        (
+            "Hardware",
+            [
+                "no_cuda",
+                "server_ip",
+                "server_port",
+                "debug_overflow",
             ],
         ),
         ("Loss", ["pruner_loss", "focal_gamma", "focal_alpha"]),
@@ -195,17 +207,33 @@ def render_document() -> str:
                 "evaluate_during_training",
                 "eval_all_checkpoints",
                 "overwrite_model_dir",
+                "overwrite_cache",
+            ],
+        ),
+        (
+            "Run modes",
+            [
+                "do_train",
+                "do_test",
+                "output_results",
+                "shuffle",
+            ],
+        ),
+        (
+            "Eval settings",
+            [
+                "target_recall_diff",
+                "prune_config",
+                "use_full_layer",
             ],
         ),
         ("Weights & Biases", ["project_name", "run_name"]),
     ]
 
-    # Index train fields by leaf name for quick lookup.
     train_by_name: dict[str, FlatField] = {f.path[-1]: f for f in train_fields}
 
     lines: list[str] = []
 
-    # ── Header ───────────────────────────────────────────────────────────────
     lines += [
         "# Pruner parameter reference",
         "",
@@ -216,15 +244,14 @@ def render_document() -> str:
         "",
         "| Key | Value |",
         "|-----|-------|",
-        f"| Current version | `{CURRENT_SCHEMA_VERSION}` |",
-        f"| Supported versions | {', '.join(f'`{v}`' for v in sorted(SUPPORTED_SCHEMA_VERSIONS))} |",
+        f"| Current version | `{PRUNER_SCHEMA_VERSION}` |",
+        f"| Supported versions | {', '.join(f'`{v}`' for v in sorted(PRUNER_SUPPORTED_VERSIONS))} |",
         "",
         'Add `schema_version: "1.0"` to your YAML config. '
         "An unsupported version raises a clear error at load time.",
         "",
     ]
 
-    # ── Shared inference / training fields ───────────────────────────────────
     lines += [
         "## Shared parameters",
         "",
@@ -235,7 +262,6 @@ def render_document() -> str:
         "",
     ]
 
-    # ── Training-only parameters ─────────────────────────────────────────────
     lines += [
         "## Training parameters (`train_params`)",
         "",
@@ -258,7 +284,147 @@ def render_document() -> str:
         ]
         rendered_names.update(f.path[-1] for f in group_fields)
 
-    # Catch any fields not covered by the explicit groups (future-proofing).
+    ungrouped = [f for f in train_fields if f.path[-1] not in rendered_names]
+    if ungrouped:
+        lines += [
+            "### Other",
+            "",
+            _render_table(ungrouped),
+            "",
+        ]
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# HGERE document renderer
+# ---------------------------------------------------------------------------
+
+
+def render_hgere_document() -> str:
+    """Return the full Markdown documentation string for HGERE."""
+    top_fields, train_fields = _split_fields(HGERETrainConfig)
+
+    _TRAIN_GROUPS: list[tuple[str, list[str]]] = [
+        (
+            "Data",
+            ["train_file", "dev_file", "test_file"],
+        ),
+        (
+            "Optimisation",
+            [
+                "seed",
+                "learning_rate",
+                "learning_rate_cls",
+                "num_train_epochs",
+                "per_gpu_train_batch_size",
+                "gradient_accumulation_steps",
+                "adam_epsilon",
+                "weight_decay",
+                "max_grad_norm",
+                "max_steps",
+                "warmup_steps",
+                "warmup_ratio",
+                "logging_steps",
+                "save_steps",
+                "eval_epochs",
+                "save_total_limit",
+            ],
+        ),
+        (
+            "Hardware",
+            ["no_cuda", "fp16", "local_rank", "server_ip", "server_port"],
+        ),
+        (
+            "Loss",
+            [
+                "loss_re_weight_alpha",
+                "train_time_loss_weighting",
+                "train_time_loss_turn",
+                "train_time_loss_steepness",
+            ],
+        ),
+        (
+            "Evaluation & checkpointing",
+            [
+                "evaluate_during_training",
+                "eval_all_checkpoints",
+                "overwrite_output_dir",
+                "overwrite_cache",
+            ],
+        ),
+        (
+            "Run modes",
+            [
+                "do_train",
+                "eval_train",
+                "eval_dev",
+                "eval_test",
+                "no_test",
+                "save_results",
+            ],
+        ),
+        (
+            "Data loading",
+            ["shuffle", "pre_filter_params", "batch_by_size", "preload_dataset"],
+        ),
+        ("Weights & Biases", ["project_name", "run_name", "log_wandb"]),
+    ]
+
+    train_by_name: dict[str, FlatField] = {f.path[-1]: f for f in train_fields}
+
+    lines: list[str] = []
+
+    lines += [
+        "# HGERE parameter reference",
+        "",
+        "> **Auto-generated** from `hgere.hgere.config.HGERETrainConfig`.",
+        "> Do not edit by hand — run `uv run generate-pruner-docs --model hgere` to regenerate.",
+        "",
+        "## Schema versioning",
+        "",
+        "| Key | Value |",
+        "|-----|-------|",
+        f"| Current version | `{HGERE_SCHEMA_VERSION}` |",
+        f"| Supported versions | {', '.join(f'`{v}`' for v in sorted(HGERE_SUPPORTED_VERSIONS))} |",
+        "",
+        'Add `schema_version: "1.0"` to your YAML config. '
+        "An unsupported version raises a clear error at load time.",
+        "",
+    ]
+
+    lines += [
+        "## Shared parameters",
+        "",
+        "These fields live at the top level of the config and are used both at "
+        "inference time (by the pipeline) and at training time.",
+        "",
+        _render_table(top_fields),
+        "",
+    ]
+
+    lines += [
+        "## Training parameters (`train_params`)",
+        "",
+        "These fields live under `train_params:` in the YAML and are ignored "
+        "at inference time.  On the CLI they are prefixed with "
+        f"`--train_params{SEP}` (e.g. `--train_params{SEP}learning_rate`).",
+        "",
+    ]
+
+    rendered_names: set[str] = set()
+    for group_title, names in _TRAIN_GROUPS:
+        group_fields = [train_by_name[n] for n in names if n in train_by_name]
+        if not group_fields:
+            continue
+        lines += [
+            f"### {group_title}",
+            "",
+            _render_table(group_fields),
+            "",
+        ]
+        rendered_names.update(f.path[-1] for f in group_fields)
+
     ungrouped = [f for f in train_fields if f.path[-1] not in rendered_names]
     if ungrouped:
         lines += [
@@ -278,22 +444,44 @@ def render_document() -> str:
 
 def cli() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate Markdown parameter docs for the pruner from Pydantic models."
+        description="Generate Markdown parameter docs for pruner and HGERE from Pydantic models."
+    )
+    parser.add_argument(
+        "--model",
+        choices=["pruner", "hgere", "all"],
+        default="all",
+        help="Which model to generate docs for (default: all).",
     )
     parser.add_argument(
         "--output",
         type=str,
-        default=str(_DEFAULT_OUTPUT),
-        help=f"Output Markdown file (default: {_DEFAULT_OUTPUT}).",
+        default=None,
+        help=(
+            "Output Markdown file. When --model=all this is ignored; "
+            f"defaults are {_DEFAULT_PRUNER_OUTPUT} and {_DEFAULT_HGERE_OUTPUT}."
+        ),
     )
     args = parser.parse_args()
 
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if args.model in ("pruner", "all"):
+        out = (
+            Path(args.output)
+            if args.output and args.model != "all"
+            else _DEFAULT_PRUNER_OUTPUT
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(render_pruner_document(), encoding="utf-8")
+        print(f"Written to {out}", file=sys.stderr)
 
-    doc = render_document()
-    output_path.write_text(doc, encoding="utf-8")
-    print(f"Written to {output_path}", file=sys.stderr)
+    if args.model in ("hgere", "all"):
+        out = (
+            Path(args.output)
+            if args.output and args.model != "all"
+            else _DEFAULT_HGERE_OUTPUT
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(render_hgere_document(), encoding="utf-8")
+        print(f"Written to {out}", file=sys.stderr)
 
 
 if __name__ == "__main__":

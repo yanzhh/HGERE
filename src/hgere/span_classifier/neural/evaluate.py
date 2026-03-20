@@ -172,7 +172,7 @@ def evaluate(
     is_ontonotes = args.data_dir.find("ontonotes") != -1
 
     global NEG_INF
-    NEG_INF = args.neg_inf
+    NEG_INF = -1e4 if args.fp16 else -1e30
 
     eval_output_dir = Path(args.output_dir)
     if args.local_rank in [-1, 0]:

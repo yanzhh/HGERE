@@ -67,6 +67,36 @@ Data lives in `/home/ottowg/projects/gsap/related_datasets/` (external to this r
 - **Code formatting**: run `uv run ruff format <file>` after writing or editing any Python file.
 - **Linting**: run `uv run ruff check <file>` and fix all issues before considering work done.
 
+## CLI and Parameter Design
+
+All CLI entry points must follow the **Pydantic-first** pattern — no duplicate argparse definitions:
+
+1. **Pydantic model is the single source of truth** for all parameters. Define fields in
+   `src/hgere/<model>/config.py` with `Field(description=...)`. Never hardcode the same parameter in
+   both a config model and an argparse `add_argument` call.
+
+2. **Use `load_config_from_argv`** from `hgere.commands._cli_utils` to handle the two accepted forms:
+   - Positional shortcut: `train-<cmd> config.yaml` (single arg without `--`)
+   - Full CLI with overrides: `train-<cmd> --config config.yaml --train_params__learning_rate 2e-5`
+
+3. **Bridge to legacy training code** via a `_config_to_namespace(config) -> argparse.Namespace`
+   function that flattens the Pydantic model into a flat namespace. Apply any field remaps here
+   (e.g. `model_dir → output_dir`). Compute derived fields like `neg_inf` here too.
+
+4. **`cli()` is just an alias for `main()`** — needed for `pyproject.toml` entry points.
+
+5. **Add to `pyproject.toml`** only the primary command name (e.g. `train-span-classifier`).
+   Do not add separate `*-by-config` entry points.
+
+6. **Regenerate parameter docs** after changing any config model:
+   ```
+   uv run generate-pruner-docs
+   ```
+   Docs are written to `documentation/api/`.
+
+Reference implementations: `src/hgere/commands/train_hgere.py`,
+`src/hgere/commands/train_span_classifier.py`.
+
 ## Other
 
 - `pipeline/` — preprocessing utilities

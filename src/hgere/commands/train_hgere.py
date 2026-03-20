@@ -24,7 +24,6 @@ Priority: CLI flags > config file > Pydantic defaults.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import shutil
@@ -34,11 +33,11 @@ from typing import Any, Optional
 
 import torch
 
-from ..config.cli_gen import apply_config_and_cli, build_argparser
 from ..hgere.config import HGERETrainConfig
 from ..hgere.train_setup import get_last_checkpoint, setup_training
 from ..labels import LABELS
 from ..utils import get_logger
+from ._cli_utils import load_config_from_argv, save_args
 
 # ---------------------------------------------------------------------------
 # Field name remaps: Pydantic config name → argparse / setup_training name
@@ -96,44 +95,15 @@ def main(argv: Optional[list[str]] = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
 
-    # ------------------------------------------------------------------
-    # Shortcut: train-hgere config.yaml  (single positional arg)
-    # ------------------------------------------------------------------
-    if len(argv) == 1 and not argv[0].startswith("-"):
-        try:
-            config = HGERETrainConfig.from_yaml(argv[0])
-        except Exception as exc:
-            print(f"Error loading config file '{argv[0]}': {exc}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        # ------------------------------------------------------------------
-        # Full argparse generated from the Pydantic model
-        # ------------------------------------------------------------------
-        parser = build_argparser(
-            HGERETrainConfig,
-            description=(
-                "Train the HGERE model. Pass a config YAML as a positional argument "
-                "(train-hgere config.yaml) or use --config PATH with optional "
-                "per-field CLI overrides (e.g. --train_params__learning_rate 2e-5)."
-            ),
-        )
-        namespace = parser.parse_args(argv)
-
-        if namespace.config is None:
-            parser.error(
-                "Provide a config file as a positional argument "
-                "(train-hgere config.yaml) or with --config PATH."
-            )
-
-        try:
-            config = apply_config_and_cli(
-                namespace,
-                HGERETrainConfig,
-                config_loader=lambda p: HGERETrainConfig.from_yaml(p).model_dump(),
-            )
-        except Exception as exc:
-            logging.error("Invalid config: %s", exc)
-            sys.exit(1)
+    config = load_config_from_argv(
+        argv,
+        HGERETrainConfig,
+        description=(
+            "Train the HGERE model. Pass a config YAML as a positional argument "
+            "(train-hgere config.yaml) or use --config PATH with optional "
+            "per-field CLI overrides (e.g. --train_params__learning_rate 2e-5)."
+        ),
+    )
 
     args = _config_to_namespace(config)
 
@@ -148,17 +118,6 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     # Get hostname
     args.hostname = socket.gethostname()
-
-    def save_args(args: Any, path: str, filename: str = "training_args.json") -> None:
-        if not os.path.exists(path):
-            os.makedirs(path)
-        args_file = os.path.join(path, filename)
-        with open(args_file, "w") as f:
-            json.dump(
-                {k: v for k, v in vars(args).items() if _is_json_serializable(v)},
-                f,
-                indent=4,
-            )
 
     def create_exp_dir(
         path: str, scripts_to_save: Optional[list[str]] = None
@@ -273,14 +232,10 @@ def main(argv: Optional[list[str]] = None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# CLI alias
 # ---------------------------------------------------------------------------
 
 
-def _is_json_serializable(value: Any) -> bool:
-    """Return True if *value* can be serialised to JSON without error."""
-    try:
-        json.dumps(value)
-        return True
-    except (TypeError, ValueError):
-        return False
+def cli() -> None:
+    """Entry point for ``train-hgere-by-config`` — alias for :func:`main`."""
+    main()

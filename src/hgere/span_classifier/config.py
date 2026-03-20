@@ -97,6 +97,10 @@ class PrunerTrainParams(BaseModel):
     # ── Optimisation ────────────────────────────────────────────────────────
     seed: int = Field(default=42, description="Random seed for reproducibility.")
     learning_rate: float = Field(description="Learning rate for BERT layers.")
+    learning_rate_span: float = Field(
+        default=-1,
+        description="Learning rate for the span encoder. -1 = use learning_rate.",
+    )
     num_train_epochs: int = Field(description="Total number of training epochs.")
     eval_epochs: int = Field(
         default=1,
@@ -110,14 +114,35 @@ class PrunerTrainParams(BaseModel):
         default=1e-8, description="Epsilon for the Adam optimiser."
     )
     weight_decay: float = Field(default=0.0, description="Weight decay coefficient.")
+    max_grad_norm: float = Field(default=1.0, description="Max gradient norm.")
+    max_steps: int = Field(
+        default=-1,
+        description="If > 0: set total number of training steps. Overrides num_train_epochs.",
+    )
+    warmup_steps: int = Field(
+        default=-1, description="Linear warmup over warmup_steps."
+    )
+    logging_steps: int = Field(default=5, description="Log every N update steps.")
     save_steps: int = Field(
         default=1000, description="Save a checkpoint every N update steps."
+    )
+    save_total_limit: int = Field(
+        default=1, description="Limit total checkpoints; deletes older ones."
     )
     fp16: bool = Field(
         default=False, description="Use mixed-precision (fp16) training."
     )
     local_rank: int = Field(
         default=-1, description="Local rank for distributed training (-1 = single GPU)."
+    )
+
+    # ── Hardware ──────────────────────────────────────────────────────────────
+    no_cuda: bool = Field(default=False, description="Avoid using CUDA when available.")
+    server_ip: str = Field(default="", description="For distant debugging.")
+    server_port: str = Field(default="", description="For distant debugging.")
+    debug_overflow: bool = Field(
+        default=False,
+        description="Enable DebugUnderflowOverflow to locate first NaN/Inf.",
     )
 
     # ── Loss ────────────────────────────────────────────────────────────────
@@ -181,6 +206,40 @@ class PrunerTrainParams(BaseModel):
     overwrite_model_dir: bool = Field(
         default=False, description="Allow overwriting an existing model directory."
     )
+    overwrite_cache: bool = Field(
+        default=False, description="Overwrite the cached training and evaluation sets."
+    )
+
+    # ── Run modes ─────────────────────────────────────────────────────────────
+    do_train: bool = Field(default=True, description="Whether to run training.")
+    do_test: bool = Field(
+        default=True, description="Run evaluation on the test set after training."
+    )
+    output_results: bool = Field(
+        default=True, description="Persist predictions to disk after evaluation."
+    )
+    shuffle: bool = Field(default=False, description="Shuffle training data.")
+
+    # ── Eval settings ─────────────────────────────────────────────────────────
+    target_recall_diff: float = Field(
+        default=0.01,
+        description=(
+            "Gap below pool upper-bound recall used as analysis target during eval "
+            "(e.g. 0.01 = 1%). Controls threshold/top-K search logged to wandb."
+        ),
+    )
+    prune_config: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path to a best_config.json produced by evaluation/threshold_analysis.py. "
+            "When set, the pruning parameters are loaded from this file instead of being "
+            "estimated from the dev set at the end of training."
+        ),
+    )
+    use_full_layer: int = Field(
+        default=-1,
+        description="If >= 0, use all hidden states up to this layer for span repr.",
+    )
 
     # ── W&B ──────────────────────────────────────────────────────────────────
     project_name: str = Field(
@@ -233,7 +292,17 @@ class PrunerTrainConfig(BaseModel):
     )
 
     # ── Shared inference fields ────────────────────────────────────────────────
-    model_dir: str = Field(description="Directory where checkpoints will be written.")
+    model_dir: str = Field(
+        description="Directory where model checkpoints will be written."
+    )
+    output_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Directory where pruner prediction output (enriched dataset files) will be "
+            "written. Pass this path as ner_prediction_dir when training HGERE. "
+            "Defaults to model_dir if not set."
+        ),
+    )
     base_model_name_or_path: str = Field(
         description="Transformer model path or HuggingFace name."
     )
@@ -257,6 +326,7 @@ class PrunerTrainConfig(BaseModel):
     max_mention_ori_length: int = Field(
         default=12, description="Maximum span width in tokens."
     )
+    alpha: float = Field(default=1.0, description="Loss scale alpha.")
 
     # ── Training parameters ────────────────────────────────────────────────────
     train_params: PrunerTrainParams
