@@ -2,7 +2,7 @@
 reports/
 
 # ignore saves
-saves/
+saves
 datasets_copy/
 /models/
 slurm/
