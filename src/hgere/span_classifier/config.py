@@ -17,10 +17,11 @@ error pointing at the current version.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional, Union
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
+from typing_extensions import Annotated
 
 if TYPE_CHECKING:
     pass
@@ -36,6 +37,33 @@ CURRENT_SCHEMA_VERSION: str = "1.0"
 #: mis-parsing.
 SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0"})
 
+# --------------------------------------------------------------------------
+# Pre-filtering parameters (nested under pruner.train_params in yaml and for evaluation)
+# --------------------------------------------------------------------------
+
+
+class ThresholdPreFilterParams(BaseModel):
+    method: Literal["threshold"]
+    value: float = Field(ge=0.0, le=1.0)
+
+
+class TopKPreFilterParams(BaseModel):
+    method: Literal["topk"]
+    ratio: float = Field(ge=0.0, le=1.0)
+    min: int = Field(ge=0)
+    max: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def check_min_max(self):
+        if self.max < self.min:
+            raise ValueError("max must be >= min")
+        return self
+
+
+PreFilterParams = Annotated[
+    Union[ThresholdPreFilterParams, TopKPreFilterParams],
+    Field(discriminator="method"),
+]
 
 # ---------------------------------------------------------------------------
 # Training parameters (nested under pruner.train_params in YAML)

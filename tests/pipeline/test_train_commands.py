@@ -11,7 +11,6 @@ import pytest
 import yaml
 
 from hgere.commands.train_hgere import cli as train_hgere_by_config_cli
-from hgere.commands.train_hgere import model_to_argv as hgere_model_to_argv
 from hgere.commands.train_span_classifier_by_config import (
     cli as train_span_classifier_by_config_cli,
 )
@@ -190,98 +189,6 @@ class TestPrunerModelToArgv:
 
 
 # ---------------------------------------------------------------------------
-# model_to_argv (hgere)
-# ---------------------------------------------------------------------------
-
-
-class TestHGEREModelToArgv:
-    def test_model_dir_remapped_to_output_dir(self) -> None:
-        config = _make_hgere_config()
-        argv = hgere_model_to_argv(config)
-        assert "--output_dir" in argv
-        assert argv[argv.index("--output_dir") + 1] == "saves/hgere"
-        assert "--model_dir" not in argv
-
-    def test_base_model_remapped_to_model_name_or_path(self) -> None:
-        config = _make_hgere_config()
-        argv = hgere_model_to_argv(config)
-        assert "--model_name_or_path" in argv
-        assert "--base_model_name_or_path" not in argv
-
-    def test_label_set_added(self) -> None:
-        config = _make_hgere_config(label_set="scier")
-        argv = hgere_model_to_argv(config)
-        assert "--label_set" in argv
-        assert argv[argv.index("--label_set") + 1] == "scier"
-
-    def test_n_iter_remapped_to_iter(self) -> None:
-        config = _make_hgere_config()
-        argv = hgere_model_to_argv(config)
-        assert "--iter" in argv
-        assert "--n_iter" not in argv
-
-    def test_schema_version_excluded(self) -> None:
-        config = _make_hgere_config()
-        argv = hgere_model_to_argv(config)
-        assert "--schema_version" not in argv
-
-    def test_do_train_present_by_default(self) -> None:
-        config = _make_hgere_config()
-        argv = hgere_model_to_argv(config)
-        assert "--do_train" in argv
-
-    def test_eval_dev_eval_test_present_by_default(self) -> None:
-        config = _make_hgere_config()
-        argv = hgere_model_to_argv(config)
-        assert "--eval_dev" in argv
-        assert "--eval_test" in argv
-
-    def test_layernorm_bool_flag(self) -> None:
-        config = _make_hgere_config(layernorm=True, layernorm_1st=True)
-        argv = hgere_model_to_argv(config)
-        assert "--layernorm" in argv
-        assert "--layernorm_1st" in argv
-
-    def test_log_wandb_bool_flag(self) -> None:
-        config = _make_hgere_config(log_wandb=True)
-        argv = hgere_model_to_argv(config)
-        assert "--log_wandb" in argv
-
-    def test_false_bool_flag_not_included(self) -> None:
-        config = _make_hgere_config(fp16=False)
-        argv = hgere_model_to_argv(config)
-        assert "--fp16" not in argv
-
-    def test_fp16_bool_flag_included_when_true(self) -> None:
-        config = _make_hgere_config(fp16=True)
-        argv = hgere_model_to_argv(config)
-        assert "--fp16" in argv
-
-    def test_none_values_omitted(self) -> None:
-        config = _make_hgere_config()
-        # run_name is Optional[str] defaulting to None
-        argv = hgere_model_to_argv(config)
-        assert "--run_name" not in argv
-
-    def test_learning_rate_included(self) -> None:
-        config = _make_hgere_config(learning_rate=2e-5)
-        argv = hgere_model_to_argv(config)
-        assert "--learning_rate" in argv
-        assert argv[argv.index("--learning_rate") + 1] == str(2e-5)
-
-    def test_ner_prediction_dir_included(self) -> None:
-        config = _make_hgere_config(ner_prediction_dir="path/to/predictions")
-        argv = hgere_model_to_argv(config)
-        assert "--ner_prediction_dir" in argv
-        assert argv[argv.index("--ner_prediction_dir") + 1] == "path/to/predictions"
-
-    def test_loss_re_weight_alpha_included(self) -> None:
-        config = _make_hgere_config(loss_re_weight_alpha=0.9)
-        argv = hgere_model_to_argv(config)
-        assert "--loss_re_weight_alpha" in argv
-
-
-# ---------------------------------------------------------------------------
 # CLI end-to-end (subprocess mocked)
 # ---------------------------------------------------------------------------
 
@@ -362,6 +269,8 @@ class TestTrainSpanClassifierByConfigCli:
 
 
 class TestTrainHgereCli:
+    """cli() is now an alias for main() — tests verify it delegates correctly."""
+
     def _write_config(
         self, tmp_path: Path, overrides: dict[str, Any] | None = None
     ) -> Path:
@@ -373,6 +282,7 @@ class TestTrainHgereCli:
         return p
 
     def test_calls_main(self, tmp_path: Path) -> None:
+        """cli() delegates to main() with no arguments (main reads sys.argv)."""
         config_path = self._write_config(tmp_path)
         with (
             patch("hgere.commands.train_hgere.main") as mock_main,
@@ -381,22 +291,7 @@ class TestTrainHgereCli:
             ),
         ):
             train_hgere_by_config_cli()
-        mock_main.assert_called_once()
-        argv = mock_main.call_args[0][0]
-        assert isinstance(argv, list)
-
-    def test_output_dir_in_argv(self, tmp_path: Path) -> None:
-        config_path = self._write_config(tmp_path)
-        with (
-            patch("hgere.commands.train_hgere.main") as mock_main,
-            patch.object(
-                sys, "argv", ["train-hgere-by-config", "--config", str(config_path)]
-            ),
-        ):
-            train_hgere_by_config_cli()
-        argv = mock_main.call_args[0][0]
-        assert "--output_dir" in argv
-        assert argv[argv.index("--output_dir") + 1] == "saves/hgere"
+        mock_main.assert_called_once_with()
 
     def test_missing_config_exits(self, tmp_path: Path) -> None:
         with (
@@ -409,19 +304,6 @@ class TestTrainHgereCli:
         ):
             train_hgere_by_config_cli()
         assert exc_info.value.code != 0
-
-    def test_model_name_or_path_in_argv(self, tmp_path: Path) -> None:
-        config_path = self._write_config(tmp_path)
-        with (
-            patch("hgere.commands.train_hgere.main") as mock_main,
-            patch.object(
-                sys, "argv", ["train-hgere-by-config", "--config", str(config_path)]
-            ),
-        ):
-            train_hgere_by_config_cli()
-        argv = mock_main.call_args[0][0]
-        assert "--model_name_or_path" in argv
-        assert "--base_model_name_or_path" not in argv
 
     def test_no_config_flag_exits(self, tmp_path: Path) -> None:
         with (

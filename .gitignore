@@ -1,6 +1,5 @@
 # Project related
 reports/
-pipeline/
 
 # ignore saves
 saves/
@@ -13,7 +12,7 @@ datasets/
 pretrained_models/
 uv.lock
 pruner_predictions/
-pipeline/
+/pipeline/
 # ML related
 wandb/
 

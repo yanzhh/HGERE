@@ -468,9 +468,12 @@ def _get_metrics(tp, fp, support, suffix):
 def _select_sent_spans(sent_spans, prune_config):
     """Apply a best_config dict (threshold_analysis.py format) to one sentence's span pool."""
     method = prune_config["best_method"]
+    # make sure, the spans are sorted by max probability
     if method == "threshold":
         t = prune_config["parameters"]
-        return [(s, e, p, lbl) for s, e, p, lbl in sent_spans if p >= t]
+        sent_spans = [(s, e, p, lbl) for s, e, p, lbl in sent_spans if p >= t]
+        sent_spans = sorted(sent_spans, key=lambda x: -x[2])
+        return sent_spans
     elif method == "topk":
         params = prune_config["parameters"]
         lam = params["topk_ratio"]

@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Optional
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
+from ..span_classifier.config import PreFilterParams
+
 if TYPE_CHECKING:
     pass
 
@@ -163,6 +165,9 @@ class HGERETrainParams(BaseModel):
 
     # ── Data loading ─────────────────────────────────────────────────────────
     shuffle: bool = Field(default=False, description="Shuffle training data.")
+    pre_filter_params: Optional[PreFilterParams] = Field(
+        default=None, description="Parameters for pre-filtering NER candidates."
+    )
     batch_by_size: bool = Field(
         default=False,
         description=(

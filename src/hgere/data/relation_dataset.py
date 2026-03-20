@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import json
 import math
 import random
 from collections import Counter
+from copy import deepcopy
 from typing import Any, List
 
 import numpy as np
@@ -13,15 +13,15 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-
-from hgere.data.base_dataset import DocumentDataset
-from hgere.data.samplers import (
+from ..data.base_dataset import DocumentDataset
+from ..data.samplers import (
     BucketSampler,
     DistributedBucketSampler,
     create_batches,
     create_shuffled_batches,
     create_size_sorted_batches,
 )
+from ..span_classifier.neural.evaluate import _select_sent_spans
 
 
 class SentenceSubjectCandidate:
@@ -194,6 +194,7 @@ class RelationDataset(DocumentDataset):
         max_ents: int = 18,
         doc_limit: int | None = None,
         preload: bool = False,
+        pre_filter_params: dict[Any, Any] | None = None,
     ) -> None:
         self.logger = logger
         self.max_pair_length = max_pair_length
@@ -228,6 +229,7 @@ class RelationDataset(DocumentDataset):
             max_seq_length=args.max_seq_length if args else 512,
             lazy=False,
             doc_limit=doc_limit,
+            pre_filter_params=pre_filter_params,
         )
         self._build_index()
 
@@ -276,10 +278,8 @@ class RelationDataset(DocumentDataset):
                 f.seek(self._offsets[doc_idx])
                 raw = json.loads(f.readline())
 
-            if "predicted_ner" in raw:
-                ner_candidates_all = raw["predicted_ner"]
-            else:
-                ner_candidates_all = raw["ner"]
+            ner_candidates_all = self._select_candidate_ner(raw)
+
             ner_gold_all = raw["ner"]
             relations_all = raw["relations"]
 
@@ -505,6 +505,24 @@ class RelationDataset(DocumentDataset):
                 )
                 self.data.append(new_sent)
                 self.sizes.append(new_sent.size)
+
+    def _select_candidate_ner(self, raw_doc: dict[str, Any]) -> list[Any]:
+        if self.do_pre_filter:
+            assert (
+                "predicted_ner_proba" in raw_doc
+            )  # do do pre_filtering you need to add "predicted_ner_proba"
+            ner_candidates_all = []
+            for sent_candidates in raw_doc["predicted_ner_proba"]:
+                candidates = _select_sent_spans(sent_candidates, self.pre_filter_params)
+                candidates = [
+                    (start, end, label) for start, end, _, label in candidates
+                ]
+                ner_candidates_all.extend(candidates)
+            return ner_candidates_all
+        elif "predicted_ner" in raw_doc:
+            return raw_doc["predicted_ner"]
+        else:
+            return raw_doc["ner"]
 
     # ------------------------------------------------------------------
     # Tensor construction (unchanged logic from original prepare_item)

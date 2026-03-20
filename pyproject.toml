@@ -35,7 +35,6 @@ run-pipeline = "hgere.commands.run_pipeline:cli"
 benchmark-pipeline = "hgere.commands.benchmark_pipeline:cli"
 train-span-classifier-by-config = "hgere.commands.train_span_classifier_by_config:cli"
 train-hgere = "hgere.commands.train_hgere:main"
-train-hgere-by-config = "hgere.commands.train_hgere:cli"
 generate-pruner-docs = "hgere.documentation.generate_pruner_docs:cli"
 
 [dependency-groups]

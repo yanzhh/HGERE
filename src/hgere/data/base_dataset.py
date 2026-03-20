@@ -44,6 +44,7 @@ class DocumentDataset(Dataset, ABC):
         tokenizer: Any,
         max_seq_length: int,
         lazy: bool = False,
+        pre_filter_params: dict[Any, Any] | None = None,
         doc_limit: int | None = None,
     ) -> None:
         self._file_path = Path(file_path)
@@ -51,6 +52,9 @@ class DocumentDataset(Dataset, ABC):
         self.max_seq_length = max_seq_length
         self._lazy = lazy
         self._doc_limit = doc_limit
+
+        self.do_pre_filter = pre_filter_params is not None
+        self.pre_filter_params = pre_filter_params
 
         # Scan file for byte offsets — fast, no JSON parsing
         self._offsets = self._index_file()
