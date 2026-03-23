@@ -69,7 +69,7 @@ hgere:
     rel_dim: 400
     mem_dim: 400
     ent_repr: mix
-    iter: 3
+    n_iter: 3
     layernorm: true
     layernorm_1st: true
 

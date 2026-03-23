@@ -29,6 +29,8 @@ import logging
 import sys
 from pathlib import Path
 
+from tqdm import tqdm
+
 from gsapere.pipeline.pipeline import Pipeline
 
 
@@ -134,15 +136,26 @@ def _process_file(
 
     effective_batch = batch_size if batch_size > 0 else len(docs)
     all_results: list[dict] = []
-    for start in range(0, len(docs), effective_batch):
-        batch = docs[start : start + effective_batch]
-        logger.info(
-            "Processing documents %d–%d / %d",
-            start + 1,
-            min(start + effective_batch, len(docs)),
-            len(docs),
-        )
-        all_results.extend(pipeline.process_documents(batch))
+
+    show_doc_bar = len(docs) > 1
+    doc_bar = (
+        tqdm(total=len(docs), desc=input_file.name, unit="doc", leave=False)
+        if show_doc_bar
+        else None
+    )
+    try:
+        for start in range(0, len(docs), effective_batch):
+            batch = docs[start : start + effective_batch]
+            total_sents = sum(len(d.get("sentences", [])) for d in batch)
+            show_progress = total_sents > 100
+            all_results.extend(
+                pipeline.process_documents(batch, show_progress=show_progress)
+            )
+            if doc_bar is not None:
+                doc_bar.update(len(batch))
+    finally:
+        if doc_bar is not None:
+            doc_bar.close()
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "w") as f:
@@ -178,7 +191,13 @@ def cli() -> None:
     logger.info("Loading pipeline from %s", args.config)
     pipeline = Pipeline.from_yaml(args.config)
 
-    for input_file in input_files:
+    file_iter: tqdm | list[Path]
+    if input_path.is_dir():
+        file_iter = tqdm(input_files, desc="Files", unit="file")
+    else:
+        file_iter = input_files
+
+    for input_file in file_iter:
         if input_path.is_dir():
             output_file = output_path / input_file.name
         else:

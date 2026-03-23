@@ -15,7 +15,11 @@ from typing import Any
 
 import torch
 
-from gsapere.pipeline.config import FinalPruningConfig, PrunerConfig
+from gsapere.pipeline.config import (
+    FinalPruningConfig,
+    PrunerConfig,
+    suppress_transformers_warnings,
+)
 from gsapere.span_classifier.neural.evaluate import run_pruner_inference
 from gsapere.span_classifier.neural.train import MODEL_CLASSES
 
@@ -213,11 +217,13 @@ class PrunerRunner:
                 model_path = checkpoints[-1]
                 logger.info("Pruner: using checkpoint %s", model_path)
 
-        bert_config = config_class.from_pretrained(str(model_path))
-        self._tokenizer = tokenizer_class.from_pretrained(
-            cfg.base_model_name_or_path,
-            do_lower_case=cfg.do_lower_case,
-        )
+        with suppress_transformers_warnings():
+            bert_config = config_class.from_pretrained(str(model_path))
+        with suppress_transformers_warnings():
+            self._tokenizer = tokenizer_class.from_pretrained(
+                cfg.base_model_name_or_path,
+                do_lower_case=cfg.do_lower_case,
+            )
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._device = device
@@ -245,9 +251,10 @@ class PrunerRunner:
                 "Pruner: training_args.bin not found at %s, using defaults",
                 model_path,
             )
-        self._model = model_class.from_pretrained(
-            str(model_path), config=bert_config, args=model_args
-        )
+        with suppress_transformers_warnings():
+            self._model = model_class.from_pretrained(
+                str(model_path), config=bert_config, args=model_args
+            )
         self._model.to(device)
         self._model.eval()
         logger.info("Pruner model loaded from %s", model_path)
@@ -268,13 +275,17 @@ class PrunerRunner:
             n_gpu=n_gpu,
             device=self._device,
             nocross=False,
+            rulebased_pruner_file=self._config.rulebased_pruner_file,
         )
 
-    def run(self, docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def run(
+        self, docs: list[dict[str, Any]], show_progress: bool = False
+    ) -> list[dict[str, Any]]:
         """Score all spans in docs and annotate with candidates.
 
         Args:
             docs: List of document dicts with at least 'sentences' and 'doc_key'.
+            show_progress: Show a tqdm progress bar over inference batches.
 
         Returns:
             Same docs enriched with:
@@ -299,7 +310,13 @@ class PrunerRunner:
                 for doc in docs:
                     tmp_f.write(json.dumps(doc) + "\n")
 
-            pool = run_pruner_inference(args, self._model, self._tokenizer, tmp_path)
+            pool = run_pruner_inference(
+                args,
+                self._model,
+                self._tokenizer,
+                tmp_path,
+                disable_progress=not show_progress,
+            )
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)

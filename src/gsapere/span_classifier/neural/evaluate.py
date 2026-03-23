@@ -19,6 +19,7 @@ def run_pruner_inference(
     model: object,
     tokenizer: object,
     file_path: str,
+    disable_progress: bool = True,
 ) -> dict[tuple[int, int], list[tuple[int, int, float, str]]]:
     """Run pruner inference and return the span candidate pool per sentence.
 
@@ -49,6 +50,7 @@ def run_pruner_inference(
         label_set=args.label_set,
         evaluate=True,
         nocross=getattr(args, "nocross", False),
+        rulebased_pruner_file=getattr(args, "rulebased_pruner_file", None),
     )
 
     goldspan2label = _span2label(set(eval_dataset.ner_golden_labels))
@@ -59,7 +61,7 @@ def run_pruner_inference(
         sampler=eval_sampler,
         batch_size=eval_batch_size,
         collate_fn=PrunerCollator(),
-        num_workers=1,
+        num_workers=4,
     )
 
     topk_infos = (
@@ -74,7 +76,12 @@ def run_pruner_inference(
     closed_sentences: dict = {"probs": None}
     open_sentence: dict = {"probs": None}
 
-    for batch in eval_dataloader:
+    for batch in tqdm(
+        eval_dataloader,
+        desc="Pruner inference",
+        total=len(eval_dataloader),
+        disable=disable_progress,
+    ):
         indexs = batch[-2]
         batch_m2s = batch[-1]
         sent_lens = batch[6]

@@ -1,0 +1,36 @@
+label_set: gsap
+
+pruner:
+    model_dir: saves/gsap/best-gsap-pruner
+    base_model_name_or_path: allenai/scibert_scivocab_uncased
+    do_lower_case: true
+    model_type: bertspanmarkerpruner
+    per_gpu_eval_batch_size: 16
+    max_seq_length: 256
+    max_pair_length: 64
+    max_mention_ori_length: 12
+    # Path to best_config.json (from threshold_analysis) for pre-filtering
+    # topk params inside run_pruner_inference.  Set to null to use defaults.
+    rulebased_pruner_file: saves/gsap/best-prefilter-rules.json
+    final_pruning:
+        method: threshold
+        threshold: 0.0789031982421875
+
+hgere:
+    model_dir: saves/gsap/best-gsap-hgere-slurm
+    base_model_name_or_path: allenai/scibert_scivocab_uncased
+    model_type: hyper
+    do_lower_case: true
+    no_sym: false
+    per_gpu_eval_batch_size: 21
+    max_seq_length: 512
+    max_pair_length: 18
+    factor_type: tersibcop
+    factor_encoder: biaf
+    ent_dim: 400
+    rel_dim: 400
+    mem_dim: 400
+    ent_repr: mix
+    n_iter: 3
+    layernorm: true
+    layernorm_1st: true

@@ -18,10 +18,10 @@ import torch
 from transformers import AutoTokenizer, BertConfig
 
 from gsapere.data.relation_dataset import RelationDataset
-from gsapere.hgere.infer_fixed_spans import infer_fixed_spans
+from gsapere.hgere.inference import infer_hgere
 from gsapere.labels import LABELS
 from gsapere.models.hgere import BertForHyperGNN
-from gsapere.pipeline.config import HGEREConfig
+from gsapere.pipeline.config import HGEREConfig, suppress_transformers_warnings
 
 logger = logging.getLogger(__name__)
 
@@ -63,17 +63,19 @@ class HGERERunner:
         labels = LABELS[self._label_set]
         num_rel_labels = labels.num_rel_labels(cfg.no_sym)
 
-        bert_config = config_class.from_pretrained(
-            str(model_path), num_labels=num_rel_labels
-        )
+        with suppress_transformers_warnings():
+            bert_config = config_class.from_pretrained(
+                str(model_path), num_labels=num_rel_labels
+            )
         bert_config.max_seq_length = cfg.max_seq_length
         bert_config.num_ner_labels = labels.num_ner_labels
         bert_config.alpha = 1.0
 
-        self._tokenizer = tokenizer_class.from_pretrained(
-            cfg.base_model_name_or_path,
-            do_lower_case=cfg.do_lower_case,
-        )
+        with suppress_transformers_warnings():
+            self._tokenizer = tokenizer_class.from_pretrained(
+                cfg.base_model_name_or_path,
+                do_lower_case=cfg.do_lower_case,
+            )
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._device = device
@@ -87,7 +89,7 @@ class HGERERunner:
             factor_type=cfg.factor_type,
             factor_encoder=cfg.factor_encoder,
             ent_repr=cfg.ent_repr,
-            iter=cfg.iter,
+            n_iter=cfg.n_iter,
             layernorm=cfg.layernorm,
             layernorm_1st=cfg.layernorm_1st,
             attn_self=cfg.attn_self,
@@ -95,9 +97,10 @@ class HGERERunner:
             unirel=cfg.unirel,
             device=device,
         )
-        self._model = model_class.from_pretrained(
-            str(model_path), config=bert_config, args=infer_args
-        )
+        with suppress_transformers_warnings():
+            self._model = model_class.from_pretrained(
+                str(model_path), config=bert_config, args=infer_args
+            )
         self._model.to(device)
         self._model.eval()
         logger.info("HGERE model loaded from %s", model_path)
@@ -126,7 +129,9 @@ class HGERERunner:
             preload_dataset=False,
         )
 
-    def _run_inference(self, docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _run_inference(
+        self, docs: list[dict[str, Any]], show_progress: bool = False
+    ) -> list[dict[str, Any]]:
         """Write docs to tempfiles, run HGERE, read results back."""
         n_gpu = torch.cuda.device_count()
         args = self._make_args(n_gpu)
@@ -164,7 +169,7 @@ class HGERERunner:
                 pin_memory=True,
             )
 
-            infer_fixed_spans(
+            infer_hgere(
                 model=self._model,
                 eval_dataset=dataset,
                 args=args,
@@ -172,7 +177,8 @@ class HGERERunner:
                 source_file_path=tmp_input,
                 output_path=tmp_output,
                 gold_only=False,
-                disable_progress=True,
+                disable_progress=not show_progress,
+                force_non_nil=self._config.force_non_nil,
             )
 
             result = []
@@ -186,11 +192,14 @@ class HGERERunner:
                 if p and os.path.exists(p):
                     os.unlink(p)
 
-    def run(self, docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def run(
+        self, docs: list[dict[str, Any]], show_progress: bool = False
+    ) -> list[dict[str, Any]]:
         """Run HGERE on docs that already have ``predicted_ner`` candidates.
 
         Args:
             docs: Documents with ``predicted_ner`` populated by PrunerRunner.
+            show_progress: Show a tqdm progress bar over inference batches.
 
         Returns:
             Same docs enriched with ``predicted_ner``, ``predicted_ner_proba``,
@@ -198,4 +207,4 @@ class HGERERunner:
         """
         if not docs:
             return []
-        return self._run_inference(docs)
+        return self._run_inference(docs, show_progress=show_progress)

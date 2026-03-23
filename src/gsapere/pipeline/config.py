@@ -5,11 +5,28 @@ Loaded from a YAML file via PipelineConfig.from_yaml().
 
 from __future__ import annotations
 
+import logging
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Generator, Literal
 
+import transformers
 import yaml
 from pydantic import BaseModel, model_validator
+
+
+@contextmanager
+def suppress_transformers_warnings() -> Generator[None, None, None]:
+    """Suppress HuggingFace weight-mismatch warnings unless DEBUG logging is active."""
+    if logging.getLogger().isEnabledFor(logging.DEBUG):
+        yield
+    else:
+        prev = transformers.logging.get_verbosity()
+        transformers.logging.set_verbosity_error()
+        try:
+            yield
+        finally:
+            transformers.logging.set_verbosity(prev)
 
 
 class FinalPruningConfig(BaseModel):
@@ -47,6 +64,9 @@ class PrunerConfig(BaseModel):
     # Path to a best_config.json (from threshold_analysis) for pre-filtering
     # topk params used inside run_pruner_inference.  None = use defaults.
     prune_config: str | None = None
+    # Path to a RuleBasedPruner pattern file (.json) produced by eval-rulebased-pruner.
+    # When set, spans matching rulebased patterns are removed before the neural pruner runs.
+    rulebased_pruner_file: str | None = None
     final_pruning: FinalPruningConfig = FinalPruningConfig()
 
 
@@ -67,7 +87,7 @@ class HGEREConfig(BaseModel):
     # Entity representation: "mix" (sub+obj), "sub", or "obj"
     ent_repr: str = "mix"
     # GNN iterations
-    iter: int = 3
+    n_iter: int = 3
     layernorm: bool = False
     layernorm_1st: bool = False
     attn_self: bool = False
@@ -78,6 +98,11 @@ class HGEREConfig(BaseModel):
     no_sym: bool = True
     nocross: bool = False
     local_rank: int = -1
+    # NER decoding: if False (default), standard argmax — NIL predictions are
+    # dropped and only high-confidence non-NIL entities appear in output.
+    # Set to True only for gold-span / cross-dataset evaluation where every
+    # candidate must receive a non-NIL label.
+    force_non_nil: bool = False
 
 
 class PipelineConfig(BaseModel):

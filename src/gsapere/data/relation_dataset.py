@@ -179,7 +179,7 @@ class RelationDataset(DocumentDataset):
     Inherits shared tokenization and context-window infrastructure from DocumentDataset.
 
     Constructor signature is identical to the original RelationDataset to preserve
-    backward compatibility with run_hgnn.py, infer_fixed_spans.py, and
+    backward compatibility with run_hgnn.py, hgere/inference.py, and
     infer_pruner_augmented.py.
     """
 
@@ -280,8 +280,9 @@ class RelationDataset(DocumentDataset):
 
             ner_candidates_all = self._select_candidate_ner(raw)
 
-            ner_gold_all = raw["ner"]
-            relations_all = raw["relations"]
+            n_sents = len(doc.sentences)
+            ner_gold_all = raw.get("ner", [[] for _ in range(n_sents)])
+            relations_all = raw.get("relations", [[] for _ in range(n_sents)])
 
             for sent_rel in relations_all:
                 self.tot_recall += len(sent_rel)
@@ -522,7 +523,7 @@ class RelationDataset(DocumentDataset):
         elif "predicted_ner" in raw_doc:
             return raw_doc["predicted_ner"]
         else:
-            return raw_doc["ner"]
+            return raw_doc.get("ner", [[] for _ in raw_doc.get("sentences", [])])
 
     # ------------------------------------------------------------------
     # Tensor construction (unchanged logic from original prepare_item)

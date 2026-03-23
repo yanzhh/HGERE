@@ -27,7 +27,7 @@ from pathlib import Path
 import torch
 
 from gsapere.data.relation_dataset import RelationDataset
-from gsapere.hgere.infer_fixed_spans import infer_fixed_spans, make_gold_span_file
+from gsapere.hgere.inference import infer_hgere, prepare_input_file
 from gsapere.labels import LABELS
 from gsapere.utils import set_seed
 from transformers import AutoTokenizer, BertConfig
@@ -138,6 +138,7 @@ def _build_parser():
 
 def cli():
     args = _build_parser().parse_args()
+    args.n_iter = args.iter  # model uses args.n_iter (Pydantic config name)
 
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -256,7 +257,7 @@ def cli():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp_f:
         tmp_path = tmp_f.name
     try:
-        make_gold_span_file(args.input_file, tmp_path)
+        prepare_input_file(args.input_file, tmp_path, candidates_from="ner")
 
         args.train_batch_size = args.per_gpu_eval_batch_size
         args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
@@ -283,7 +284,7 @@ def cli():
         )
         logger.info("Loaded %d examples from %s", len(dataset), args.input_file)
 
-        infer_fixed_spans(
+        infer_hgere(
             model=model,
             eval_dataset=dataset,
             args=args,

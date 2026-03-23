@@ -1,19 +1,45 @@
 """
-Inference with fixed (gold) spans.
+HGERE inference over candidate spans.
 
-Given gold NER spans as entity candidates, predicts the highest-probability
-non-NIL entity type for each span (NIL is masked out from the NER logits).
-Relations are predicted with the standard HGERE logic.
+Candidate source
+----------------
+Controlled by ``candidates_from`` in :func:`prepare_input_file`:
 
-Intended use: evaluate a model trained on one dataset on another dataset's
-gold spans, to test cross-dataset entity type prediction.
+``"predicted_ner"`` (default)
+    Use the ``predicted_ner`` field — pruner output in normal pipeline mode.
+
+``"ner"``
+    Replace candidates with gold ``ner`` spans.  Use for gold-span evaluation.
+
+``augment_with_gold=True``
+    Merge ``predicted_ner`` with gold ``ner`` spans so every gold span is
+    seen by HGERE.  Useful for upper-bound / oracle experiments.
+
+NER decoding modes
+------------------
+Controlled by ``force_non_nil`` in :func:`infer_hgere`:
+
+``force_non_nil=False`` (default — pipeline mode)
+    Standard softmax argmax over all NER classes, including NIL.
+    Only spans whose predicted label is *not* NIL appear in ``predicted_ner``
+    and ``predicted_ner_proba``.  Relations are only predicted between pairs
+    where *both* endpoints received a non-NIL label.
+
+``force_non_nil=True`` (gold-span / cross-dataset mode)
+    NIL is masked out of the NER logits before argmax, so every candidate
+    span is forced to receive the highest-probability *non-NIL* label.
+
+Relations are always predicted with the standard HGERE decoding logic
+(NIL relations are filtered out).
 """
 
 import json
+import shutil
 import timeit
 from collections import defaultdict
 from itertools import combinations
 from pathlib import Path
+from typing import Literal
 
 import torch
 from tqdm import tqdm
@@ -27,7 +53,7 @@ _EVAL_KEYS = [
 ]
 
 
-def infer_fixed_spans(
+def infer_hgere(
     model,
     eval_dataset,
     args,
@@ -36,12 +62,13 @@ def infer_fixed_spans(
     output_path,
     gold_only: bool = False,
     disable_progress: bool = False,
+    force_non_nil: bool = False,
 ):
-    """Run inference using fixed (gold) entity spans as candidates.
+    """Run HGERE inference over candidate spans already loaded in eval_dataset.
 
-    For NER: masks the NIL class from the logits so every span receives the
-    highest-probability *non-NIL* label.
-    For relations: standard HGERE decoding (NIL filtered out as usual).
+    Candidates come from whatever ``predicted_ner`` field was set when the
+    dataset was built.  Use :func:`prepare_input_file` beforehand to control
+    the candidate source (pruner output, gold spans, or augmented).
 
     Args:
         model: loaded HGERE model in eval mode.
@@ -55,6 +82,11 @@ def infer_fixed_spans(
         gold_only: if True, filter the output ``predicted_ner`` /
             ``predicted_rel`` to only spans/relations whose endpoints appear
             in the gold ``ner`` of the source file.
+        force_non_nil: if True, mask NIL from NER logits before argmax so
+            every candidate span is forced to receive a non-NIL label.
+            Use this only for gold-span / cross-dataset evaluation.
+            Default False (pipeline mode): standard argmax including NIL;
+            only non-NIL spans appear in output.
     """
     model.eval()
     start_time = timeit.default_timer()
@@ -89,10 +121,15 @@ def infer_fixed_spans(
 
             rel_logits = torch.nn.functional.log_softmax(rel_logits, dim=-1)
 
-            # Force non-NIL: mask NIL logit to -inf, then argmax.
             ner_logits_masked = ner_logits.clone()
             ner_logits_masked[..., nil_index] = float("-inf")
-            ner_preds = torch.argmax(ner_logits_masked, dim=-1)
+
+            if force_non_nil:
+                # Gold-span mode: mask NIL so every span gets a non-NIL label.
+                ner_preds = torch.argmax(ner_logits_masked, dim=-1)
+            else:
+                # Pipeline mode: standard argmax; NIL is a valid prediction.
+                ner_preds = torch.argmax(ner_logits, dim=-1)
 
             # --- NER predictions ---
             for sample_idx, sent_id in enumerate(sent_indices):
@@ -104,7 +141,7 @@ def infer_fixed_spans(
                 sample_logits_full = ner_logits[sample_idx][:n_spans]
                 softmax_full = torch.nn.functional.softmax(sample_logits_full, dim=-1)
 
-                # prob_nil: P(NIL) over all classes
+                # prob_nil: P(NIL) over all classes (useful as a confidence signal)
                 probs_nil = softmax_full[..., nil_index].cpu().numpy()
 
                 # prob_no_nil: P(predicted label) renormalized over non-NIL classes
@@ -171,14 +208,32 @@ def infer_fixed_spans(
     for sent_id, sent_ents in ner_predictions.items():
         sent_rels = sorted(rel_predictions[sent_id], key=lambda x: -x[-1])
 
-        pred_ner = sorted(span + (label,) for span, (label, _, __) in sent_ents.items())
-        # predicted_ner_proba entries: [start, end, label, prob_total, prob_no_nil]
-        # prob_total  = P(label | all classes incl. NIL)
-        # prob_no_nil = P(label | non-NIL classes only)
+        if force_non_nil:
+            # Include every candidate (all are guaranteed non-NIL).
+            ents_to_output = sent_ents.items()
+        else:
+            # Pipeline mode: drop spans the model predicted as NIL.
+            ents_to_output = [
+                (span, info) for span, info in sent_ents.items() if info[0] != "NIL"
+            ]
+
+        pred_ner = sorted(span + (label,) for span, (label, _, __) in ents_to_output)
+        # predicted_ner_proba entries: [start, end, label, p_nil, p_no_nil]
+        # p_nil    = P(NIL | all classes) — low means model is confident it's an entity
+        # p_no_nil = P(label | non-NIL classes only)
         pred_ner_proba = sorted(
-            span + (label, p_total, p_no_nil)
-            for span, (label, p_total, p_no_nil) in sent_ents.items()
+            span + (label, p_nil, p_no_nil)
+            for span, (label, p_nil, p_no_nil) in ents_to_output
         )
+
+        if not force_non_nil:
+            # Only keep relations where both endpoints have a non-NIL NER label.
+            non_nil_spans = {
+                span for span, (label, _, __) in sent_ents.items() if label != "NIL"
+            }
+            sent_rels = [
+                r for r in sent_rels if r[0] in non_nil_spans and r[2] in non_nil_spans
+            ]
         pred_rel = sorted(s + o + (lbl,) for s, _, o, __, lbl, ___ in sent_rels)
         pred_rel_proba = sorted(s + o + (lbl, sc) for s, _, o, __, lbl, sc in sent_rels)
 
@@ -234,46 +289,52 @@ def infer_fixed_spans(
     logger.info("Fixed-span inference done in %.1f s", elapsed)
 
 
-def make_augmented_candidate_file(source_file_path, tmp_file_path):
-    """Write a copy of *source_file_path* where ``predicted_ner`` is the union
-    of the existing ``predicted_ner`` (pruner/pipeline output) and the gold
-    ``ner`` spans.
+def prepare_input_file(
+    source_file_path: str,
+    tmp_file_path: str,
+    candidates_from: Literal["predicted_ner", "ner"] = "predicted_ner",
+    augment_with_gold: bool = False,
+) -> None:
+    """Write a copy of *source_file_path* with ``predicted_ner`` set according
+    to the chosen candidate source.
 
-    Gold spans not already present in ``predicted_ner`` are appended with their
-    original label.  This ensures every gold span is scored by HGERE while
-    keeping the full pipeline context intact.
+    Args:
+        source_file_path: original data file.
+        tmp_file_path: destination for the prepared copy.
+        candidates_from: ``"predicted_ner"`` (default) keeps the pruner output
+            as-is.  ``"ner"`` replaces candidates with gold spans — use for
+            gold-span / oracle evaluation.
+        augment_with_gold: when True, merge pruner ``predicted_ner`` with gold
+            ``ner`` spans so every gold span is seen by HGERE.  Gold spans are
+            prepended so they are never truncated by ``max_ents``.  Ignored
+            when ``candidates_from="ner"``.
     """
+    if candidates_from == "predicted_ner" and not augment_with_gold:
+        shutil.copy(source_file_path, tmp_file_path)
+        return
+
     with open(source_file_path) as in_f, open(tmp_file_path, "w") as out_f:
         for line in in_f:
             data = json.loads(line)
-            pred_ner = data.get("predicted_ner", [])
             gold_ner = data.get("ner", [])
             num_sents = len(data["sentences"])
 
-            merged = []
-            for sent_idx in range(num_sents):
-                pred_spans = pred_ner[sent_idx] if sent_idx < len(pred_ner) else []
-                gold_spans = gold_ner[sent_idx] if sent_idx < len(gold_ner) else []
-                gold_set = {(s[0], s[1]) for s in gold_spans}
-                # Gold spans come first so they are never truncated by max_ents.
-                augmented = list(gold_spans)
-                for span in pred_spans:
-                    if (span[0], span[1]) not in gold_set:
-                        augmented.append(span)
-                merged.append(augmented)
+            if candidates_from == "ner":
+                data["predicted_ner"] = [
+                    list(gold_ner[i]) if i < len(gold_ner) else []
+                    for i in range(num_sents)
+                ]
+            else:
+                # augment_with_gold=True: gold spans first, then pruner extras
+                pred_ner = data.get("predicted_ner", [])
+                merged = []
+                for i in range(num_sents):
+                    pred = pred_ner[i] if i < len(pred_ner) else []
+                    gold = gold_ner[i] if i < len(gold_ner) else []
+                    gold_set = {(s[0], s[1]) for s in gold}
+                    merged.append(
+                        list(gold) + [s for s in pred if (s[0], s[1]) not in gold_set]
+                    )
+                data["predicted_ner"] = merged
 
-            data["predicted_ner"] = merged
-            out_f.write(json.dumps(data) + "\n")
-
-
-def make_gold_span_file(source_file_path, tmp_file_path):
-    """Write a copy of *source_file_path* where ``predicted_ner`` = gold ``ner``.
-
-    This ensures the dataset uses gold entity spans as candidates instead of
-    pruner predictions.
-    """
-    with open(source_file_path) as in_f, open(tmp_file_path, "w") as out_f:
-        for line in in_f:
-            data = json.loads(line)
-            data["predicted_ner"] = data["ner"]
             out_f.write(json.dumps(data) + "\n")

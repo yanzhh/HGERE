@@ -56,16 +56,20 @@ class Pipeline:
         results = self.process_documents([doc])
         return results[0]
 
-    def process_documents(self, docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def process_documents(
+        self, docs: list[dict[str, Any]], show_progress: bool = False
+    ) -> list[dict[str, Any]]:
         """Process a batch of documents.
 
         Args:
             docs: List of document dicts.
+            show_progress: Show tqdm progress bars over inference batches inside
+                the pruner and HGERE stages.
 
         Returns:
             List of enriched documents in the same order.
         """
         if not docs:
             return []
-        docs_with_candidates = self._pruner.run(docs)
-        return self._hgere.run(docs_with_candidates)
+        docs_with_candidates = self._pruner.run(docs, show_progress=show_progress)
+        return self._hgere.run(docs_with_candidates, show_progress=show_progress)
