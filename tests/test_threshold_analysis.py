@@ -1,5 +1,5 @@
 """
-Regression test for evaluation/threshold_analysis.py.
+Regression test for gsapere-tune-pruner (evaluation/threshold_analysis.py).
 
 Runs the script against the tamborin prediction files and compares the
 generated markdown report to the golden reference at
@@ -18,7 +18,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 GOLDEN_REPORT = ROOT / "reports" / "pruner" / "scier" / "scier_preds" / "threshold_analysis_report.md"
-SCRIPT        = ROOT / "evaluation" / "threshold_analysis.py"
+SCRIPT        = ROOT / "src" / "gsapere" / "evaluation" / "threshold_analysis.py"
 DEV_PRED      = ROOT / "saves" / "scier" / "pruner" / "tamborin" / "ent_pred_dev.json"
 TRAIN_PRED    = ROOT / "saves" / "scier" / "pruner" / "tamborin" / "ent_pred_train.json"
 TEST_PRED     = ROOT / "saves" / "scier" / "pruner" / "tamborin" / "ent_pred_test.json"

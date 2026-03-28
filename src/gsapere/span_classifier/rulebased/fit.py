@@ -1,11 +1,11 @@
 """Fit a RuleBasedPruner from collected n-gram statistics.
 
 Selection criteria for a pruning pattern:
-  1. purity >= purity_threshold  — fraction of occurrences that are NIL spans
-  2. frequency >= min_count      — enough evidence to trust the pattern
-  3. pattern_types               — restrict to prefix / suffix / infix / full
+  1. entity_rate <= max_entity_rate  — fraction of occurrences that are entity spans
+  2. frequency >= min_count          — enough evidence to trust the pattern
+  3. pattern_types                   — restrict to prefix / suffix / infix / full
 
-The default purity_threshold=1.0 gives a hard guarantee: no pattern that ever
+The default max_entity_rate=0.0 gives a hard guarantee: no pattern that ever
 appeared in a gold entity span will be used for pruning IN TRAINING.  However,
 prefix/suffix/infix patterns can still cause false negatives on unseen dev/test
 spans due to train–dev distribution mismatch.  Restricting to pattern_types={"full"}
@@ -21,7 +21,6 @@ from typing import Set
 import pandas as pd
 
 from .filter import RuleBasedPruner
-from .statistics import AFTER, BEFORE, END, START
 
 VALID_PATTERN_TYPES = {"prefix", "suffix", "full", "infix", "before", "after"}
 
@@ -51,8 +50,7 @@ def _build_type_mask(stats: pd.DataFrame, pattern_types: Set[str]) -> pd.Series:
 def fit(
     stats: pd.DataFrame,
     min_count: int,
-    purity_threshold: float = 1.0,
-    max_ngram_tokens: int = 12,
+    max_entity_rate: float = 0.0,
     pattern_types: Set[str] = None,
 ) -> RuleBasedPruner:
     """Select pruning patterns from n-gram statistics.
@@ -61,11 +59,9 @@ def fit(
     ----------
     stats : DataFrame returned by collect_stats()
     min_count : minimum frequency for a pattern to be trusted
-    purity_threshold : minimum fraction of NIL occurrences (default 1.0)
-    max_ngram_tokens : only consider patterns with at most this many word tokens
-        (boundary markers <S>/<E> are not counted)
+    max_entity_rate : maximum fraction of occurrences that are entity spans (default 0.0)
     pattern_types : set of allowed pattern types — any subset of
-        {"prefix", "suffix", "full", "infix"}.  Default: all four types.
+        {"prefix", "suffix", "full", "infix", "before", "after"}.  Default: all six types.
         Use {"full"} for the safest setting (exact span match only), which
         minimises false negatives on unseen data at the cost of fewer patterns.
 
@@ -77,13 +73,14 @@ def fit(
         pattern_types = VALID_PATTERN_TYPES
     unknown = pattern_types - VALID_PATTERN_TYPES
     if unknown:
-        raise ValueError(f"Unknown pattern types: {unknown}. Choose from {VALID_PATTERN_TYPES}")
+        raise ValueError(
+            f"Unknown pattern types: {unknown}. Choose from {VALID_PATTERN_TYPES}"
+        )
 
     type_mask = _build_type_mask(stats, pattern_types)
     mask = (
-        (stats["purity"] >= purity_threshold)
+        (stats["entity_rate"] <= max_entity_rate)
         & (stats["frequency"] >= min_count)
-        & (stats["n_tokens"] <= max_ngram_tokens)
         & type_mask
     )
     patterns = set(stats.loc[mask, "ngram"])

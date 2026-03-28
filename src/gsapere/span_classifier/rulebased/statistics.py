@@ -17,8 +17,7 @@ N-gram position types (determined by presence of boundary markers):
 
 import json
 from collections import Counter
-from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 import pandas as pd
 
@@ -40,7 +39,9 @@ def _iter_ngrams(tokens: List[str], max_n: int):
             yield tuple(tokens[i : i + size])
 
 
-def _iter_boundary_ngrams(marked: List[str], max_prefix_tokens: int, max_suffix_tokens: int):
+def _iter_boundary_ngrams(
+    marked: List[str], max_prefix_tokens: int, max_suffix_tokens: int
+):
     """Yield only boundary n-grams from a boundary-marked token list.
 
     Generates:
@@ -133,7 +134,7 @@ def collect_stats(
         count_entity   : times this n-gram appears in a gold-entity span
         count_nil      : times this n-gram appears in a non-entity span
         frequency      : count_entity + count_nil
-        purity         : count_nil / frequency  (1.0 = always NIL, never an entity)
+        entity_rate    : count_entity / frequency  (0.0 = always NIL, never an entity)
         n_tokens       : word count (boundary markers excluded)
         has_start      : True if n-gram contains <S>  (prefix or full span)
         has_end        : True if n-gram contains <E>  (suffix or full span)
@@ -147,7 +148,9 @@ def collect_stats(
 
     for data in docs:
         sentences: List[List[str]] = data["sentences"]
-        ner_gold = data["ner"]  # list of lists of [start, end, label] (doc-level indices)
+        ner_gold = data[
+            "ner"
+        ]  # list of lists of [start, end, label] (doc-level indices)
 
         # Build flat document-level word array and track sentence boundaries
         words: List[str] = []
@@ -181,22 +184,29 @@ def collect_stats(
                         marked = [START] + span_words + [END]
                         ngrams = list(_iter_boundary_ngrams(marked, mp, ms))
                         if max_infix_tokens is not None:
-                            ngrams += list(_iter_infix_ngrams(span_words, max_infix_tokens))
+                            ngrams += list(
+                                _iter_infix_ngrams(span_words, max_infix_tokens)
+                            )
                     elif full_only:
                         ngrams = [(START,) + tuple(span_words) + (END,)]
                     else:
                         marked = [START] + span_words + [END]
                         if max_infix_tokens is not None:
                             ngrams = [
-                                ng for ng in _iter_ngrams(marked, max_ngram)
-                                if ng[0] == START or ng[-1] == END or len(ng) <= max_infix_tokens
+                                ng
+                                for ng in _iter_ngrams(marked, max_ngram)
+                                if ng[0] == START
+                                or ng[-1] == END
+                                or len(ng) <= max_infix_tokens
                             ]
                         else:
                             ngrams = list(_iter_ngrams(marked, max_ngram))
 
                     if max_before_tokens is not None:
                         ctx_before = [SENT_START] + words[sent_start:span_start]
-                        ngrams += list(_iter_before_ngrams(ctx_before, max_before_tokens))
+                        ngrams += list(
+                            _iter_before_ngrams(ctx_before, max_before_tokens)
+                        )
                     if max_after_tokens is not None:
                         ctx_after = words[span_end + 1 : sent_end] + [SENT_END]
                         ngrams += list(_iter_after_ngrams(ctx_after, max_after_tokens))
@@ -211,18 +221,22 @@ def collect_stats(
     c_nil_list = [count_nil[ng] for ng in all_ngrams]
     freq_list = [e + n for e, n in zip(c_ent_list, c_nil_list)]
     return (
-        pd.DataFrame({
-            "ngram":        all_ngrams,
-            "count_entity": c_ent_list,
-            "count_nil":    c_nil_list,
-            "frequency":    freq_list,
-            "purity":       [n / f for n, f in zip(c_nil_list, freq_list)],
-            "n_tokens":     [sum(1 for t in ng if t not in _MARKERS) for ng in all_ngrams],
-            "has_start":    [ng[0] == START for ng in all_ngrams],
-            "has_end":      [ng[-1] == END for ng in all_ngrams],
-            "has_before":   [ng[-1] == BEFORE for ng in all_ngrams],
-            "has_after":    [ng[0] == AFTER for ng in all_ngrams],
-        })
+        pd.DataFrame(
+            {
+                "ngram": all_ngrams,
+                "count_entity": c_ent_list,
+                "count_nil": c_nil_list,
+                "frequency": freq_list,
+                "entity_rate": [e / f for e, f in zip(c_ent_list, freq_list)],
+                "n_tokens": [
+                    sum(1 for t in ng if t not in _MARKERS) for ng in all_ngrams
+                ],
+                "has_start": [ng[0] == START for ng in all_ngrams],
+                "has_end": [ng[-1] == END for ng in all_ngrams],
+                "has_before": [ng[-1] == BEFORE for ng in all_ngrams],
+                "has_after": [ng[0] == AFTER for ng in all_ngrams],
+            }
+        )
         .sort_values("frequency", ascending=False)
         .reset_index(drop=True)
     )

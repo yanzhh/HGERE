@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from evaluation.pruner import (
+from gsapere.evaluation.pruner import (
     _compute_counts,
     _gold_entities,
     _gold_spans,

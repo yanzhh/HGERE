@@ -37,6 +37,7 @@ from pathlib import Path
 
 import torch
 
+from gsapere.data.config import RelationDatasetParams
 from gsapere.data.relation_dataset import RelationDataset
 from gsapere.hgere.inference import infer_hgere, prepare_input_file
 from gsapere.labels import LABELS
@@ -233,14 +234,21 @@ def cli():
         args.preload_dataset = False
         args.model_type = args.model_type.lower()
 
+        dataset_params = RelationDatasetParams(
+            max_seq_length=args.max_seq_length,
+            max_pair_length=args.max_pair_length,
+            model_type=args.model_type,
+            use_typemarker=args.use_typemarker,
+            no_sym=args.no_sym,
+            nocross=args.nocross,
+            local_rank=args.local_rank,
+        )
         dataset = RelationDataset(
             logger=logger,
             tokenizer=tokenizer,
             labels=labels,
             file_path=tmp_path,
-            args=args,
-            max_pair_length=args.max_pair_length,
-            preload=False,
+            params=dataset_params,
         )
         dataset.build(
             batch_size=args.eval_batch_size,

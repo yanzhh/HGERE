@@ -137,6 +137,101 @@ class Document:
 
 
 @dataclass
+class SubjectInfo:
+    """Subject entity info carried by a SentenceSubjectCandidate."""
+
+    token_span: tuple[int, int, str]  # (token_begin, token_end, predicted_label)
+    subtoken_pos: tuple[int, int]  # (subtoken_begin, subtoken_end) in sentence context
+    gold_label_idx: int  # gold NER label index
+
+
+@dataclass
+class ObjectEntry:
+    """One object candidate paired with a subject."""
+
+    subtoken_pos: tuple[int, int]  # (subtoken_begin, subtoken_end) in sentence context
+    ner_label_idx: int  # predicted NER label index
+    rel_label: int  # relation label (0 = no relation)
+    token_pos: tuple[int, int]  # (token_begin, token_end) in document
+
+
+@dataclass(repr=False)
+class SentenceSubjectCandidate:
+    """One subject candidate for a sentence.
+
+    For a sentence with m entities there are m subjects and up to m**2 relations.
+    One instance records all object/relation pairs for a single subject.
+    """
+
+    index: tuple[int, int]  # (doc_idx, sent_idx)
+    subject_marked_tokens: list[str]  # subtokens with subject boundary markers injected
+    subject: SubjectInfo
+    relations: list[ObjectEntry]  # one entry per object candidate
+
+    def __post_init__(self) -> None:
+        self.obj_subtoken_pos: list[tuple[int, int]] = [
+            e.subtoken_pos for e in self.relations
+        ]
+        self.obj_token_pos: list[tuple[int, int]] = [
+            e.token_pos for e in self.relations
+        ]
+
+    @property
+    def n_ent(self) -> int:
+        return len(self.relations)
+
+    @property
+    def rel_labels(self) -> list[int]:
+        return [e.rel_label for e in self.relations]
+
+    def __repr__(self) -> str:
+        if self.n_ent == 0:
+            return "<0 relations; ...>"
+        return (
+            f"<{self.n_ent} relations; subject: {self.subject.token_span}; "
+            f"objs: obj_subtokens-{self.obj_subtoken_pos}, obj_tokens-{self.obj_token_pos}>"
+        )
+
+
+@dataclass(repr=False)
+class RelationSentence:
+    """All subject candidates for one sentence.
+
+    Acts as the top-level data unit for RelationDataset: one __getitem__ call
+    returns tensors derived from one RelationSentence.
+    """
+
+    index: tuple[int, int]  # (doc_idx, sent_idx)
+    subject_candidates: list[SentenceSubjectCandidate]
+    ner_labels: list[int]  # gold NER label indices for each object candidate position
+    subword_tokens: list[
+        str
+    ]  # plain (unmarked) subword token sequence; used for repr/debugging
+
+    def __post_init__(self) -> None:
+        # All subject candidates share the same object set, so token positions
+        # of objects are taken from the first candidate.
+        self.obj_token_pos: list[tuple[int, int]] = (
+            self.subject_candidates[0].obj_token_pos if self.subject_candidates else []
+        )
+
+    @property
+    def n_subjects(self) -> int:
+        """Number of subject candidates (= entity candidates) in this sentence."""
+        return len(self.subject_candidates)
+
+    def __repr__(self) -> str:
+        _PREVIEW = 6
+        tokens = self.subword_tokens
+        preview = tokens[:_PREVIEW]
+        suffix = f" +{len(tokens) - _PREVIEW}" if len(tokens) > _PREVIEW else ""
+        return (
+            f"<RelationSentence {self.index}; {self.n_subjects} subjects; "
+            f"tokens: {preview}{suffix}; obj_positions: {self.obj_token_pos}>"
+        )
+
+
+@dataclass
 class SubwordIndex:
     """Token-to-subword and subword-to-token mapping for one document.
     Built once per document during tokenization; shared by all sentences."""
@@ -182,7 +277,7 @@ class RelationSample:
     """One item returned by RelationDataset.__getitem__().
     All tensor fields stored as torch.Tensor; list fields are metadata."""
 
-    indexs: tuple[int, int]
+    indices: tuple[int, int]
     input_ids: Any  # Tensor [n_ent, seq_len + 2*n_ent]
     attention_mask: Any  # Tensor [n_ent, seq_len+2*n_ent, seq_len+2*n_ent]
     position_ids: Any  # Tensor [n_ent, seq_len + 2*n_ent]
@@ -204,38 +299,34 @@ class RelationSpanCandidate:
     label: str
 
 
-@dataclass
-class SubjectObjectPair:
-    """One (subject, all-objects) group per subject entity.
-    Replaces SentenceSubjectCandidate in relation_dataset.py."""
-
-    doc_idx: int
-    sent_idx: int
-    subject_token_start: int
-    subject_token_end: int
-    subject_label: str
-    subject_label_gold_id: int
-    sub_tokens: list[str]
-    sub_subtoken_pos: tuple[int, int]
-    object_candidates: list[tuple[tuple[int, int, int], int, tuple[int, int]]]
-    rel_labels: list[int]
-    ner_labels_gold: list[int]
-    n_ent: int
+# ── 5. Candidate quality statistics ───────────────────────────────────────
 
 
-@dataclass
-class RelationSentence:
-    """All subject groups for one sentence.
-    Replaces Sentence internal class in relation_dataset.py."""
+@dataclass(frozen=True)
+class CandidateStats:
+    """Pruner candidate quality statistics computed during RelationDataset._build_index().
 
-    doc_idx: int
-    sent_idx: int
-    items: list[SubjectObjectPair]
-    ner_labels_gold: list[int]
-    words: list[str]
+    Measures how well the pruner candidates cover the gold entities for one
+    dataset split (train / dev / test).  Matching is span-level only
+    (token_start, token_end) — labels are ignored, as the pruner predicts no types.
+    """
+
+    n_gold: int  # total gold entity mentions
+    n_candidates: int  # total candidate spans fed to HGERE
+    n_tp: int  # candidates whose span matches a gold entity
+    n_fp: int  # candidates with no matching gold entity
+    n_fn: int  # gold entities not covered by any candidate
+
+    @property
+    def recall(self) -> float:
+        return self.n_tp / self.n_gold if self.n_gold > 0 else 0.0
+
+    @property
+    def precision(self) -> float:
+        return self.n_tp / self.n_candidates if self.n_candidates > 0 else 0.0
 
 
-# ── 5. Prediction types (frozen dataclasses) ──────────────────────────────
+# ── 6. Prediction types (frozen dataclasses) ──────────────────────────────
 
 
 @dataclass(frozen=True)

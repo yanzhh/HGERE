@@ -154,7 +154,7 @@ class TestHGERERunner:
 
         created_paths: list[str] = []
 
-        def _mock_infer_fixed_spans(
+        def _mock_infer_hgere(
             model, eval_dataset, args, logger, source_file_path, output_path, gold_only, **kwargs
         ) -> None:
             created_paths.append(str(output_path))
@@ -166,8 +166,8 @@ class TestHGERERunner:
         with (
             patch("gsapere.pipeline.hgere_runner.RelationDataset") as MockDS,
             patch(
-                "gsapere.pipeline.hgere_runner.infer_fixed_spans",
-                side_effect=_mock_infer_fixed_spans,
+                "gsapere.pipeline.hgere_runner.infer_hgere",
+                side_effect=_mock_infer_hgere,
             ),
             patch("gsapere.pipeline.hgere_runner.LABELS") as MockLabels,
         ):

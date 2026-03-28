@@ -473,19 +473,18 @@ def _get_metrics(tp, fp, support, suffix):
 
 
 def _select_sent_spans(sent_spans, prune_config):
-    """Apply a best_config dict (threshold_analysis.py format) to one sentence's span pool."""
-    method = prune_config["best_method"]
+    """Apply a PreFilterParams dict to one sentence's span pool."""
+    method = prune_config["method"]
     # make sure, the spans are sorted by max probability
     if method == "threshold":
-        t = prune_config["parameters"]
+        t = prune_config["value"]
         sent_spans = [(s, e, p, lbl) for s, e, p, lbl in sent_spans if p >= t]
         sent_spans = sorted(sent_spans, key=lambda x: -x[2])
         return sent_spans
     elif method == "topk":
-        params = prune_config["parameters"]
-        lam = params["topk_ratio"]
-        lmin = int(params["min_mentions_num"])
-        lmax = int(params["max_mentions_num"])
+        lam = prune_config["ratio"]
+        lmin = int(prune_config["min"])
+        lmax = int(prune_config["max"])
         if not sent_spans:
             return []
         n = max(e for _, e, _, _ in sent_spans) + 1
@@ -495,7 +494,7 @@ def _select_sent_spans(sent_spans, prune_config):
 
 
 def _extract_best_config(pruner_metrics: dict) -> dict:
-    """Convert pruner wandb metrics to a best_config dict (threshold_analysis.py format)."""
+    """Convert pruner wandb metrics to a PreFilterParams dict."""
     thresh_tn = pruner_metrics.get("pruner/thresh/tn_rate", 0.0)
     topk_tn = pruner_metrics.get("pruner/topk/tn_rate", 0.0)
     thresh_recall = pruner_metrics.get("pruner/thresh/recall", 0.0)
@@ -516,17 +515,15 @@ def _extract_best_config(pruner_metrics: dict) -> dict:
 
     if best_method == "threshold":
         return {
-            "best_method": "threshold",
-            "parameters": pruner_metrics["pruner/thresh/threshold"],
+            "method": "threshold",
+            "value": pruner_metrics["pruner/thresh/threshold"],
         }
     else:
         return {
-            "best_method": "topk",
-            "parameters": {
-                "topk_ratio": pruner_metrics["pruner/topk/lam"],
-                "min_mentions_num": int(pruner_metrics["pruner/topk/lmin"]),
-                "max_mentions_num": int(pruner_metrics["pruner/topk/lmax"]),
-            },
+            "method": "topk",
+            "ratio": pruner_metrics["pruner/topk/lam"],
+            "min": int(pruner_metrics["pruner/topk/lmin"]),
+            "max": int(pruner_metrics["pruner/topk/lmax"]),
         }
 
 

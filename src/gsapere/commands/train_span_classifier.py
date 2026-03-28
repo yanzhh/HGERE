@@ -24,6 +24,7 @@ so there is no duplicate parameter definition.
 from __future__ import annotations
 
 import argparse
+import socket
 import sys
 from typing import Any, Optional
 
@@ -53,6 +54,8 @@ def _config_to_namespace(config: PrunerTrainConfig) -> argparse.Namespace:
         flat["output_dir"] = flat["model_dir"]
 
     flat.setdefault("config_name", "")
+    flat.setdefault("extra_repr", "")
+    flat["hostname"] = socket.gethostname()
 
     return argparse.Namespace(**flat)
 

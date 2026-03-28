@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
+
 
 import torch
 
@@ -12,9 +15,10 @@ from transformers import (
     ModernBertConfig,
 )
 
+from ..data.config import RelationDatasetParams
 from ..data.relation_dataset import RelationDataset
 from ..hgere.evaluate import evaluate, get_checkpoints
-from ..hgere.train import train
+from ..hgere.train import log_candidate_stats_to_wandb, train
 from ..labels import LABELS
 from ..models.hgere import BertForHyperGNN, ModernBertForHyperGNN
 from ..utils import set_seed
@@ -89,6 +93,7 @@ def setup_training(args, logger):
         # Load datasets if needed:
         if args.eval_test:
             test_dataset = load_dataset("test", tokenizer, args, logger)
+            log_candidate_stats_to_wandb("test", test_dataset.candidate_stats)
         if not args.do_train:
             if args.eval_train:
                 train_dataset = load_dataset("train", tokenizer, args, logger)
@@ -168,15 +173,23 @@ def load_dataset(
     label_set = args.label_set
     logger.info(f"    Evaluation using label set: {label_set}.")
     labels = LABELS[label_set]
+    params = RelationDatasetParams(
+        max_seq_length=args.max_seq_length,
+        max_pair_length=args.max_pair_length,
+        model_type=args.model_type,
+        use_typemarker=args.use_typemarker,
+        no_sym=args.no_sym,
+        nocross=args.nocross,
+        local_rank=args.local_rank,
+        preload=args.preload_dataset,
+        pre_filter_params=getattr(args, "pre_filter_params", None),
+    )
     dataset = RelationDataset(
         logger=logger,
         tokenizer=tokenizer,
         labels=labels,
         file_path=file_path,
-        args=args,
-        max_pair_length=args.max_pair_length,
-        preload=args.preload_dataset,
-        doc_limit=None,
+        params=params,
     )
     dataset.build(
         batch_size=batch_size,

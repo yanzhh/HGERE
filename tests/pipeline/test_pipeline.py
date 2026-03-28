@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 
@@ -41,13 +42,13 @@ class TestPipelineProcessDocument:
         pipeline = self._make_pipeline(minimal_config_yaml)
         call_order: list[str] = []
 
-        def mock_pruner_run(docs: list) -> list:
+        def mock_pruner_run(docs: list, **kwargs: Any) -> list:
             call_order.append("pruner")
             return [
                 dict(d, predicted_ner=[[]], ner_candidates_proba=[[]]) for d in docs
             ]
 
-        def mock_hgere_run(docs: list) -> list:
+        def mock_hgere_run(docs: list, **kwargs: Any) -> list:
             call_order.append("hgere")
             return [dict(d, predicted_ner=[[]], predicted_rel=[[]]) for d in docs]
 
@@ -63,10 +64,10 @@ class TestPipelineProcessDocument:
         pipeline = self._make_pipeline(minimal_config_yaml)
         enriched_doc = dict(tiny_doc, predicted_ner=[[]], predicted_rel=[[]])
 
-        pipeline._pruner.run = lambda docs: [
+        pipeline._pruner.run = lambda docs, **kw: [  # type: ignore[assignment]
             dict(d, predicted_ner=[[]], ner_candidates_proba=[[]]) for d in docs
-        ]  # type: ignore[assignment]
-        pipeline._hgere.run = lambda docs: [enriched_doc]  # type: ignore[assignment]
+        ]
+        pipeline._hgere.run = lambda docs, **kw: [enriched_doc]  # type: ignore[assignment]
 
         result = pipeline.process_document(tiny_doc)
         assert isinstance(result, dict)
@@ -76,12 +77,12 @@ class TestPipelineProcessDocument:
     ) -> None:
         pipeline = self._make_pipeline(minimal_config_yaml)
 
-        def mock_pruner_run(docs: list) -> list:
+        def mock_pruner_run(docs: list, **kwargs: Any) -> list:
             return [
                 dict(d, predicted_ner=[[]], ner_candidates_proba=[[]]) for d in docs
             ]
 
-        def mock_hgere_run(docs: list) -> list:
+        def mock_hgere_run(docs: list, **kwargs: Any) -> list:
             return [
                 dict(
                     d,
@@ -115,10 +116,10 @@ class TestPipelineProcessDocuments:
     ) -> None:
         pipeline = self._make_pipeline(minimal_config_yaml)
 
-        pipeline._pruner.run = lambda docs: [  # type: ignore[assignment]
+        pipeline._pruner.run = lambda docs, **kw: [  # type: ignore[assignment]
             dict(d, predicted_ner=[[]], ner_candidates_proba=[[]]) for d in docs
         ]
-        pipeline._hgere.run = lambda docs: [  # type: ignore[assignment]
+        pipeline._hgere.run = lambda docs, **kw: [  # type: ignore[assignment]
             dict(d, predicted_ner=[[]], predicted_rel=[[]]) for d in docs
         ]
 
@@ -127,8 +128,8 @@ class TestPipelineProcessDocuments:
 
     def test_process_documents_empty_list(self, minimal_config_yaml: Path) -> None:
         pipeline = self._make_pipeline(minimal_config_yaml)
-        pipeline._pruner.run = lambda docs: docs  # type: ignore[assignment]
-        pipeline._hgere.run = lambda docs: docs  # type: ignore[assignment]
+        pipeline._pruner.run = lambda docs, **kw: docs  # type: ignore[assignment]
+        pipeline._hgere.run = lambda docs, **kw: docs  # type: ignore[assignment]
 
         results = pipeline.process_documents([])
         assert results == []

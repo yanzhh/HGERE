@@ -68,7 +68,7 @@ def evaluate(
     with torch.no_grad():
         # for batch in tqdm(eval_dataloader, desc="Evaluating"):
         for batch in tqdm(eval_dataset.loader, desc="Evaluating"):
-            sent_indices = batch["indexs"]
+            sent_indices = batch["indices"]
             obj_mentions = batch["obj_token_pos"]
             # subjs = batch["sub"]
             # print(subjs)

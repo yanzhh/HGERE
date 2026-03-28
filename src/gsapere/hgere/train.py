@@ -13,15 +13,18 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 import torch
 from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from tqdm import tqdm, trange
+from transformers import get_linear_schedule_with_warmup
 
 import wandb
+from gsapere.data.data_types import CandidateStats
 from gsapere.hgere.evaluate import evaluate
 from gsapere.utils import set_seed
-from transformers import get_linear_schedule_with_warmup
 
 TRAIN_KEYS = [
     "input_ids",
@@ -32,6 +35,27 @@ TRAIN_KEYS = [
     "rel_labels",
     "ent_numbers",
 ]
+
+
+def log_candidate_stats_to_wandb(split: str, stats: CandidateStats) -> None:
+    """Log pruner candidate quality stats for one split to W&B.
+
+    No-op when W&B is not initialised (wandb.run is None).
+    """
+    if wandb.run is None:
+        return
+    wandb.log(
+        {
+            f"data/{split}/n_gold": stats.n_gold,
+            f"data/{split}/n_candidates": stats.n_candidates,
+            f"data/{split}/n_tp": stats.n_tp,
+            f"data/{split}/n_fp": stats.n_fp,
+            f"data/{split}/n_fn": stats.n_fn,
+            f"data/{split}/recall": stats.recall,
+            f"data/{split}/precision": stats.precision,
+        },
+        step=0,
+    )
 
 
 def train(
@@ -50,6 +74,8 @@ def train(
             wandb_params["name"] = args.run_name
         wandb.init(**wandb_params)
         log_wandb = True
+        log_candidate_stats_to_wandb("train", train_dataset.candidate_stats)
+        log_candidate_stats_to_wandb("dev", eval_dataset.candidate_stats)
         # ner_prediction_dir_name = Path(args.ner_prediction_dir).name
         # output_dir_name = Path(args.model_dir).name
         # tb_writer = SummaryWriter(
@@ -100,16 +126,16 @@ def train(
             {"params": [], "weight_decay": 0.0, "lr": args.learning_rate_cls},
         ]
         for n, p in model.named_parameters():
-            if "bert" not in n:
-                if not any(nd in n for nd in no_decay):
-                    opt_grouped_cls[0]["params"].append(p)
-                else:
-                    opt_grouped_cls[1]["params"].append(p)
-            else:
+            if "bert" in n:
                 if not any(nd in n for nd in no_decay):
                     opt_grouped_bert[0]["params"].append(p)
                 else:
                     opt_grouped_bert[1]["params"].append(p)
+            else:
+                if not any(nd in n for nd in no_decay):
+                    opt_grouped_cls[0]["params"].append(p)
+                else:
+                    opt_grouped_cls[1]["params"].append(p)
         optimizer = AdamW(opt_grouped_bert + opt_grouped_cls, eps=args.adam_epsilon)
     else:
         optimizer_grouped_parameters = [
@@ -158,11 +184,11 @@ def train(
     start_epoch = past_epoch + 1
 
     # ori_model = model
-    # multi-gpu training (should be after apex fp16 initialization)
+    # multi-gpu training
     if args.n_gpu > 1:
         model = torch.nn.DataParallel(model)
 
-    # Distributed training (should be after apex fp16 initialization)
+    # Distributed training
     if args.local_rank != -1:
         model = torch.nn.parallel.DistributedDataParallel(
             model,
@@ -216,7 +242,6 @@ def train(
 
         for step, batch in enumerate(epoch_iterator):
             # for step, batch in enumerate(train_dataloader):
-
             model.train()
 
             inputs = {}
@@ -472,4 +497,7 @@ def _save_model(
     args_file = os.path.join(output_dir, "training_args.txt")
     with open(args_file, "w") as f:
         f.write(str(vars(args)))
+    args_yaml_file = os.path.join(output_dir, "training_args.yaml")
+    with open(args_yaml_file, "w") as f:
+        yaml.dump(vars(args), f, default_flow_style=False)
     _rotate_checkpoints(logger, args, checkpoint_prefix)

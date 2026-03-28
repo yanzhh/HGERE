@@ -5,6 +5,7 @@ import dataclasses
 import pytest
 
 from gsapere.data.data_types import (
+    CandidateStats,
     ContextWindow,
     Document,
     DocumentModel,
@@ -13,6 +14,7 @@ from gsapere.data.data_types import (
     HGERERelationPrediction,
     NerSpan,
     NerSpanModel,
+    ObjectEntry,
     PrunerSample,
     PrunerSpanPrediction,
     Relation,
@@ -22,7 +24,8 @@ from gsapere.data.data_types import (
     RelationSpanCandidate,
     Sentence,
     SentenceModel,
-    SubjectObjectPair,
+    SentenceSubjectCandidate,
+    SubjectInfo,
     SubwordIndex,
 )
 
@@ -283,7 +286,7 @@ class TestPrunerSampleFields:
 class TestRelationSampleFields:
     def test_fields_exist(self) -> None:
         expected = {
-            "indexs",
+            "indices",
             "input_ids",
             "attention_mask",
             "position_ids",
@@ -306,29 +309,30 @@ class TestRelationSpanCandidateFields:
             cand.label = "Task"  # type: ignore[misc]
 
 
-class TestSubjectObjectPairFields:
+class TestSubjectInfoFields:
     def test_fields_exist(self) -> None:
-        expected = {
-            "doc_idx",
-            "sent_idx",
-            "subject_token_start",
-            "subject_token_end",
-            "subject_label",
-            "subject_label_gold_id",
-            "sub_tokens",
-            "sub_subtoken_pos",
-            "object_candidates",
-            "rel_labels",
-            "ner_labels_gold",
-            "n_ent",
-        }
-        actual = {f.name for f in dataclasses.fields(SubjectObjectPair)}
+        expected = {"token_span", "subtoken_pos", "gold_label_idx"}
+        actual = {f.name for f in dataclasses.fields(SubjectInfo)}
+        assert actual == expected
+
+
+class TestObjectEntryFields:
+    def test_fields_exist(self) -> None:
+        expected = {"subtoken_pos", "ner_label_idx", "rel_label", "token_pos"}
+        actual = {f.name for f in dataclasses.fields(ObjectEntry)}
+        assert actual == expected
+
+
+class TestSentenceSubjectCandidateFields:
+    def test_fields_exist(self) -> None:
+        expected = {"index", "subject_marked_tokens", "subject", "relations"}
+        actual = {f.name for f in dataclasses.fields(SentenceSubjectCandidate)}
         assert actual == expected
 
 
 class TestRelationSentenceFields:
     def test_fields_exist(self) -> None:
-        expected = {"doc_idx", "sent_idx", "items", "ner_labels_gold", "words"}
+        expected = {"index", "subject_candidates", "ner_labels", "subword_tokens"}
         actual = {f.name for f in dataclasses.fields(RelationSentence)}
         assert actual == expected
 
@@ -369,3 +373,38 @@ class TestHGERERelationPrediction:
         assert hash(pred) is not None
         with pytest.raises(dataclasses.FrozenInstanceError):
             pred.relation_type = "Result"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Section 6 — CandidateStats
+# ---------------------------------------------------------------------------
+
+
+class TestCandidateStats:
+    def test_recall(self) -> None:
+        stats = CandidateStats(n_gold=10, n_candidates=8, n_tp=7, n_fp=1, n_fn=3)
+        assert stats.recall == pytest.approx(0.7)
+
+    def test_precision(self) -> None:
+        stats = CandidateStats(n_gold=10, n_candidates=8, n_tp=7, n_fp=1, n_fn=3)
+        assert stats.precision == pytest.approx(7 / 8)
+
+    def test_perfect_recall_and_precision(self) -> None:
+        stats = CandidateStats(n_gold=5, n_candidates=5, n_tp=5, n_fp=0, n_fn=0)
+        assert stats.recall == pytest.approx(1.0)
+        assert stats.precision == pytest.approx(1.0)
+
+    def test_zero_gold_returns_zero(self) -> None:
+        stats = CandidateStats(n_gold=0, n_candidates=0, n_tp=0, n_fp=0, n_fn=0)
+        assert stats.recall == 0.0
+        assert stats.precision == 0.0
+
+    def test_zero_candidates_returns_zero_precision(self) -> None:
+        stats = CandidateStats(n_gold=3, n_candidates=0, n_tp=0, n_fp=0, n_fn=3)
+        assert stats.precision == 0.0
+        assert stats.recall == 0.0
+
+    def test_frozen(self) -> None:
+        stats = CandidateStats(n_gold=5, n_candidates=5, n_tp=5, n_fp=0, n_fn=0)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            stats.n_tp = 3  # type: ignore[misc]

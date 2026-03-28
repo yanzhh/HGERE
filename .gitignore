@@ -13,6 +13,7 @@ pretrained_models/
 uv.lock
 pruner_predictions/
 /pipeline/
+/scripts/
 # ML related
 wandb/
 

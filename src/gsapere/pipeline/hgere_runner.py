@@ -17,6 +17,7 @@ from typing import Any
 import torch
 from transformers import AutoTokenizer, BertConfig
 
+from gsapere.data.config import RelationDatasetParams
 from gsapere.data.relation_dataset import RelationDataset
 from gsapere.hgere.inference import infer_hgere
 from gsapere.labels import LABELS
@@ -152,14 +153,22 @@ class HGERERunner:
             ) as f_out:
                 tmp_output = f_out.name
 
+            cfg = self._config
+            dataset_params = RelationDatasetParams(
+                max_seq_length=cfg.max_seq_length,
+                max_pair_length=cfg.max_pair_length,
+                model_type=cfg.model_type,
+                use_typemarker=cfg.use_typemarker,
+                no_sym=cfg.no_sym,
+                nocross=cfg.nocross,
+                local_rank=cfg.local_rank,
+            )
             dataset = RelationDataset(
                 logger=logger,
                 tokenizer=self._tokenizer,
                 labels=labels,
                 file_path=tmp_input,
-                args=args,
-                max_pair_length=args.max_pair_length,
-                preload=False,
+                params=dataset_params,
             )
             dataset.build(
                 batch_size=args.eval_batch_size,

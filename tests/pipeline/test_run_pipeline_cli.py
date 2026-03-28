@@ -173,7 +173,7 @@ class TestValidateInputOutputTypes:
 
 def _make_mock_pipeline(docs: list[dict]) -> MagicMock:
     mock = MagicMock()
-    mock.process_documents.side_effect = lambda batch: [_make_enriched(d) for d in batch]
+    mock.process_documents.side_effect = lambda batch, **kw: [_make_enriched(d) for d in batch]
     return mock
 
 

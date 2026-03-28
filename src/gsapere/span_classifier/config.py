@@ -89,7 +89,7 @@ class PrunerTrainParams(BaseModel):
     rulebased_pruner_file: Optional[str] = Field(
         default=None,
         description=(
-            "Path to a rule-based pruner JSON (from eval-rulebased-pruner). "
+            "Path to a rule-based pruner JSON (from gsapere-fit-rulebased-pruner). "
             "Spans matching its patterns are filtered before the neural pruner sees them."
         ),
     )
@@ -231,7 +231,7 @@ class PrunerTrainParams(BaseModel):
     prune_config: Optional[str] = Field(
         default=None,
         description=(
-            "Path to a best_config.json produced by evaluation/threshold_analysis.py. "
+            "Path to a best_config.json produced by gsapere-train-prefilter. "
             "When set, the pruning parameters are loaded from this file instead of being "
             "estimated from the dev set at the end of training."
         ),

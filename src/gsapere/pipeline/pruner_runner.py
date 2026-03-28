@@ -109,32 +109,22 @@ def apply_final_pruning(
 def _load_prefilter_params(prune_config_path: str) -> dict[str, Any]:
     """Load pre-filtering topk params from a best_config.json file.
 
-    Supports both the best_config.json format (with best_method key) and a
-    plain dict with topk_ratio / min_mentions_num / max_mentions_num keys.
+    Expects the Pydantic PreFilterParams format:
+      topk:      {"method": "topk", "ratio": float, "min": int, "max": int}
+      threshold: {"method": "threshold", "value": float}
+
     Falls back to _DEFAULT_PREFILTER for threshold-method configs (which have
     no topk parameters).
     """
     data = json.loads(Path(prune_config_path).read_text())
-    if "best_method" in data:
-        if data["best_method"] == "topk":
-            p = data["parameters"]
-            return {
-                "topk_ratio": float(p["topk_ratio"]),
-                "min_mentions_num": int(p["min_mentions_num"]),
-                "max_mentions_num": int(p["max_mentions_num"]),
-            }
-        # threshold method — no topk params available; use defaults
-        return dict(_DEFAULT_PREFILTER)
-    # Plain format
-    return {
-        "topk_ratio": float(data.get("topk_ratio", _DEFAULT_PREFILTER["topk_ratio"])),
-        "min_mentions_num": int(
-            data.get("min_mentions_num", _DEFAULT_PREFILTER["min_mentions_num"])
-        ),
-        "max_mentions_num": int(
-            data.get("max_mentions_num", _DEFAULT_PREFILTER["max_mentions_num"])
-        ),
-    }
+    if data.get("method") == "topk":
+        return {
+            "topk_ratio": float(data["ratio"]),
+            "min_mentions_num": int(data["min"]),
+            "max_mentions_num": int(data["max"]),
+        }
+    # threshold method — no topk params available; use defaults
+    return dict(_DEFAULT_PREFILTER)
 
 
 def build_predicted_ner_from_pool(

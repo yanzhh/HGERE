@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from gsapere.data.config import RelationDatasetParams
+
 
 def _make_doc(
     doc_key: str,
@@ -166,13 +168,38 @@ def mock_labels() -> MagicMock:
 
 
 @pytest.fixture
-def mock_args(mock_tokenizer: MagicMock) -> MagicMock:
-    """Mock args object for RelationDataset."""
-    args = MagicMock()
-    args.max_seq_length = 64
-    args.use_typemarker = False
-    args.local_rank = -1
-    args.model_type = "bert"
-    args.no_sym = True
-    args.nocross = False
-    return args
+def relation_jsonl_path_with_fp(tmp_path: Path) -> Path:
+    """JSONL for candidate-stats tests: predicted_ner has 1 FP and 1 FN vs gold ner.
+
+    Gold NER: sentence 0 → [(1,1,"Method")], sentence 1 → [(2,2,"Task")]
+    Predicted: sentence 0 → [(1,1,"Method"), (0,0,"Task")]  ← extra FP at (0,0)
+               sentence 1 → []                              ← gold (2,2) missing → FN
+    Expected stats: n_gold=2, n_candidates=2, n_tp=1, n_fp=1, n_fn=1
+    """
+    doc = {
+        "doc_key": "doc_fp_fn",
+        "sentences": [
+            ["The", "model", "trains", "fast"],
+            ["Results", "show", "accuracy"],
+        ],
+        "ner": [[[1, 1, "Method"]], [[2, 2, "Task"]]],
+        "predicted_ner": [[[1, 1, "Method"], [0, 0, "Task"]], []],
+        "relations": [[], []],
+    }
+    path = tmp_path / "relation_fp_fn.jsonl"
+    path.write_text(json.dumps(doc) + "\n")
+    return path
+
+
+@pytest.fixture
+def relation_params() -> RelationDatasetParams:
+    """RelationDatasetParams for RelationDataset tests."""
+    return RelationDatasetParams(
+        max_seq_length=64,
+        use_typemarker=False,
+        local_rank=-1,
+        model_type="bert",
+        no_sym=True,
+        nocross=False,
+        max_pair_length=10,
+    )

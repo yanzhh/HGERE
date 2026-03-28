@@ -1,0 +1,108 @@
+label_set: gsap
+model_dir: hihih
+pruner:
+    label_set: gsap
+    model_dir: saves/gsap/pruner/pelikan
+    base_model_name_or_path: pretrained_models/scibert_scivocab_uncased
+    do_lower_case: true
+    model_type: bertspanmarkerpruner
+    per_gpu_eval_batch_size: 32
+    max_seq_length: 256
+    max_pair_length: 64
+    max_mention_ori_length: 12
+
+    train_params:
+        # Data
+        label_set: gsap
+        data_dir: datasets/gsap-ere
+        train_file: train.jsonl
+        dev_file: dev.jsonl
+        test_file: test.jsonl
+        # Rule-based pre-filter (produced by eval-rulebased-pruner)
+        rulebased_pruner_file: saves/gsap/pruner_rulebased/gsap_rulebased.json
+        # Optimisation
+        seed: 44
+        learning_rate: 1e-6
+        num_train_epochs: 8
+        eval_epochs: 1
+        per_gpu_train_batch_size: 8
+        gradient_accumulation_steps: 1
+        save_steps: 1000
+        fp16: true
+        local_rank: -1
+        # Loss
+        pruner_loss: focal
+        # Span candidate filtering (used during eval inside training)
+        topk_ratio: 8
+        min_mentions_num: 1
+        max_mentions_num: 60
+        # Model flags
+        onedropout: true
+        lminit: true
+        nocross: true
+        biaf_span: true
+        biaf_mode: 2
+        biaf_factorize: true
+        span_hidden_size: 768
+        rank: 768
+        span_size: 256
+        # Evaluation
+        evaluate_during_training: true
+        eval_all_checkpoints: true
+        overwrite_model_dir: true
+        # W&B
+        project_name: gsap-pruner
+        run_name: pelikan
+
+hgere:
+    model_dir: saves/gsap/HGERE/taube
+    base_model_name_or_path: pretrained_models/scibert_scivocab_uncased
+    model_type: hyper
+    do_lower_case: true
+    no_sym: false
+    per_gpu_eval_batch_size: 32
+    max_seq_length: 512
+    max_pair_length: 18
+    factor_type: tersibcop
+    factor_encoder: biaf
+    ent_dim: 400
+    rel_dim: 400
+    mem_dim: 400
+    ent_repr: mix
+    n_iter: 3
+    layernorm: true
+    layernorm_1st: true
+
+    train_params:
+        # Data
+        data_dir: datasets/gsap-ere
+        train_file: train.jsonl
+        dev_file: dev.jsonl
+        test_file: test.jsonl
+        # Pruner predictions used as NER candidates input to HGERE
+        ner_prediction_dir: saves/gasp/pruner/pelikan
+        # Optimisation
+        seed: 45
+        learning_rate: 1e-5
+        learning_rate_cls: 1e-5
+        num_train_epochs: 8
+        eval_epochs: 1
+        per_gpu_train_batch_size: 18
+        gradient_accumulation_steps: 1
+        adam_epsilon: 1e-8
+        fp16: true
+        local_rank: -1
+        # Loss
+        loss_re_weight_alpha: 0.9 # (1 - alpha) * loss_ner + alpha * loss_re
+        ner_focal_loss: true
+        re_focal_loss: true
+        # Model flags
+        attn_self: true
+        # Evaluation
+        evaluate_during_training: true
+        eval_all_checkpoints: true
+        overwrite_output_dir: true
+        # W&B
+        log_wandb: true
+        project_name: gsap-rel-hgere
+        run_name: taube

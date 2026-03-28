@@ -13,6 +13,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from gsapere.data.collators import RelationCollator
+from gsapere.data.config import RelationDatasetParams
 from gsapere.data.relation_dataset import RelationDataset
 
 
@@ -28,22 +29,21 @@ TRAIN_KEYS = {
 }
 
 # Additional keys used during evaluation / inference
-EVAL_EXTRA_KEYS = {"indexs", "obj_token_pos", "sub"}
+EVAL_EXTRA_KEYS = {"indices", "obj_token_pos", "sub"}
 
 
 def _make_dataset(
     file_path: Path,
     tokenizer: MagicMock,
     labels: MagicMock,
-    args: MagicMock,
+    params: RelationDatasetParams,
 ) -> RelationDataset:
     return RelationDataset(
         logger=MagicMock(),
         tokenizer=tokenizer,
         labels=labels,
         file_path=str(file_path),
-        args=args,
-        max_pair_length=10,
+        params=params,
     )
 
 
@@ -53,13 +53,15 @@ class TestRelationDataloaderIntegration:
         relation_jsonl_path: Path,
         mock_tokenizer: MagicMock,
         mock_labels: MagicMock,
-        mock_args: MagicMock,
+        relation_params: RelationDatasetParams,
     ) -> None:
         """A collated batch must contain all keys required by run_hgnn.py training."""
-        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, mock_args)
+        ds = _make_dataset(
+            relation_jsonl_path, mock_tokenizer, mock_labels, relation_params
+        )
         collator = RelationCollator(
             tokenizer_pad_id=mock_tokenizer.pad_token_id,
-            max_seq_length=mock_args.max_seq_length,
+            max_seq_length=relation_params.max_seq_length,
         )
         loader = DataLoader(ds, batch_size=len(ds), collate_fn=collator)
         batch = next(iter(loader))
@@ -72,13 +74,15 @@ class TestRelationDataloaderIntegration:
         relation_jsonl_path: Path,
         mock_tokenizer: MagicMock,
         mock_labels: MagicMock,
-        mock_args: MagicMock,
+        relation_params: RelationDatasetParams,
     ) -> None:
         """A collated batch must also contain the metadata keys used during eval."""
-        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, mock_args)
+        ds = _make_dataset(
+            relation_jsonl_path, mock_tokenizer, mock_labels, relation_params
+        )
         collator = RelationCollator(
             tokenizer_pad_id=mock_tokenizer.pad_token_id,
-            max_seq_length=mock_args.max_seq_length,
+            max_seq_length=relation_params.max_seq_length,
         )
         loader = DataLoader(ds, batch_size=len(ds), collate_fn=collator)
         batch = next(iter(loader))
@@ -91,13 +95,15 @@ class TestRelationDataloaderIntegration:
         relation_jsonl_path: Path,
         mock_tokenizer: MagicMock,
         mock_labels: MagicMock,
-        mock_args: MagicMock,
+        relation_params: RelationDatasetParams,
     ) -> None:
         """input_ids in a batch must be a torch.Tensor."""
-        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, mock_args)
+        ds = _make_dataset(
+            relation_jsonl_path, mock_tokenizer, mock_labels, relation_params
+        )
         collator = RelationCollator(
             tokenizer_pad_id=mock_tokenizer.pad_token_id,
-            max_seq_length=mock_args.max_seq_length,
+            max_seq_length=relation_params.max_seq_length,
         )
         loader = DataLoader(ds, batch_size=len(ds), collate_fn=collator)
         batch = next(iter(loader))
@@ -108,13 +114,15 @@ class TestRelationDataloaderIntegration:
         relation_jsonl_path: Path,
         mock_tokenizer: MagicMock,
         mock_labels: MagicMock,
-        mock_args: MagicMock,
+        relation_params: RelationDatasetParams,
     ) -> None:
         """ent_numbers must have one entry per sentence in the batch."""
-        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, mock_args)
+        ds = _make_dataset(
+            relation_jsonl_path, mock_tokenizer, mock_labels, relation_params
+        )
         collator = RelationCollator(
             tokenizer_pad_id=mock_tokenizer.pad_token_id,
-            max_seq_length=mock_args.max_seq_length,
+            max_seq_length=relation_params.max_seq_length,
         )
         loader = DataLoader(ds, batch_size=len(ds), collate_fn=collator)
         batch = next(iter(loader))
@@ -125,13 +133,15 @@ class TestRelationDataloaderIntegration:
         relation_jsonl_path: Path,
         mock_tokenizer: MagicMock,
         mock_labels: MagicMock,
-        mock_args: MagicMock,
+        relation_params: RelationDatasetParams,
     ) -> None:
         """rel_labels must be shaped (n_sent, max_ent, max_ent)."""
-        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, mock_args)
+        ds = _make_dataset(
+            relation_jsonl_path, mock_tokenizer, mock_labels, relation_params
+        )
         collator = RelationCollator(
             tokenizer_pad_id=mock_tokenizer.pad_token_id,
-            max_seq_length=mock_args.max_seq_length,
+            max_seq_length=relation_params.max_seq_length,
         )
         loader = DataLoader(ds, batch_size=len(ds), collate_fn=collator)
         batch = next(iter(loader))

@@ -182,7 +182,7 @@ class HGERETrainParams(BaseModel):
     # ── Inference modes ───────────────────────────────────────────────────────
     no_test: bool = Field(default=False, description="Skip test set evaluation.")
     save_results: bool = Field(
-        default=False, description="Persist predictions to disk after evaluation."
+        default=True, description="Persist predictions to disk after evaluation."
     )
     do_train: bool = Field(default=True, description="Whether to run training.")
     eval_train: bool = Field(
@@ -380,6 +380,36 @@ class HGERETrainConfig(BaseModel):
                 f"Please migrate your config to version {CURRENT_SCHEMA_VERSION}."
             )
         return data
+
+    # ── Factories ─────────────────────────────────────────────────────────────
+
+    def to_relation_dataset_params(
+        self,
+        doc_limit: Optional[int] = None,
+        preload: bool = False,
+    ) -> "RelationDatasetParams":  # noqa: F821
+        """Build a :class:`~gsapere.data.config.RelationDatasetParams` from this config.
+
+        Parameters
+        ----------
+        doc_limit:
+            Override the number of documents to load (default: all).
+        preload:
+            Preload the entire dataset into memory.
+        """
+        from ..data.config import RelationDatasetParams
+
+        return RelationDatasetParams(
+            max_seq_length=self.max_seq_length,
+            max_pair_length=self.max_pair_length,
+            model_type=self.model_type,
+            use_typemarker=self.use_typemarker,
+            no_sym=self.no_sym,
+            nocross=self.nocross,
+            local_rank=self.train_params.local_rank,
+            doc_limit=doc_limit,
+            preload=preload,
+        )
 
     # ── Loaders ───────────────────────────────────────────────────────────────
 

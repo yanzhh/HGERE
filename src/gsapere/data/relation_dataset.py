@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import json
-import math
-import random
-from collections import Counter
-from copy import deepcopy
-from typing import Any, List
+from typing import Any
 
-import numpy as np
 import torch
-import torch.distributed as dist
 from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 
 from ..data.base_dataset import DocumentDataset
+from ..data.collators import _collate_relation_batch
+from ..data.config import RelationDatasetParams
+from ..data.data_types import (
+    CandidateStats,
+    ObjectEntry,
+    RelationSentence,
+    SentenceSubjectCandidate,
+    SubjectInfo,
+)
 from ..data.samplers import (
     BucketSampler,
     DistributedBucketSampler,
@@ -24,159 +26,17 @@ from ..data.samplers import (
 from ..span_classifier.neural.evaluate import _select_sent_spans
 
 
-class SentenceSubjectCandidate:
-    # for each sentence with m entities, there are m subjects, objects and m**2 relations.
-    # a sent_item corresponds to one subject, it records m relations related to this subject
-    # a sentence contains m sent_items
-    def __init__(self, id_tuple, sub_tokens, examples, sub, rel_labels):
-        self.index = id_tuple  # e.g.: (0,0)
-        self.sub_tokens = sub_tokens
-        self.relations = examples
-        # e.g.: [((2, 2, 5), 0, (0, 0)), ((17, 18, 2), 0, (10, 10)),
-        #  ((25, 30, 2), 0, (17, 20))],  formation: ((left, right, ner_label),
-        #  rel_label, obj_token_index_tuple);
-        #  left/right: obj subtoken index; obj token index tuples: [(0,0), (10,10), (17,20)]
-        self.sub = sub  # e.g: ([0, 0, 'Material'], (1, 3), 5)
-        self.rel_labels = rel_labels  # e.g.: [0,0,0]
-        if len(examples) > 0:
-            self.build()
-        else:
-            self.n_ent = 0
-            (
-                self.subject,
-                self.sub_subtoken_pos,
-                self.sub_label,
-                self.obj_subtoken_pos,
-                self.obj_token_pos,
-            ) = [], [], [], [], []
-
-    def build(self):
-        self.subject, self.sub_subtoken_pos, self.sub_label = self.sub
-        self.obj_subtoken_pos = []  # e.g.: [(2, 2), (17, 18), (25, 30)]
-        self.obj_token_pos = []  # e.g.: [(0, 0), (10, 10), (17, 20)]
-        for entry in self.relations:
-            (obj_sub_head, obj_sub_tail, _), _, (obj_head, obj_tail) = entry
-            self.obj_subtoken_pos.append((obj_sub_head, obj_sub_tail))
-            self.obj_token_pos.append((obj_head, obj_tail))
-        self.n_ent = len(self.relations)  # e.g.: 3
-
-    def __repr__(self):
-        if self.n_ent > 0:
-            repr_str = f"<{self.n_ent} relations; sub: {self.subject}; objs: obj_subtokens-{self.obj_subtoken_pos}, obj_tokens-{self.obj_token_pos}>"
-        else:
-            repr_str = "<0 relations; ...>"
-        return repr_str
-
-
-class Sentence:
-    def __init__(self, id_tuple, item_list, ner_labels, words):
-        self.index = id_tuple
-        self.items = item_list
-        self.n_items = len(item_list)
-        self.ner_labels = ner_labels
-        self.words = words
-        if self.n_items == 0:
-            self.obj_token_pos = []
-        else:
-            self.obj_token_pos = self.items[0].obj_token_pos
-
-    @property
-    # number of entities
-    def size(self):
-        return len(self.items)
-
-
-class Sampler(torch.utils.data.Sampler):
-    def __init__(
-        self,
-        buckets: List,
-        shuffle: bool = False,
-    ):
-        self.shuffle = shuffle
-        self.buckets = buckets
-        self.n_samples = len(buckets)
-
-        # self.epoch = 1
-
-    def __iter__(self):
-        indices = [self.buckets[i] for i in torch.arange(self.n_samples).tolist()]
-        return iter(indices)
-
-    def __len__(self):
-        return self.n_samples
-
-    # def set_epoch(self, epoch: int) -> None:
-    #     self.epoch = epoch
-
-
-class DistrSampler(DistributedSampler):
-    def __init__(
-        self,
-        buckets: List,
-        shuffle: bool = False,
-    ):
-        self.n_samples = len(buckets)
-        # super().__init__(self, num_replicas=None,rank=None, drop_last=False)
-        if not dist.is_available():
-            raise RuntimeError("Requires distributed package to be available")
-        self.num_replicas = dist.get_world_size()
-        self.rank = dist.get_rank()
-        if self.rank >= self.num_replicas or self.rank < 0:
-            raise ValueError(
-                f"Invalid rank {self.rank}, rank should be in the interval"
-                " [0, {self.num_replicas - 1}]"
-            )
-        self.drop_last = False
-        if self.drop_last and len(self) % self.num_replicas != 0:
-            # type: ignore[arg-type]
-            # Split to nearest available length that is evenly divisible.
-            # This is to ensure each rank receives the same amount of data when
-            # using this Sampler.
-            self.num_samples = math.ceil(
-                (len(self) - self.num_replicas) / self.num_replicas  # type: ignore[arg-type]
-            )
-        else:
-            self.num_samples = math.ceil(len(self) / self.num_replicas)  # type: ignore[arg-type]
-        self.total_size = self.num_samples * self.num_replicas
-
-        self.shuffle = shuffle
-        self.buckets = buckets
-
-    def __iter__(self):
-        # batches = []
-        # for i, bucket in enumerate(self.buckets):
-        #     batches.append([bucket[j] for j in range_fn(len(bucket)).tolist()])
-        # self.epoch += 1
-
-        indices = [self.buckets[i] for i in torch.arange(self.n_samples).tolist()]
-
-        if not self.drop_last:
-            # add extra samples to make it evenly divisible
-            padding_size = self.total_size - len(indices)
-            if padding_size <= len(indices):
-                indices += indices[:padding_size]
-            else:
-                indices += (indices * math.ceil(padding_size / len(indices)))[
-                    :padding_size
-                ]
-        else:
-            # remove tail of data to make it evenly divisible.
-            indices = indices[: self.total_size]
-
-        indices = indices[self.rank : self.total_size : self.num_replicas]
-        assert len(indices) == self.num_samples
-
-        return iter(indices)
-
-    def __len__(self):
-        return self.n_samples
+# ---------------------------------------------------------------------------
+# Main dataset
+# ---------------------------------------------------------------------------
 
 
 class RelationDataset(DocumentDataset):
     """HGERE relation-extraction dataset.
 
     One dataset item = one sentence (all subject/object pairs for that sentence).
-    Inherits shared tokenization and context-window infrastructure from DocumentDataset.
+    Inherits shared tokenization and context-window infrastructure from
+    DocumentDataset.
 
     Constructor signature is identical to the original RelationDataset to preserve
     backward compatibility with run_hgnn.py, hgere/inference.py, and
@@ -189,52 +49,58 @@ class RelationDataset(DocumentDataset):
         tokenizer: Any,
         labels: Any,
         file_path: str,
-        args: Any = None,
-        max_pair_length: int | None = None,
-        max_ents: int = 18,
-        doc_limit: int | None = None,
-        preload: bool = False,
-        pre_filter_params: dict[Any, Any] | None = None,
+        params: RelationDatasetParams,
     ) -> None:
         self.logger = logger
-        self.max_pair_length = max_pair_length
-        self.max_entity_length = (max_pair_length or 0) * 2
-        self.max_ents = max_ents
-        self.args = args
+        self.max_pair_length = params.max_pair_length
+        self.max_entity_length = params.max_pair_length * 2
+        self.max_ents = params.max_ents
 
-        self.use_typemarker = args.use_typemarker if args else False
-        self.model_type = args.model_type if args else "bert"
-        self.no_sym = args.no_sym if args else True
-        self.nocross = getattr(args, "nocross", False)
-        self.local_rank = getattr(args, "local_rank", -1)
+        self.use_typemarker = params.use_typemarker
+        self.model_type = params.model_type
+        self.no_sym = params.no_sym
+        self.nocross = params.nocross
+        self.local_rank = params.local_rank
 
-        self.ner_label_list = labels.ner
-        self.sym_labels = labels.rel.symmetric(only_nil=self.no_sym)
-        self.label_list = labels.rel.all
+        self.ner_label_list: list[str] = labels.ner
+        self.sym_labels: list[str] = labels.rel.symmetric(only_nil=self.no_sym)
+        self.label_list: list[str] = labels.rel.all
 
         # Populated by _build_index()
-        self.data: list[Any] = []
+        self.data: list[RelationSentence] = []
         self.sizes: list[int] = []
         self.ner_golden_labels: set[tuple[Any, ...]] = set()
         self.golden_labels: set[tuple[Any, ...]] = set()
         self.golden_labels_with_ner: set[tuple[Any, ...]] = set()
-        self.global_predicted_ners: dict[tuple[int, int], list[Any]] = {}
+        # Maps (doc_idx, sent_idx) → candidate NER spans fed into HGERE.
+        # Used during evaluation to compute NER recall against gold entities.
+        self.global_predicted_ners: dict[
+            tuple[int, int], list[tuple[int, int, str]]
+        ] = {}
+        # Running totals of gold relation/entity instances (for recall denominator).
         self.ner_tot_recall: int = 0
         self.tot_recall: int = 0
+        # Populated by _build_index() after processing all documents.
+        self.candidate_stats: CandidateStats = CandidateStats(
+            n_gold=0, n_candidates=0, n_tp=0, n_fp=0, n_fn=0
+        )
 
-        # Base __init__ indexes the file (byte offsets)
+        # Populated lazily by _preload() when params.preload is True.
+        self._data_tokenized: list[dict[str, Any]] = []
+
+        # Base __init__ indexes the file (byte offsets) and sets self._file_path.
         super().__init__(
             file_path=file_path,
             tokenizer=tokenizer,
-            max_seq_length=args.max_seq_length if args else 512,
+            max_seq_length=params.max_seq_length,
             lazy=False,
-            doc_limit=doc_limit,
-            pre_filter_params=pre_filter_params,
+            doc_limit=params.doc_limit,
+            pre_filter_params=params.pre_filter_params,
         )
         self._build_index()
 
-        self.is_preloaded = preload
-        if preload:
+        self.is_preloaded = params.preload
+        if params.preload:
             self.logger.info("Load whole dataset ...")
             self._preload()
             self.logger.info("Load whole dataset ended.")
@@ -252,20 +118,32 @@ class RelationDataset(DocumentDataset):
         return self.prepare_item(idx)
 
     def _preload(self) -> None:
-        self._data_tokenized = []
-        for idx in range(len(self.data)):
-            self._data_tokenized.append(self.prepare_item(idx))
+        """Eagerly convert all sentences to tensor dicts and cache them in memory."""
+        self._data_tokenized = [self.prepare_item(idx) for idx in range(len(self.data))]
 
     # ------------------------------------------------------------------
     # Index building
     # ------------------------------------------------------------------
 
     def _build_index(self) -> None:
-        """Replaces initialize(). Uses DocumentDataset helpers for tokenization
-        and context-window computation."""
+        """Build the in-memory index of RelationSentence objects from the JSONL file.
+
+        For each document and sentence:
+        1. Tokenises the document and computes the context window.
+        2. Collects gold entity labels (for supervision) and candidate NER spans
+           (from the pruner or gold annotations, depending on config).
+        3. Builds a relation label lookup (pos2label) from gold relations,
+           including reverse directions for symmetric/asymmetric relations.
+        4. For every candidate entity acting as subject, injects subject boundary
+           markers into the subword token sequence and pairs it with every other
+           candidate entity as object, recording the gold relation label for each
+           pair.
+        5. Assembles a RelationSentence dataclass and appends it to self.data.
+        """
         label_map = {label: i for i, label in enumerate(self.label_list)}
         ner_label_map = {label: i for i, label in enumerate(self.ner_label_list)}
-        max_num_subwords = self.max_seq_length - 4  # for two type markers
+        # Reserve 4 slots for [CLS], [SEP], and the two subject marker tokens.
+        max_num_subwords = self.max_seq_length - 4
 
         for doc_idx in range(len(self._offsets)):
             doc = self._load_raw_document(doc_idx)
@@ -273,7 +151,8 @@ class RelationDataset(DocumentDataset):
             token2subword = tok_idx.token2subword
             subword_sentence_boundaries = tok_idx.subword_sentence_boundaries
 
-            # Load raw JSON for predicted_ner (not in frozen domain objects)
+            # Load raw JSON to access predicted_ner / predicted_ner_proba fields
+            # (these are not stored in the frozen domain objects from the base class).
             with open(self._file_path, "rb") as f:
                 f.seek(self._offsets[doc_idx])
                 raw = json.loads(f.readline())
@@ -298,14 +177,13 @@ class RelationDataset(DocumentDataset):
 
                 self.ner_tot_recall += len(ner_sent_gold)
 
-                entity_labels_gold: dict[tuple[int, int], str] = {}
-                for start, end, label in ner_sent_gold:
-                    label = "NIL" if label not in ner_label_map else label
-                    if label != "NIL":
-                        entity_labels_gold[(start, end)] = label
-                        self.ner_golden_labels.add(
-                            ((doc_idx, sentence_idx), (start, end), label)
-                        )
+                entity_labels_gold, ner_golden_new = self._collect_gold_entity_labels(
+                    ner_sent_gold=ner_sent_gold,
+                    ner_label_map=ner_label_map,
+                    doc_idx=doc_idx,
+                    sentence_idx=sentence_idx,
+                )
+                self.ner_golden_labels.update(ner_golden_new)
 
                 self.global_predicted_ners[(doc_idx, sentence_idx)] = list(
                     ner_candidates_sent
@@ -329,77 +207,20 @@ class RelationDataset(DocumentDataset):
                     + [self.tokenizer.sep_token]
                 )
 
-                # Build pos2label for relation labels
-                pos2label: dict[tuple[int, int, int, int], int] = {}
-                for (
-                    subj_begin,
-                    subj_end,
-                    obj_begin,
-                    obj_end,
-                    relation_label,
-                ) in sentence_relations:
-                    relation_label = (
-                        "NIL" if relation_label not in label_map else relation_label
-                    )
-                    pos_key = (subj_begin, subj_end, obj_begin, obj_end)
-                    pos2label[pos_key] = label_map[relation_label]
-                    self.golden_labels.add(
-                        (
-                            (doc_idx, sentence_idx),
-                            (subj_begin, subj_end),
-                            (obj_begin, obj_end),
-                            relation_label,
-                        )
-                    )
-                    self.golden_labels_with_ner.add(
-                        (
-                            (doc_idx, sentence_idx),
-                            (
-                                subj_begin,
-                                subj_end,
-                                entity_labels_gold.get((subj_begin, subj_end), "NIL"),
-                            ),
-                            (
-                                obj_begin,
-                                obj_end,
-                                entity_labels_gold.get((obj_begin, obj_end), "NIL"),
-                            ),
-                            relation_label,
-                        )
-                    )
-                    if relation_label in self.sym_labels[1:]:
-                        self.golden_labels.add(
-                            (
-                                (doc_idx, sentence_idx),
-                                (obj_begin, obj_end),
-                                (subj_begin, subj_end),
-                                relation_label,
-                            )
-                        )
+                pos2label, golden_new, golden_with_ner_new = self._build_pos2label(
+                    sentence_relations=sentence_relations,
+                    label_map=label_map,
+                    sym_labels=self.sym_labels,
+                    entity_labels_gold=entity_labels_gold,
+                    doc_idx=doc_idx,
+                    sentence_idx=sentence_idx,
+                )
+                self.golden_labels.update(golden_new)
+                self.golden_labels_with_ner.update(golden_with_ner_new)
 
-                # Add reverse relations to pos2label
-                for (
-                    subj_begin,
-                    subj_end,
-                    obj_begin,
-                    obj_end,
-                    relation_label,
-                ) in sentence_relations:
-                    relation_label = (
-                        "NIL" if relation_label not in label_map else relation_label
-                    )
-                    rel_pos_key = (obj_begin, obj_end, subj_begin, subj_end)
-                    if rel_pos_key not in pos2label:
-                        if relation_label in self.sym_labels[1:]:
-                            pos2label[rel_pos_key] = label_map[relation_label]
-                        else:
-                            pos2label[rel_pos_key] = (
-                                label_map[relation_label]
-                                + len(label_map)
-                                - len(self.sym_labels)
-                            )
+                subject_candidates: list[SentenceSubjectCandidate] = []
+                ner_labels: list[int] = []
 
-                subject_candidates = []
                 for subj_begin, subj_end, subj_label in ner_candidates_sent:
                     if subj_begin == len(token2subword):
                         continue
@@ -411,114 +232,327 @@ class RelationDataset(DocumentDataset):
                         entity_labels_gold.get((subj_begin, subj_end), "NIL"), 0
                     )
 
-                    if self.use_typemarker:
-                        type_marker_begin_idx = 2 + subj_label_gold
-                        subj_marker_begin = f"[unused{type_marker_begin_idx}]"
-                        type_marker_end_idx = (
-                            2 + subj_label_gold + len(self.ner_label_list)
-                        )
-                        subj_marker_end = f"[unused{type_marker_end_idx}]"
-                    else:
-                        subj_marker_begin = "[unused0]"
-                        subj_marker_end = "[unused1]"
-
-                    token_before_subj = target_tokens[:subj_begin_sent]
-                    token_subj = target_tokens[subj_begin_sent : subj_end_sent + 1]
-                    token_after_subj = target_tokens[subj_end_sent + 1 :]
-                    sub_tokens = (
-                        token_before_subj
-                        + [subj_marker_begin]
-                        + token_subj
-                        + [subj_marker_end]
-                        + token_after_subj
+                    subj_marker_begin, subj_marker_end = self._subject_markers(
+                        subj_label_gold
                     )
-                    subj_end_sent += 2
+
+                    subject_marked_tokens = (
+                        target_tokens[:subj_begin_sent]
+                        + [subj_marker_begin]
+                        + target_tokens[subj_begin_sent : subj_end_sent + 1]
+                        + [subj_marker_end]
+                        + target_tokens[subj_end_sent + 1 :]
+                    )
+                    subj_end_sent += 2  # account for the two inserted marker tokens
 
                     if subj_end_sent >= self.max_seq_length - 1:
                         continue
 
-                    object_candidates = []
-                    rel_labels: list[int] = []
-                    ner_labels: list[int] = []
-
-                    for obj_begin, obj_end, obj_label in ner_candidates_sent:
-                        if obj_begin == len(token2subword):
-                            continue
-                        obj_label = (
-                            "NIL" if obj_label not in ner_label_map else obj_label
-                        )
-                        obj_label_gold = entity_labels_gold.get(
-                            (obj_begin, obj_end), "NIL"
-                        )
-
-                        obj_begin_doc = token2subword[obj_begin]
-                        obj_end_doc = token2subword[obj_end + 1]
-                        obj_begin_sent = obj_begin_doc - doc_offset + 1
-                        obj_end_sent = obj_end_doc - doc_offset
-
-                        if obj_begin >= subj_begin:
-                            obj_begin_sent += 1
-                            if obj_begin > subj_end:
-                                obj_begin_sent += 1
-                        if obj_end >= subj_begin:
-                            obj_end_sent += 1
-                            if obj_begin > subj_end:
-                                obj_end_sent += 1
-
-                        relation_label = pos2label.get(
-                            (subj_begin, subj_end, obj_begin, obj_end), 0
-                        )
-
-                        if obj_end_sent >= self.max_seq_length - 1:
-                            continue
-
-                        obj_label_idx = ner_label_map[obj_label]
-                        obj_in_sentence = (obj_begin_sent, obj_end_sent, obj_label_idx)
-                        object_candidates.append(
-                            (obj_in_sentence, relation_label, (obj_begin, obj_end))
-                        )
-                        rel_labels.append(relation_label)
-                        ner_labels.append(ner_label_map[obj_label_gold])
-
-                    subject_candidate = SentenceSubjectCandidate(
-                        id_tuple=(doc_idx, sentence_idx),
-                        sub_tokens=sub_tokens,
-                        examples=object_candidates,
-                        sub=(
-                            (subj_begin, subj_end, subj_label),
-                            (subj_begin_sent, subj_end_sent),
-                            subj_label_gold,
-                        ),
-                        rel_labels=rel_labels,
+                    object_candidates, ner_labels = self._build_object_candidates(
+                        subj_begin=subj_begin,
+                        subj_end=subj_end,
+                        ner_candidates_sent=ner_candidates_sent,
+                        token2subword=token2subword,
+                        doc_offset=doc_offset,
+                        pos2label=pos2label,
+                        ner_label_map=ner_label_map,
+                        entity_labels_gold=entity_labels_gold,
                     )
-                    subject_candidates.append(subject_candidate)
 
-                if len(subject_candidates) == 0:
-                    ner_labels_sent: list[int] = []
-                else:
-                    ner_labels_sent = ner_labels  # type: ignore[assignment]
+                    subject_candidates.append(
+                        SentenceSubjectCandidate(
+                            index=(doc_idx, sentence_idx),
+                            subject_marked_tokens=subject_marked_tokens,
+                            subject=SubjectInfo(
+                                token_span=(subj_begin, subj_end, subj_label),
+                                subtoken_pos=(subj_begin_sent, subj_end_sent),
+                                gold_label_idx=subj_label_gold,
+                            ),
+                            relations=object_candidates,
+                        )
+                    )
 
-                new_sent = Sentence(
-                    id_tuple=(doc_idx, sentence_idx),
-                    item_list=subject_candidates,
+                # ner_labels from the last subject candidate is used for the sentence.
+                # All subject candidates share the same object set, so ner_labels is
+                # identical across iterations — only rel_labels differ per subject.
+                ner_labels_sent: list[int] = ner_labels if subject_candidates else []
+
+                new_sent = RelationSentence(
+                    index=(doc_idx, sentence_idx),
+                    subject_candidates=subject_candidates,
                     ner_labels=ner_labels_sent,
-                    words=target_tokens,
+                    subword_tokens=target_tokens,
                 )
                 self.data.append(new_sent)
-                self.sizes.append(new_sent.size)
+                self.sizes.append(new_sent.n_subjects)
 
-    def _select_candidate_ner(self, raw_doc: dict[str, Any]) -> list[Any]:
+        self.candidate_stats = self._compute_candidate_stats(
+            self.global_predicted_ners, self.ner_golden_labels
+        )
+        self.logger.info(
+            "Candidate stats: n_gold=%d  n_candidates=%d  "
+            "TP=%d  FP=%d  FN=%d  recall=%.3f  precision=%.3f",
+            self.candidate_stats.n_gold,
+            self.candidate_stats.n_candidates,
+            self.candidate_stats.n_tp,
+            self.candidate_stats.n_fp,
+            self.candidate_stats.n_fn,
+            self.candidate_stats.recall,
+            self.candidate_stats.precision,
+        )
+
+    @staticmethod
+    def _compute_candidate_stats(
+        global_predicted_ners: dict[tuple[int, int], list[tuple[int, int, str]]],
+        ner_golden_labels: set[tuple[Any, ...]],
+    ) -> CandidateStats:
+        """Compute TP/FP/FN counts comparing candidate spans against gold entities.
+
+        Matching is span-level only (token_start, token_end) — labels are ignored,
+        as the pruner produces no type predictions.
+        """
+        gold_spans: set[tuple] = {
+            (sent_id, span) for sent_id, span, _ in ner_golden_labels
+        }
+        candidate_spans: set[tuple] = {
+            (sent_id, (start, end))
+            for sent_id, spans in global_predicted_ners.items()
+            for start, end, _ in spans
+        }
+        n_tp = len(gold_spans & candidate_spans)
+        n_fp = len(candidate_spans - gold_spans)
+        n_fn = len(gold_spans - candidate_spans)
+        return CandidateStats(
+            n_gold=len(gold_spans),
+            n_candidates=len(candidate_spans),
+            n_tp=n_tp,
+            n_fp=n_fp,
+            n_fn=n_fn,
+        )
+
+    @staticmethod
+    def _collect_gold_entity_labels(
+        ner_sent_gold: list[tuple[int, int, str]],
+        ner_label_map: dict[str, int],
+        doc_idx: int,
+        sentence_idx: int,
+    ) -> tuple[dict[tuple[int, int], str], set[tuple[Any, ...]]]:
+        """Build a (token_begin, token_end) → label map for gold entities in one sentence.
+
+        Returns a tuple of:
+        - entity_labels_gold: span → label dict for non-NIL gold entities.
+        - ner_golden_additions: set entries to merge into self.ner_golden_labels
+          for final NER evaluation.
+
+        Labels not in the NER label set are mapped to NIL and excluded from the dict.
+        """
+        entity_labels_gold: dict[tuple[int, int], str] = {}
+        ner_golden_additions: set[tuple[Any, ...]] = set()
+        for start, end, label in ner_sent_gold:
+            label = "NIL" if label not in ner_label_map else label
+            if label != "NIL":
+                entity_labels_gold[(start, end)] = label
+                ner_golden_additions.add(((doc_idx, sentence_idx), (start, end), label))
+        return entity_labels_gold, ner_golden_additions
+
+    @staticmethod
+    def _build_pos2label(
+        sentence_relations: list[tuple[int, int, int, int, str]],
+        label_map: dict[str, int],
+        sym_labels: list[str],
+        entity_labels_gold: dict[tuple[int, int], str],
+        doc_idx: int,
+        sentence_idx: int,
+    ) -> tuple[
+        dict[tuple[int, int, int, int], int],
+        set[tuple[Any, ...]],
+        set[tuple[Any, ...]],
+    ]:
+        """Build a (subj_begin, subj_end, obj_begin, obj_end) → label_idx lookup.
+
+        Returns a tuple of:
+        - pos2label: span-pair → label index dict used during candidate construction.
+        - golden_additions: set entries to merge into self.golden_labels.
+        - golden_with_ner_additions: set entries to merge into self.golden_labels_with_ner.
+
+        For symmetric relations, adds the reverse direction with the same label.
+        For asymmetric relations, the reverse direction is added with an index
+        offset so the model can score (A→B) and (B→A) independently:
+            reverse_idx = original_idx + n_labels - n_sym_labels
+        """
+        pos2label: dict[tuple[int, int, int, int], int] = {}
+        golden_additions: set[tuple[Any, ...]] = set()
+        golden_with_ner_additions: set[tuple[Any, ...]] = set()
+
+        for (
+            subj_begin,
+            subj_end,
+            obj_begin,
+            obj_end,
+            relation_label,
+        ) in sentence_relations:
+            relation_label = (
+                "NIL" if relation_label not in label_map else relation_label
+            )
+            pos2label[(subj_begin, subj_end, obj_begin, obj_end)] = label_map[
+                relation_label
+            ]
+            golden_additions.add(
+                (
+                    (doc_idx, sentence_idx),
+                    (subj_begin, subj_end),
+                    (obj_begin, obj_end),
+                    relation_label,
+                )
+            )
+            golden_with_ner_additions.add(
+                (
+                    (doc_idx, sentence_idx),
+                    (
+                        subj_begin,
+                        subj_end,
+                        entity_labels_gold.get((subj_begin, subj_end), "NIL"),
+                    ),
+                    (
+                        obj_begin,
+                        obj_end,
+                        entity_labels_gold.get((obj_begin, obj_end), "NIL"),
+                    ),
+                    relation_label,
+                )
+            )
+            if relation_label in sym_labels[1:]:
+                # Symmetric: reverse direction carries the same label.
+                golden_additions.add(
+                    (
+                        (doc_idx, sentence_idx),
+                        (obj_begin, obj_end),
+                        (subj_begin, subj_end),
+                        relation_label,
+                    )
+                )
+
+        # Add reverse directions to pos2label for all relations so the model
+        # receives a training signal for both (A→B) and (B→A).
+        for (
+            subj_begin,
+            subj_end,
+            obj_begin,
+            obj_end,
+            relation_label,
+        ) in sentence_relations:
+            relation_label = (
+                "NIL" if relation_label not in label_map else relation_label
+            )
+            reverse_key = (obj_begin, obj_end, subj_begin, subj_end)
+            if reverse_key not in pos2label:
+                if relation_label in sym_labels[1:]:
+                    pos2label[reverse_key] = label_map[relation_label]
+                else:
+                    pos2label[reverse_key] = (
+                        label_map[relation_label] + len(label_map) - len(sym_labels)
+                    )
+
+        return pos2label, golden_additions, golden_with_ner_additions
+
+    def _subject_markers(self, subj_label_gold: int) -> tuple[str, str]:
+        """Return the (begin_marker, end_marker) token pair for a subject entity.
+
+        Without type markers: [unused0] / [unused1] — type-agnostic boundaries.
+        With type markers: [unusedN] / [unusedM] where N/M encode the NER type,
+        allowing the model to condition on the subject entity type at encoding time.
+        """
+        if self.use_typemarker:
+            begin_idx = 2 + subj_label_gold
+            end_idx = 2 + subj_label_gold + len(self.ner_label_list)
+            return f"[unused{begin_idx}]", f"[unused{end_idx}]"
+        return "[unused0]", "[unused1]"
+
+    def _build_object_candidates(
+        self,
+        subj_begin: int,
+        subj_end: int,
+        ner_candidates_sent: list[tuple[int, int, str]],
+        token2subword: list[int],
+        doc_offset: int,
+        pos2label: dict[tuple[int, int, int, int], int],
+        ner_label_map: dict[str, int],
+        entity_labels_gold: dict[tuple[int, int], str],
+    ) -> tuple[list[ObjectEntry], list[int]]:
+        """Build the list of ObjectEntry candidates for one subject.
+
+        Converts every NER candidate in the sentence into an object candidate
+        paired with the given subject.  Returns both the ObjectEntry list and
+        ner_labels (gold NER label indices per object), which is later stored on
+        the RelationSentence for evaluation.
+
+        Subtoken positions of each object are adjusted to account for the two
+        subject marker tokens inserted into the sequence:
+        - Every object token at or after subj_begin is shifted +1.
+        - Every object token strictly after subj_end is shifted +1 more.
+        The same +1/+2 logic applies independently to begin and end positions.
+        """
+        object_candidates: list[ObjectEntry] = []
+        ner_labels: list[int] = []
+
+        for obj_begin, obj_end, obj_label in ner_candidates_sent:
+            if obj_begin == len(token2subword):
+                continue
+            obj_label = "NIL" if obj_label not in ner_label_map else obj_label
+            obj_label_gold = entity_labels_gold.get((obj_begin, obj_end), "NIL")
+
+            obj_begin_sent = token2subword[obj_begin] - doc_offset + 1
+            obj_end_sent = token2subword[obj_end + 1] - doc_offset
+
+            if obj_begin >= subj_begin:
+                obj_begin_sent += 1
+                if obj_begin > subj_end:
+                    obj_begin_sent += 1
+            if obj_end >= subj_begin:
+                obj_end_sent += 1
+                if obj_begin > subj_end:
+                    obj_end_sent += 1
+
+            if obj_end_sent >= self.max_seq_length - 1:
+                continue
+
+            object_candidates.append(
+                ObjectEntry(
+                    subtoken_pos=(obj_begin_sent, obj_end_sent),
+                    ner_label_idx=ner_label_map[obj_label],
+                    rel_label=pos2label.get(
+                        (subj_begin, subj_end, obj_begin, obj_end), 0
+                    ),
+                    token_pos=(obj_begin, obj_end),
+                )
+            )
+            ner_labels.append(ner_label_map[obj_label_gold])
+
+        return object_candidates, ner_labels
+
+    def _select_candidate_ner(
+        self, raw_doc: dict[str, Any]
+    ) -> list[list[tuple[int, int, str]]]:
+        """Return per-sentence NER candidate spans for one document.
+
+        Three modes (checked in priority order):
+        1. Pre-filter mode (predicted_ner_proba present): apply probability
+           threshold via _select_sent_spans and convert to (start, end, label).
+        2. Predicted NER mode (predicted_ner present): use pre-computed span
+           predictions directly (e.g. from a first-pass NER model or the pruner).
+        3. Gold mode (fallback): use gold ner annotations as candidates, giving
+           an oracle upper bound for the HGERE stage.
+        """
         if self.do_pre_filter:
-            assert (
-                "predicted_ner_proba" in raw_doc
-            )  # do do pre_filtering you need to add "predicted_ner_proba"
-            ner_candidates_all = []
+            assert "predicted_ner_proba" in raw_doc, (
+                "pre_filter requires 'predicted_ner_proba' in the input file"
+            )
+            ner_candidates_all: list[list[tuple[int, int, str]]] = []
             for sent_candidates in raw_doc["predicted_ner_proba"]:
-                candidates = _select_sent_spans(sent_candidates, self.pre_filter_params)
-                candidates = [
-                    (start, end, label) for start, end, _, label in candidates
-                ]
-                ner_candidates_all.extend(candidates)
+                filtered = _select_sent_spans(sent_candidates, self.pre_filter_params)
+                ner_candidates_all.append(
+                    [(start, end, label) for start, end, _, label in filtered]
+                )
             return ner_candidates_all
         elif "predicted_ner" in raw_doc:
             return raw_doc["predicted_ner"]
@@ -526,35 +560,49 @@ class RelationDataset(DocumentDataset):
             return raw_doc.get("ner", [[] for _ in raw_doc.get("sentences", [])])
 
     # ------------------------------------------------------------------
-    # Tensor construction (unchanged logic from original prepare_item)
+    # Tensor construction
     # ------------------------------------------------------------------
 
     def prepare_item(self, idx: int) -> dict[str, Any]:
-        """Convert a preprocessed Sentence item to tensor dict."""
+        """Convert a preprocessed RelationSentence into the tensor dict consumed by the model.
+
+        For each subject candidate in the sentence the method:
+        - Converts the subject-marked subword token sequence to input_ids.
+        - Pads input_ids to max_seq_length, then appends 2 × n_ent virtual tokens
+          (one head/tail pair per object entity).  These virtual tokens allow the
+          transformer to attend to each object's span boundaries independently.
+        - Builds a 2-D attention mask: real tokens attend to each other; each
+          virtual head/tail pair attends to real tokens and to its own pair.
+        - Builds position_ids: real tokens get sequential positions; virtual tokens
+          borrow the subtoken positions of their corresponding object entity so
+          the model's position embeddings correctly encode entity span boundaries.
+
+        Returns a dict with keys:
+            indices, input_ids, attention_mask, position_ids, sub_positions,
+            sub, rel_labels, ner_labels, obj_token_pos, n_ent, subtoken_len
+        """
         sent = self.data[idx]
-        sent_index = sent.index
-        ner_labels = sent.ner_labels
-        obj_token_pos = sent.obj_token_pos
         input_ids_list: list[list[int]] = []
-        attention_mask_list: list[Any] = []
+        attention_mask_list: list[torch.Tensor] = []
         position_ids_list: list[list[int]] = []
-        sub_subtoken_pos_list: list[tuple[int, int]] = []
+        subject_subtoken_pos_list: list[tuple[int, int]] = []
         rel_labels_list: list[list[int]] = []
-        subs: list[Any] = []
+        subject_token_spans: list[tuple[int, int, str]] = []
 
-        for entry in sent.items:
-            rel_labels = entry.rel_labels
-            sub_subtoken_pos = entry.sub_subtoken_pos
-            input_tokens = entry.sub_tokens
-
-            input_ids = self.tokenizer.convert_tokens_to_ids(input_tokens)
-            L = len(input_ids)
+        for entry in sent.subject_candidates:
+            input_ids = self.tokenizer.convert_tokens_to_ids(
+                entry.subject_marked_tokens
+            )
+            input_seq_len = len(input_ids)
             input_ids += [self.tokenizer.pad_token_id] * (
-                self.max_seq_length - len(input_ids)
+                self.max_seq_length - input_seq_len
             )
 
             n_ent = entry.n_ent
 
+            # Append virtual head/tail tokens for each object entity.
+            # Token IDs 3/4 (or Albert equivalents) are placeholder embeddings;
+            # their position_ids will be overwritten to point to the entity's span.
             if self.model_type.startswith("albert"):
                 input_ids = input_ids + [30002] * n_ent + [30003] * n_ent
             else:
@@ -562,64 +610,64 @@ class RelationDataset(DocumentDataset):
 
             tot_seq_len = len(input_ids)
             attention_mask = torch.zeros((tot_seq_len, tot_seq_len), dtype=torch.int64)
-            attention_mask[:L, :L] = 1
+            attention_mask[:input_seq_len, :input_seq_len] = 1
 
-            obj_subtoken_pos = entry.obj_subtoken_pos
             position_ids = list(range(self.max_seq_length)) + [0] * (
                 tot_seq_len - self.max_seq_length
             )
-            num_pair = n_ent
 
-            for x_idx in range(n_ent):
-                obj_sub_head, obj_sub_tail = obj_subtoken_pos[x_idx]
-                w1 = x_idx + self.max_seq_length
-                w2 = w1 + num_pair
-                position_ids[w1] = obj_sub_head
-                position_ids[w2] = obj_sub_tail
-                for xx in [w1, w2]:
-                    for yy in [w1, w2]:
-                        attention_mask[xx, yy] = 1
-                    attention_mask[xx, :L] = 1
+            for obj_idx in range(n_ent):
+                obj_sub_head, obj_sub_tail = entry.obj_subtoken_pos[obj_idx]
+                # Virtual token layout: heads at [max_seq_length, max_seq_length + n_ent),
+                # tails at [max_seq_length + n_ent, max_seq_length + 2*n_ent).
+                virtual_head_idx = obj_idx + self.max_seq_length
+                virtual_tail_idx = virtual_head_idx + n_ent
+                position_ids[virtual_head_idx] = obj_sub_head
+                position_ids[virtual_tail_idx] = obj_sub_tail
+                for row in [virtual_head_idx, virtual_tail_idx]:
+                    for col in [virtual_head_idx, virtual_tail_idx]:
+                        attention_mask[row, col] = 1
+                    attention_mask[row, :input_seq_len] = 1
 
             input_ids_list.append(input_ids)
             attention_mask_list.append(attention_mask)
             position_ids_list.append(position_ids)
-            sub_subtoken_pos_list.append(sub_subtoken_pos)
-            rel_labels_list.append(rel_labels)
-            subs.append(entry.subject)
+            subject_subtoken_pos_list.append(entry.subject.subtoken_pos)
+            rel_labels_list.append(entry.rel_labels)
+            subject_token_spans.append(entry.subject.token_span)
 
-        n_ent = sent.size
-        if n_ent == 0:
+        n_subject_candidates = sent.n_subjects
+        if n_subject_candidates == 0:
             input_ids_t = torch.tensor([])
             attention_mask_t = torch.tensor([])
             position_ids_t = torch.tensor([])
-            sub_subtoken_pos_t = torch.tensor([])
+            subject_subtoken_pos_t = torch.tensor([])
             rel_labels_t = torch.tensor([], dtype=torch.int64)
             ner_labels_t = torch.tensor([], dtype=torch.int64)
         else:
             input_ids_t = torch.tensor(input_ids_list)
             attention_mask_t = torch.stack(attention_mask_list)
             position_ids_t = torch.tensor(position_ids_list)
-            sub_subtoken_pos_t = torch.tensor(sub_subtoken_pos_list)
+            subject_subtoken_pos_t = torch.tensor(subject_subtoken_pos_list)
             rel_labels_t = torch.tensor(rel_labels_list, dtype=torch.int64)
-            ner_labels_t = torch.tensor(ner_labels, dtype=torch.int64)
+            ner_labels_t = torch.tensor(sent.ner_labels, dtype=torch.int64)
 
         return dict(
-            indexs=sent_index,
+            indices=sent.index,
             input_ids=input_ids_t,
             attention_mask=attention_mask_t,
             position_ids=position_ids_t,
-            sub_positions=sub_subtoken_pos_t,
-            sub=subs,
+            sub_positions=subject_subtoken_pos_t,
+            sub=subject_token_spans,
             rel_labels=rel_labels_t,
             ner_labels=ner_labels_t,
-            obj_token_pos=obj_token_pos,
-            n_ent=n_ent,
+            obj_token_pos=sent.obj_token_pos,
+            n_ent=n_subject_candidates,
             subtoken_len=self.max_seq_length,
         )
 
     # ------------------------------------------------------------------
-    # DataLoader construction (backward compat with run_hgnn.py)
+    # DataLoader construction
     # ------------------------------------------------------------------
 
     def build(
@@ -630,6 +678,16 @@ class RelationDataset(DocumentDataset):
         n_workers: int = 0,
         pin_memory: bool = True,
     ) -> DataLoader:
+        """Build and return a DataLoader over this dataset.
+
+        Args:
+            batch_size: Maximum total entity candidates per batch.
+            shuffle: Randomly order sentences within each batch.
+            batch_by_size: Sort sentences by entity count before batching to
+                minimise padding (recommended for training efficiency).
+            n_workers: Number of DataLoader worker processes.
+            pin_memory: Pin memory for faster GPU transfer.
+        """
         if batch_by_size:
             self.buckets = create_size_sorted_batches(self.sizes, batch_size)
         elif shuffle:
@@ -650,210 +708,7 @@ class RelationDataset(DocumentDataset):
         return self.loader
 
     def collate_fn(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
-        """Collate a batch of relation items. Preserved for backward compat."""
+        """Collate a batch of sentence items into padded tensors."""
         return _collate_relation_batch(
             batch, self.tokenizer.pad_token_id, self.max_seq_length
         )
-
-
-def _collate_relation_batch(
-    batch: list[dict[str, Any]],
-    pad_token_id: int,
-    max_seq_length: int,
-) -> dict[str, Any]:
-    """Standalone collate function, also used by RelationCollator."""
-    ent_numbers = torch.tensor([sent["n_ent"] for sent in batch])
-    n_sent = len(batch)
-
-    if len(ent_numbers) == 1:
-        items = deepcopy(batch[0])
-        items.pop("n_ent")
-        items.pop("subtoken_len")
-        items["ent_numbers"] = ent_numbers
-        for k in ["rel_labels", "ner_labels"]:
-            items[k] = items[k].unsqueeze(0)
-        for k in ["indexs", "sub", "obj_token_pos"]:
-            items[k] = [items[k]]
-        return items
-
-    subs: list[Any] = []
-    obj_token_pos: list[Any] = []
-    indexs: list[Any] = []
-    max_ent_num = int(max(ent_numbers))
-    seqlen = batch[0]["subtoken_len"]
-    bs = int(sum(ent_numbers))
-
-    batch_input_ids = (
-        torch.zeros((bs, seqlen + 2 * max_ent_num), dtype=torch.int) + pad_token_id
-    )
-    batch_pos_ids = torch.zeros((bs, seqlen + 2 * max_ent_num), dtype=torch.int)
-    batch_sub_subtoken_pos = torch.zeros((bs, 2), dtype=torch.long)
-    batch_attn_mask = torch.zeros(
-        (bs, seqlen + 2 * max_ent_num, seqlen + 2 * max_ent_num), dtype=torch.int
-    )
-    batch_rel_labels = (
-        torch.zeros((n_sent, max_ent_num, max_ent_num), dtype=torch.int64) - 1
-    )
-    batch_ner_labels = torch.zeros((n_sent, max_ent_num), dtype=torch.int64) - 1
-
-    n_ent_0 = 0
-    for i, items_i in enumerate(batch):
-        indexs.append(items_i["indexs"])
-        n_ent = int(ent_numbers[i])
-        if n_ent > 0:
-            n_ent_1 = n_ent_0 + n_ent
-            input_ids_split = items_i["input_ids"].split([seqlen, n_ent, n_ent], dim=-1)
-            batch_input_ids[n_ent_0:n_ent_1, :seqlen] = input_ids_split[0]
-            for j in range(2):
-                batch_input_ids[
-                    n_ent_0:n_ent_1,
-                    seqlen + j * max_ent_num : seqlen + j * max_ent_num + n_ent,
-                ] = input_ids_split[j + 1]
-
-            pos_ids_split = items_i["position_ids"].split(
-                [seqlen, n_ent, n_ent], dim=-1
-            )
-            batch_pos_ids[n_ent_0:n_ent_1, :seqlen] = pos_ids_split[0]
-            for j in range(2):
-                batch_pos_ids[
-                    n_ent_0:n_ent_1,
-                    seqlen + j * max_ent_num : seqlen + j * max_ent_num + n_ent,
-                ] = pos_ids_split[j + 1]
-
-            batch_sub_subtoken_pos[n_ent_0:n_ent_1, :] = items_i["sub_positions"]
-
-            attn_mask_i = items_i["attention_mask"]
-            batch_attn_mask[n_ent_0:n_ent_1, :seqlen, :seqlen] = attn_mask_i[
-                :, :seqlen, :seqlen
-            ]
-            for j in range(2):
-                batch_attn_mask[
-                    n_ent_0:n_ent_1,
-                    seqlen + j * max_ent_num : seqlen + n_ent + j * max_ent_num,
-                    :seqlen,
-                ] = attn_mask_i[
-                    :, seqlen + j * n_ent : seqlen + (j + 1) * n_ent, :seqlen
-                ]
-                for k in range(2):
-                    batch_attn_mask[
-                        n_ent_0:n_ent_1,
-                        seqlen + j * max_ent_num : seqlen + n_ent + j * max_ent_num,
-                        seqlen + k * max_ent_num : seqlen + n_ent + k * max_ent_num,
-                    ] = attn_mask_i[
-                        :,
-                        seqlen + j * n_ent : seqlen + (j + 1) * n_ent,
-                        seqlen + k * n_ent : seqlen + (k + 1) * n_ent,
-                    ]
-
-            batch_rel_labels[i, :n_ent, :n_ent] = items_i["rel_labels"]
-            batch_ner_labels[i, :n_ent] = items_i["ner_labels"]
-            subs.append(items_i["sub"])
-            obj_token_pos.append(items_i["obj_token_pos"])
-            n_ent_0 = n_ent_1
-        else:
-            obj_token_pos.append([])
-            subs.append([])
-
-    return dict(
-        indexs=indexs,
-        input_ids=batch_input_ids,
-        attention_mask=batch_attn_mask,
-        position_ids=batch_pos_ids,
-        sub_positions=batch_sub_subtoken_pos,
-        rel_labels=batch_rel_labels,
-        ner_labels=batch_ner_labels,
-        sub=subs,
-        obj_token_pos=obj_token_pos,
-        ent_numbers=ent_numbers,
-    )
-
-
-def _create_batches(n_ents_by_sent, batch_size):
-    sort_index = np.arange(len(n_ents_by_sent))
-    sorted_sizes = n_ents_by_sent
-    batch_sizes = []
-    batches = []
-    missing_in_batches = []
-
-    current_sizes = []
-    current_batch = []
-    for sent_idx, n_sent_ents in enumerate(sorted_sizes):
-        if (sum(current_sizes) + n_sent_ents <= batch_size) or (
-            len(current_sizes) == -1 and n_sent_ents >= batch_size
-        ):
-            # current batch has room for more sentences
-            current_sizes.append(n_sent_ents)
-            current_batch.append(sort_index[sent_idx])
-        else:
-            # current batch is full, open new batch
-            missing = batch_size - sum(current_sizes)
-            missing_in_batches.append(missing)
-            batch_sizes.append(current_sizes)
-            batches.append(current_batch)
-            current_sizes = [n_sent_ents]
-            current_batch = [sort_index[sent_idx]]
-    if len(current_sizes) > -1:
-        batch_sizes.append(current_sizes)
-        batches.append(current_batch)
-    # print("missing in batches:", sum(missing_in_batches))
-    return batches
-
-
-def _create_size_sorted_batches(n_ents_by_sent, batch_size):
-    """Sort sentences by entity count, pack consecutive (similar-size) sentences into
-    batches, then shuffle batch order.  Within each batch all sentences have similar
-    entity counts, minimising max_ent_num padding and making hypergraph iteration
-    uniform across the batch."""
-    ordered = sorted(enumerate(n_ents_by_sent), key=lambda x: x[1])
-    batches = []
-    current_batch = []
-    current_total = 0
-    for idx, size in ordered:
-        size = max(size, 1)
-        if current_total + size > batch_size and current_batch:
-            batches.append(current_batch)
-            current_batch = [idx]
-            current_total = size
-        else:
-            current_batch.append(idx)
-            current_total += size
-    if current_batch:
-        batches.append(current_batch)
-    random.shuffle(batches)
-    return batches
-
-
-def _create_shuffled_batches(n_ents_by_sent, batch_size):
-    ordered = [(idx, max(size, 1)) for idx, size in enumerate(n_ents_by_sent)]
-    random.shuffle(ordered)
-    ordered.sort(key=lambda x: x[1])
-    batches = []
-    sizes = []
-    while ordered:
-        batch, size = _get_batch_filled_up_smallest(ordered, batch_size)
-        if batch is not None:
-            batches.append(batch)
-            sizes.append(size)
-    print("Reals batch_size counts:", Counter(sizes).most_common())
-    random.shuffle(batches)
-    return batches
-
-
-def _get_batch_filled_up_smallest(ordered, batch_size):
-    current_batch = None
-    current_size = None
-    if ordered:
-        sent_id, size = ordered.pop()
-        current_batch = [sent_id]
-        current_size = size
-    while ordered:
-        next_sent_id, next_size = ordered[0]
-        if current_size + next_size > batch_size:
-            return current_batch, current_size
-        else:
-            sent_id, size = ordered.pop(0)
-            current_batch.append(sent_id)
-            current_size += size
-            if len(ordered) == 0:
-                return current_batch, current_size
-    return current_batch, current_size

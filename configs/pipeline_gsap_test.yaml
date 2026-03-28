@@ -25,7 +25,7 @@ hgere:
     per_gpu_eval_batch_size: 21
     max_seq_length: 512
     max_pair_length: 18
-    factor_type: tersibcop
+    factor_type: ternary
     factor_encoder: biaf
     ent_dim: 400
     rel_dim: 400

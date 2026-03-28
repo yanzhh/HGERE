@@ -9,7 +9,7 @@ Workflow
 
 Example
 -------
-    uv run eval-rulebased-pruner \\
+    uv run gsapere-fit-rulebased-pruner \\
         --train_file data/scier/train.jsonl \\
         --dev_file   data/scier/dev.jsonl   \\
         --max_span_length 20                \\
@@ -20,9 +20,12 @@ Example
 import argparse
 import json
 import logging
+from collections import defaultdict
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Set, Tuple
 
+import numpy as np
+import pandas as pd
 from tabulate import tabulate
 
 from ..evaluation.pruner import compute_metrics
@@ -30,7 +33,6 @@ from ..span_classifier.rulebased import (
     RuleBasedPruner,
     _build_type_mask,
     collect_stats,
-    fit,
     load_docs,
     min_count_from_entity_ratio,
 )
@@ -152,7 +154,7 @@ def _pattern_type(ngram: tuple) -> str:
 
 
 def _print_stats_summary(
-    stats, pruner: RuleBasedPruner, min_count: int, purity_threshold: float
+    stats, pruner: RuleBasedPruner, min_count: int, max_entity_rate: float
 ):
     total_ngrams = len(stats)
     n_patterns = len(pruner)
@@ -172,7 +174,7 @@ def _print_stats_summary(
     print("\n── Training statistics ──────────────────────────────────────")
     print(f"  Unique n-grams in training data : {total_ngrams:>10,}")
     print(f"  min_count threshold             : {min_count:>10,}")
-    print(f"  purity threshold                : {purity_threshold:>10.3f}")
+    print(f"  max entity rate                 : {max_entity_rate:>10.3f}")
     print(f"  Pruning patterns learned        : {n_patterns:>10,}")
     print()
     print(
@@ -187,18 +189,20 @@ def _print_stats_summary(
     prune_set = pruner.prune_patterns
     top = (
         stats[stats["ngram"].isin(prune_set)]
-        .nlargest(20, "frequency")[["ngram", "frequency", "n_tokens", "purity"]]
+        .nlargest(20, "frequency")[["ngram", "frequency", "n_tokens", "entity_rate"]]
         .copy()
     )
     top["type"] = top["ngram"].apply(_pattern_type)
     top["ngram"] = top["ngram"].apply(lambda t: " ".join(t))
-    top["purity"] = top["purity"].map("{:.3f}".format)
+    top["entity_rate"] = top["entity_rate"].map("{:.3f}".format)
 
     print("\n── Top-20 pruning patterns (by frequency) ───────────────────")
     print(
         tabulate(
-            top[["ngram", "type", "frequency", "n_tokens", "purity"]].values.tolist(),
-            headers=["n-gram", "type", "freq", "n_tok", "purity"],
+            top[
+                ["ngram", "type", "frequency", "n_tokens", "entity_rate"]
+            ].values.tolist(),
+            headers=["n-gram", "type", "freq", "n_tok", "entity_rate"],
             tablefmt="simple",
         )
     )
@@ -268,6 +272,93 @@ def _print_eval_results(
         print(
             tabulate(rows, headers=["text", "doc", "start", "end"], tablefmt="simple")
         )
+
+
+def _print_pruned_gold_details(
+    gold_spans: List,
+    kept_spans: List,
+    span_words: Dict,
+    span_context: Dict,
+    pruner: RuleBasedPruner,
+    stats: pd.DataFrame,
+) -> None:
+    """For each pruned gold entity, list every matching pattern with its training stats."""
+    kept_set = set(kept_spans)
+    pruned_gold = [s for s in gold_spans if s not in kept_set]
+    if not pruned_gold:
+        return
+
+    stats_lookup: Dict = stats.set_index("ngram")[
+        ["frequency", "entity_rate", "n_tokens"]
+    ].to_dict("index")
+
+    # Precompute context limits (mirrors RuleBasedPruner lazy init)
+    max_before = max(
+        (
+            sum(1 for t in p if t != BEFORE)
+            for p in pruner.prune_patterns
+            if p[-1] == BEFORE
+        ),
+        default=0,
+    )
+    max_after = max(
+        (
+            sum(1 for t in p if t != AFTER)
+            for p in pruner.prune_patterns
+            if p[0] == AFTER
+        ),
+        default=0,
+    )
+
+    print(f"\n── Pruned gold entities — matched patterns ({len(pruned_gold)}) ────────")
+    rows = []
+    for coord in pruned_gold:
+        words = span_words.get(coord, [])
+        ctx_before, ctx_after = span_context.get(coord, ([], []))
+
+        matching: List = []
+        marked = [START] + list(words) + [END]
+        for ng in _iter_ngrams(marked, len(marked)):
+            if ng in pruner.prune_patterns:
+                matching.append(ng)
+        if max_before and ctx_before:
+            for ng in _iter_before_ngrams(ctx_before, max_before):
+                if ng in pruner.prune_patterns:
+                    matching.append(ng)
+        if max_after and ctx_after:
+            for ng in _iter_after_ngrams(ctx_after, max_after):
+                if ng in pruner.prune_patterns:
+                    matching.append(ng)
+
+        # Sort: highest entity_rate first (most suspicious), then highest frequency
+        matching.sort(
+            key=lambda ng: (
+                -stats_lookup.get(ng, {}).get("entity_rate", 0.0),
+                -stats_lookup.get(ng, {}).get("frequency", 0),
+            )
+        )
+
+        span_text = " ".join(words)
+        for i, ng in enumerate(matching):
+            s = stats_lookup.get(ng, {})
+            rows.append(
+                [
+                    span_text if i == 0 else "",
+                    coord[0] if i == 0 else "",
+                    " ".join(ng),
+                    _pattern_type(ng),
+                    s.get("frequency", "?"),
+                    f"{s.get('entity_rate', 0.0):.4f}",
+                ]
+            )
+
+    print(
+        tabulate(
+            rows,
+            headers=["entity", "doc", "pattern", "type", "freq", "entity_rate"],
+            tablefmt="simple",
+        )
+    )
 
 
 def _precompute_span_keys(
@@ -341,26 +432,29 @@ def _apply_patterns_fast(precomputed, patterns, full_only: bool) -> List:
         return [coord for coord, ngrams in precomputed if ngrams.isdisjoint(patterns)]
 
 
-def _sweep(
-    stats,
+def _greedy_select(
+    stats: pd.DataFrame,
     gold_spans: List,
-    all_candidate_spans,
-    total_candidates: int,
-    pattern_types,
-    purity_threshold: float,
-    max_ngram_tokens: int,
+    all_candidate_spans: List,
+    pattern_types: Set,
+    max_entity_rate: float,
+    min_count: int,
     target_fn: int,
-    n_top: int,
-    max_prefix_tokens=None,
-    max_suffix_tokens=None,
+    max_prefix_tokens: int = None,
+    max_suffix_tokens: int = None,
     max_infix_tokens: int = None,
     max_before_tokens: int = None,
     max_after_tokens: int = None,
-):
-    """Sweep over min_count values, evaluate on pre-enumerated dev spans."""
-    import numpy as np
+) -> RuleBasedPruner:
+    """Greedy pattern selection ordered by (per-pattern FN asc, TN desc).
 
-    # full_only fast path only when no prefix/suffix/context tokens are requested
+    Patterns are pre-filtered by max_entity_rate, min_count, and pattern_types.
+    Any pattern that alone exceeds target_fn gold spans is removed.  The
+    remaining patterns are added greedily — lowest individual FN first, highest
+    TN as tiebreaker — until the cumulative FN budget would be exceeded.
+
+    Returns a RuleBasedPruner containing the selected patterns.
+    """
     full_only = (
         pattern_types == {"full"}
         and max_prefix_tokens is None
@@ -370,7 +464,8 @@ def _sweep(
     )
 
     logger.info(
-        "Precomputing span keys for sweep (%d spans) ...", len(all_candidate_spans)
+        "Precomputing span keys for greedy selection (%d spans) ...",
+        len(all_candidate_spans),
     )
     precomputed = _precompute_span_keys(
         all_candidate_spans,
@@ -382,32 +477,31 @@ def _sweep(
         max_after_tokens=max_after_tokens,
     )
 
-    max_freq = int(stats["frequency"].max())
-    candidates = sorted(
-        set(
-            [1, 2, 3, 5]
-            + list(np.unique(np.round(np.geomspace(1, max_freq, num=60)).astype(int)))
-        )
-    )
-    logger.info("Sweeping %d min_count values ...", len(candidates))
+    n_spans = len(precomputed)
 
-    # Pre-filter stats once: purity + n_tokens + pattern type (constant across the sweep)
+    # Map coords → span indices; mark gold spans
+    coord_to_span_idx: Dict = {coord: i for i, (coord, _) in enumerate(precomputed)}
+    span_is_gold = np.zeros(n_spans, dtype=bool)
+    always_fn = 0
+    for c in gold_spans:
+        idx = coord_to_span_idx.get(c)
+        if idx is None:
+            always_fn += 1
+        else:
+            span_is_gold[idx] = True
+
+    # Pre-filter: entity_rate + min_count + type
     type_mask = _build_type_mask(stats, pattern_types)
     pre_filtered = stats[
-        (stats["purity"] >= purity_threshold)
-        & (stats["n_tokens"] <= max_ngram_tokens)
+        (stats["entity_rate"] <= max_entity_rate)
+        & (stats["frequency"] >= min_count)
         & type_mask
-    ].sort_values("frequency", ascending=True)
-    freq_arr = pre_filtered["frequency"].to_numpy()
-    ngram_arr = pre_filtered["ngram"].to_numpy()
-    valid_pattern_set = set(ngram_arr)
+    ]
+    valid_pattern_set: Set = set(pre_filtered["ngram"].to_numpy())
+    n_eligible = len(valid_pattern_set)
 
-    # Build inverted index: pattern → list of span indices that contain it
-    from collections import defaultdict
-
-    n_spans = len(precomputed)
-    n_gold = len(gold_spans)
-    ngram_to_span_idx = defaultdict(list)
+    # Build inverted index over eligible patterns
+    ngram_to_span_idx: Dict = defaultdict(list)
     if full_only:
         for span_idx, (coord, key) in enumerate(precomputed):
             if key in valid_pattern_set:
@@ -418,111 +512,78 @@ def _sweep(
                 if ng in valid_pattern_set:
                     ngram_to_span_idx[ng].append(span_idx)
 
-    # Initialize per-span match count (number of active patterns matching each span)
-    match_count = np.zeros(n_spans, dtype=np.int32)
-    for indices in ngram_to_span_idx.values():
-        for span_idx in indices:
-            match_count[span_idx] += 1
-    n_pruned = int(np.sum(match_count > 0))
+    # Per-pattern FN and TN counts
+    pattern_fn: Dict = {}
+    pattern_tn: Dict = {}
+    for ng, indices in ngram_to_span_idx.items():
+        fn_count = int(np.sum(span_is_gold[indices]))
+        pattern_fn[ng] = fn_count
+        pattern_tn[ng] = len(indices) - fn_count
 
-    # Map gold span coords → span indices; init gold_match_count and fn.
-    # Gold spans absent from the candidate set (e.g. longer than max_span_length)
-    # are permanent FN regardless of min_count.
-    coord_to_span_idx = {coord: i for i, (coord, _) in enumerate(precomputed)}
-    trackable_indices = []
-    always_fn = 0
-    for c in gold_spans:
-        idx = coord_to_span_idx.get(c)
-        if idx is None:
-            always_fn += 1
-        else:
-            trackable_indices.append(idx)
-    n_trackable = len(trackable_indices)
-    gold_span_indices = (
-        np.array(trackable_indices, dtype=np.int32)
-        if n_trackable > 0
-        else np.empty(0, dtype=np.int32)
-    )
-    span_to_gold_idx = np.full(n_spans, -1, dtype=np.int32)
-    if n_trackable > 0:
-        span_to_gold_idx[gold_span_indices] = np.arange(n_trackable, dtype=np.int32)
-    gold_match_count = (
-        match_count[gold_span_indices].copy()
-        if n_trackable > 0
-        else np.empty(0, dtype=np.int32)
-    )
-    fn = always_fn + int(np.sum(gold_match_count > 0))
-
-    ptr = 0
-    rows = []
-    for mc in candidates:
-        # Drop patterns with freq < mc; update counts incrementally
-        while ptr < len(freq_arr) and freq_arr[ptr] < mc:
-            ng = ngram_arr[ptr]
-            for span_idx in ngram_to_span_idx.get(ng, ()):
-                if match_count[span_idx] == 1:
-                    n_pruned -= 1
-                match_count[span_idx] -= 1
-                gold_idx = span_to_gold_idx[span_idx]
-                if gold_idx >= 0:
-                    if gold_match_count[gold_idx] == 1:
-                        fn -= 1
-                    gold_match_count[gold_idx] -= 1
-            ptr += 1
-        n_kept = n_spans - n_pruned
-        tp = n_gold - fn
-        rows.append(
-            {
-                "min_count": mc,
-                "n_patterns": len(valid_pattern_set) - ptr,
-                "recall": (1.0 - fn / n_gold) if n_gold > 0 else 1.0,
-                "precision": tp / n_kept if n_kept > 0 else 0.0,
-                "pruning_rate": n_pruned / n_spans if n_spans > 0 else 0.0,
-                "fn": fn,
-            }
+    # Remove patterns that alone would exceed the FN budget
+    dangerous = {ng for ng, fn in pattern_fn.items() if fn > target_fn}
+    if dangerous:
+        for ng in dangerous:
+            del ngram_to_span_idx[ng]
+            del pattern_fn[ng]
+            del pattern_tn[ng]
+        logger.info(
+            "  Removed %d patterns exceeding per-pattern FN > %d.",
+            len(dangerous),
+            target_fn,
         )
 
-    feasible = [r for r in rows if r["fn"] <= target_fn]
-    infeasible = [r for r in rows if r["fn"] > target_fn]
-    feasible.sort(key=lambda r: r["pruning_rate"], reverse=True)
-    infeasible.sort(key=lambda r: r["fn"])
-    ranked = feasible + infeasible
+    # Sort by (per_pattern_fn asc, per_pattern_tn desc)
+    sorted_patterns = sorted(
+        pattern_fn.keys(),
+        key=lambda ng: (pattern_fn[ng], -pattern_tn[ng]),
+    )
 
-    print(f"\n── Sweep (target FN ≤ {target_fn}) — top {n_top} ──────────────────────")
-    top = ranked[:n_top]
-    table = [
-        [
-            r["min_count"],
-            r["n_patterns"],
-            f"{r['recall']:.3f}" + (" ✓" if r["fn"] <= target_fn else ""),
-            f"{r['precision']:.3f}",
-            f"{r['pruning_rate']:.1%}",
-            r["fn"],
-        ]
-        for r in top
-    ]
+    # Greedy selection — track which gold spans are already pruned to avoid
+    # double-counting FN when multiple patterns match the same gold span.
+    selected_patterns: Set = set()
+    gold_pruned: Set = set()  # gold span indices already marked as FN
+    span_pruned = np.zeros(n_spans, dtype=bool)
+    skipped = 0
+
+    for ng in sorted_patterns:
+        indices = ngram_to_span_idx[ng]
+        new_fn = sum(
+            1 for idx in indices if span_is_gold[idx] and idx not in gold_pruned
+        )
+        if len(gold_pruned) + new_fn <= target_fn:
+            selected_patterns.add(ng)
+            for idx in indices:
+                span_pruned[idx] = True
+                if span_is_gold[idx]:
+                    gold_pruned.add(idx)
+        else:
+            skipped += 1
+
+    # Patterns that pass all criteria but match no span in the sweep set have 0
+    # observed FN risk — include them unconditionally.
+    # Exclude `dangerous`: they were removed from ngram_to_span_idx but are still
+    # in valid_pattern_set, so without this subtraction they would be re-added here.
+    unseen_safe = valid_pattern_set - set(ngram_to_span_idx.keys()) - dangerous
+    selected_patterns |= unseen_safe
+
+    print(f"\n── Greedy selection (target FN ≤ {target_fn}) ────────────────────────")
     print(
         tabulate(
-            table,
-            headers=["min_count", "patterns", "recall", "precision", "pruning%", "FN"],
+            [
+                ["Eligible patterns (pre-filter)", n_eligible],
+                ["Removed (per-pattern FN > target)", len(dangerous)],
+                ["Considered (appear in sweep)", len(sorted_patterns)],
+                ["Selected (greedy)", len(selected_patterns) - len(unseen_safe)],
+                ["Skipped (would exceed FN budget)", skipped],
+                ["Added (unseen in sweep, 0 FN risk)", len(unseen_safe)],
+                ["Total selected", len(selected_patterns)],
+            ],
             tablefmt="simple",
         )
     )
 
-    if feasible:
-        best = feasible[0]
-        print(
-            f"\n  Best: min_count={best['min_count']}  "
-            f"recall={best['recall']:.3f}  pruning={best['pruning_rate']:.1%}  "
-            f"FN={best['fn']}"
-        )
-        return best["min_count"]
-    else:
-        print(
-            f"\n  No configuration achieved FN ≤ {target_fn}. "
-            f"Best: FN={ranked[0]['fn']} at min_count={ranked[0]['min_count']}"
-        )
-        return None
+    return RuleBasedPruner(selected_patterns)
 
 
 # ---------------------------------------------------------------------------
@@ -549,16 +610,10 @@ def parse_args():
         help="Maximum n-gram length including <S>/<E> markers (default: 14 = 12 words + 2 markers)",
     )
     p.add_argument(
-        "--max_ngram_tokens",
-        type=int,
-        default=3,
-        help="Maximum word tokens in a pruning pattern, boundary markers excluded (default: 3)",
-    )
-    p.add_argument(
-        "--purity_threshold",
+        "--max_entity_rate",
         type=float,
-        default=1.0,
-        help="Minimum NIL fraction for a pattern to be used (default: 1.0 = always NIL)",
+        default=0.0,
+        help="Maximum fraction of entity occurrences for a pattern to be used (default: 0.0 = never appears in entities)",
     )
     p.add_argument(
         "--min_count",
@@ -578,7 +633,7 @@ def parse_args():
     p.add_argument(
         "--pattern_types",
         type=str,
-        default="prefix,suffix,full,infix",
+        default="prefix,suffix,full,infix,before,after",
         help=(
             "Comma-separated pattern types to use: prefix, suffix, full, infix, before, after. "
             "'before': n-gram of tokens immediately before the span (w_{-k}..w_{-1}, <B>). "
@@ -599,12 +654,18 @@ def parse_args():
         default=0.8,
         help=(
             "Fraction of training documents to use for statistics collection (default: 0.8). "
-            "The remaining documents form an internal dev split used for the --target_recall "
-            "sweep, keeping the external --dev_file completely untouched. "
-            "Documents are split by index (no shuffling) to keep the split deterministic. "
+            "The remaining documents form an internal dev split used for the greedy selection, "
+            "keeping the external --dev_file completely untouched. "
+            "Documents are shuffled before splitting (controlled by --seed). "
             "If not set, all training documents are used for statistics and the external "
             "--dev_file is used for the sweep."
         ),
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for shuffling training documents before the stats/sweep split (default: 42).",
     )
     p.add_argument(
         "--target_fn",
@@ -646,11 +707,17 @@ def cli():
     logger.info("  %d documents loaded.", len(all_train_docs))
 
     if args.train_split < 1.0:
+        import random
+
+        rng = random.Random(args.seed)
+        all_train_docs = all_train_docs.copy()
+        rng.shuffle(all_train_docs)
         split_idx = int(len(all_train_docs) * args.train_split)
         stats_docs = all_train_docs[:split_idx]
         sweep_docs = all_train_docs[split_idx:]
         logger.info(
-            "  Split: %d docs for statistics, %d docs for internal sweep dev.",
+            "  Shuffled (seed=%d), split: %d docs for statistics, %d docs for internal sweep.",
+            args.seed,
             len(stats_docs),
             len(sweep_docs),
         )
@@ -703,7 +770,7 @@ def cli():
         "  %d gold entities, %d candidate spans.", len(gold_spans), total_candidates
     )
 
-    # 4. Determine min_count
+    # 4. Determine min_count floor
     if args.min_count is not None:
         min_count = args.min_count
     else:
@@ -712,47 +779,63 @@ def cli():
             "  min_count derived from ratio %.4f → %d", args.min_count_ratio, min_count
         )
 
-    # 5. Sweep: search for best min_count on sweep split
-    best_min_count = _sweep(
+    # 5. Greedy pattern selection on sweep split
+    pruner = _greedy_select(
         stats=stats,
         gold_spans=gold_spans_sweep,
         all_candidate_spans=all_sweep_spans,
-        total_candidates=total_sweep,
         pattern_types=pattern_types,
-        purity_threshold=args.purity_threshold,
-        max_ngram_tokens=args.max_ngram_tokens,
+        max_entity_rate=args.max_entity_rate,
+        min_count=min_count,
         target_fn=args.target_fn,
-        n_top=args.n_top,
         max_prefix_tokens=max_prefix_tokens,
         max_suffix_tokens=max_suffix_tokens,
         max_infix_tokens=max_infix_tokens,
         max_before_tokens=max_before_tokens,
         max_after_tokens=max_after_tokens,
     )
-    if best_min_count is not None:
-        min_count = best_min_count
-        logger.info("Using best min_count=%d from sweep.", min_count)
+    logger.info("  %d pruning patterns selected.", len(pruner))
+    _print_stats_summary(stats, pruner, min_count, args.max_entity_rate)
 
-    # 6. Fit final pruner and show full stats
-    pruner = fit(
-        stats,
-        min_count=min_count,
-        purity_threshold=args.purity_threshold,
-        max_ngram_tokens=args.max_ngram_tokens,
-        pattern_types=pattern_types,
+    # 7. Evaluate on sweep set (same data used for greedy selection)
+    sweep_label = (
+        "sweep (internal train split)" if sweep_docs is not None else "sweep (dev file)"
     )
-    logger.info("  %d pruning patterns learned.", len(pruner))
-    _print_stats_summary(stats, pruner, min_count, args.purity_threshold)
+    kept_sweep = _apply_pruner(pruner, all_sweep_spans)
+    metrics_sweep = _eval_metrics(gold_spans_sweep, kept_sweep, total_sweep)
+    sweep_words = {
+        (doc_idx, sent_idx, start, end): words
+        for doc_idx, sent_idx, start, end, words, ctx_before, ctx_after in all_sweep_spans
+    }
+    sweep_context = {
+        (doc_idx, sent_idx, start, end): (ctx_before, ctx_after)
+        for doc_idx, sent_idx, start, end, words, ctx_before, ctx_after in all_sweep_spans
+    }
+    print(f"\n{sweep_label}:")
+    _print_eval_results(
+        gold_spans_sweep, kept_sweep, total_sweep, metrics_sweep, span_words=sweep_words
+    )
+    _print_pruned_gold_details(
+        gold_spans_sweep, kept_sweep, sweep_words, sweep_context, pruner, stats
+    )
 
-    # 7. Evaluate final pruner on external dev set
+    # 8. Evaluate final pruner on external dev set
     kept_spans = _apply_pruner(pruner, all_dev_spans)
     metrics = _eval_metrics(gold_spans, kept_spans, total_candidates)
     span_words = {
         (doc_idx, sent_idx, start, end): words
         for doc_idx, sent_idx, start, end, words, ctx_before, ctx_after in all_dev_spans
     }
+    span_context = {
+        (doc_idx, sent_idx, start, end): (ctx_before, ctx_after)
+        for doc_idx, sent_idx, start, end, words, ctx_before, ctx_after in all_dev_spans
+    }
+    print("\nexternal dev:")
     _print_eval_results(
         gold_spans, kept_spans, total_candidates, metrics, span_words=span_words
+    )
+    _print_pruned_gold_details(
+        gold_spans, kept_spans, span_words, span_context, pruner, stats
     )
 
     # 8. Optionally save pruner

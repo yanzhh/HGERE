@@ -1,0 +1,37 @@
+label_set: gsap
+
+pruner:
+  model_dir: saves/gsap/pruner/lr1e-5-epochs4/gsap_scibert_data_2025-04-07-bs16-44
+  base_model_name_or_path: pretrained_models/scibert_scivocab_uncased
+  do_lower_case: true
+  model_type: bertspanmarkerpruner
+  per_gpu_eval_batch_size: 32
+  max_seq_length: 256
+  max_pair_length: 64
+  max_mention_ori_length: 12
+  # Path to best_config.json (from threshold_analysis) for pre-filtering
+  # topk params inside run_pruner_inference.  Set to null to use defaults.
+  prune_config: null
+  final_pruning:
+    method: threshold
+    threshold: 0.0005
+
+hgere:
+  model_dir: saves/gsap/HGERE/scibert/2025-04-15-pinguin
+  base_model_name_or_path: pretrained_models/scibert_scivocab_uncased
+  model_type: hyper
+  do_lower_case: true
+  no_sym: false
+  per_gpu_eval_batch_size: 32
+  max_seq_length: 512
+  max_pair_length: 18
+  factor_type: tersibcop
+  factor_encoder: biaf
+  ent_dim: 400
+  rel_dim: 400
+  mem_dim: 400
+  ent_repr: mix
+  n_iter: 3
+  layernorm: true
+  layernorm_1st: true
+  attn_self: true

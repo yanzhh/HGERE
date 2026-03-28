@@ -109,7 +109,7 @@ def infer_hgere(
             total=len(eval_dataset.loader),
             disable=disable_progress,
         ):
-            sent_indices = batch["indexs"]
+            sent_indices = batch["indices"]
             obj_mentions = batch["obj_token_pos"]
             ent_counts = batch["ent_numbers"]
 

@@ -61,10 +61,10 @@ class PrunerConfig(BaseModel):
     max_seq_length: int = 256
     max_pair_length: int = 64
     max_mention_ori_length: int = 12
-    # Path to a best_config.json (from threshold_analysis) for pre-filtering
+    # Path to a best_config.json (from gsapere-train-prefilter) for pre-filtering
     # topk params used inside run_pruner_inference.  None = use defaults.
     prune_config: str | None = None
-    # Path to a RuleBasedPruner pattern file (.json) produced by eval-rulebased-pruner.
+    # Path to a RuleBasedPruner pattern file (.json) produced by gsapere-fit-rulebased-pruner.
     # When set, spans matching rulebased patterns are removed before the neural pruner runs.
     rulebased_pruner_file: str | None = None
     final_pruning: FinalPruningConfig = FinalPruningConfig()

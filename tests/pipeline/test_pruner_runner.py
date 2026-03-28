@@ -196,53 +196,28 @@ class TestBuildPredictedNerFromPool:
 
 
 class TestLoadPrefilterParams:
-    def test_best_config_topk_format(self, tmp_path: Any) -> None:
+    def test_topk_format(self, tmp_path: Any) -> None:
         from gsapere.pipeline.pruner_runner import _load_prefilter_params
 
         cfg_file = tmp_path / "best_config.json"
         cfg_file.write_text(
-            json.dumps(
-                {
-                    "best_method": "topk",
-                    "parameters": {
-                        "topk_ratio": 0.3,
-                        "min_mentions_num": 2,
-                        "max_mentions_num": 15,
-                    },
-                }
-            )
+            json.dumps({"method": "topk", "ratio": 0.3, "min": 2, "max": 15})
         )
         params = _load_prefilter_params(str(cfg_file))
         assert params["topk_ratio"] == 0.3
         assert params["min_mentions_num"] == 2
         assert params["max_mentions_num"] == 15
 
-    def test_best_config_threshold_format_uses_defaults(self, tmp_path: Any) -> None:
+    def test_threshold_format_uses_defaults(self, tmp_path: Any) -> None:
         from gsapere.pipeline.pruner_runner import (
             _DEFAULT_PREFILTER,
             _load_prefilter_params,
         )
 
         cfg_file = tmp_path / "best_config.json"
-        cfg_file.write_text(
-            json.dumps({"best_method": "threshold", "parameters": 0.01})
-        )
+        cfg_file.write_text(json.dumps({"method": "threshold", "value": 0.01}))
         params = _load_prefilter_params(str(cfg_file))
         assert params == _DEFAULT_PREFILTER
-
-    def test_plain_format(self, tmp_path: Any) -> None:
-        from gsapere.pipeline.pruner_runner import _load_prefilter_params
-
-        cfg_file = tmp_path / "prefilter.json"
-        cfg_file.write_text(
-            json.dumps(
-                {"topk_ratio": 0.4, "min_mentions_num": 1, "max_mentions_num": 12}
-            )
-        )
-        params = _load_prefilter_params(str(cfg_file))
-        assert params["topk_ratio"] == 0.4
-        assert params["min_mentions_num"] == 1
-        assert params["max_mentions_num"] == 12
 
 
 # ---------------------------------------------------------------------------
