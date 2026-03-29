@@ -1,6 +1,6 @@
 label_set: gsap
-model_dir: saves/gsap/HGERE/gefieder
-base_model_name_or_path: pretrained_models/scibert_scivocab_uncased
+model_dir: saves/gsap/HGERE/vogelvieh
+base_model_name_or_path: allenai/scibert_scivocab_uncased
 model_type: hyper
 do_lower_case: true
 no_sym: false
@@ -25,7 +25,7 @@ ner_prediction_dir: saves/gsap/pruner/pelikan
 # Optimisation
 train_params:
     project_name: gsap-rel-hgere
-    run_name: gefieder
+    run_name: vogelvieh
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
@@ -35,15 +35,12 @@ train_params:
     seed: 45
     shuffle: true # not tested yet
     preload_dataset: false # not tested yet
-    pre_filter_params:
-        method: "threshold"
-        value: 0.1
     do_train: true
     learning_rate: 1e-5
     learning_rate_cls: 1e-5
     num_train_epochs: 8
     eval_epochs: 1
-    per_gpu_train_batch_size: 32
+    per_gpu_train_batch_size: 21
     gradient_accumulation_steps: 1
     adam_epsilon: 1e-8
     fp16: true

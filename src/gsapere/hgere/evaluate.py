@@ -299,37 +299,39 @@ def evaluate(
 
     logger.info(f"Result: {json.dumps(results, indent=4)}")
     # dump predictions
-    if persist_predictions:
+    if persist_predictions and getattr(args, "save_results", True):
         target_fn = os.path.split(eval_dataset.file_path)[-1]
-        output_w = open(os.path.join(args.model_dir, target_fn), "w")
-        file_raw_data = open(eval_dataset.file_path)
-        for l_idx, line in enumerate(file_raw_data):
-            data = json.loads(line)
-            num_sents = len(data["sentences"])
-            predicted_ner = []
-            predicted_ner_proba = []
-            predicted_rel = []
-            predicted_rel_proba = []
-            for n in range(num_sents):
-                ner_item = tot_predicted_ners.get((l_idx, n), [])
-                ner_item.sort()
-                predicted_ner.append(ner_item)
-                ner_item = tot_predicted_ners_proba.get((l_idx, n), [])
-                ner_item.sort()
-                predicted_ner_proba.append(ner_item)
-                rel_item = tot_predicted_relations.get((l_idx, n), [])
-                rel_item.sort()
-                predicted_rel.append(rel_item)
-                rel_item = tot_predicted_relations_proba.get((l_idx, n), [])
-                rel_item.sort()
-                predicted_rel_proba.append(rel_item)
-            data["predicted_ner"] = predicted_ner
-            data["predicted_rel"] = predicted_rel
-            data["predicted_ner_proba"] = predicted_ner_proba
-            data["predicted_rel_proba"] = predicted_rel_proba
-            # pdb.set_trace()
-            output_w.write(json.dumps(data) + "\n")
-            # json.dump(tot_output_results, output_w)
+        out_path = os.path.join(args.model_dir, target_fn)
+        with (
+            open(eval_dataset.file_path) as file_raw_data,
+            open(out_path, "w") as output_w,
+        ):
+            for l_idx, line in enumerate(file_raw_data):
+                data = json.loads(line)
+                num_sents = len(data["sentences"])
+                predicted_ner = []
+                predicted_ner_proba = []
+                predicted_rel = []
+                predicted_rel_proba = []
+                for n in range(num_sents):
+                    ner_item = tot_predicted_ners.get((l_idx, n), [])
+                    ner_item.sort()
+                    predicted_ner.append(ner_item)
+                    ner_item = tot_predicted_ners_proba.get((l_idx, n), [])
+                    ner_item.sort()
+                    predicted_ner_proba.append(ner_item)
+                    rel_item = tot_predicted_relations.get((l_idx, n), [])
+                    rel_item.sort()
+                    predicted_rel.append(rel_item)
+                    rel_item = tot_predicted_relations_proba.get((l_idx, n), [])
+                    rel_item.sort()
+                    predicted_rel_proba.append(rel_item)
+                data["predicted_ner"] = predicted_ner
+                data["predicted_rel"] = predicted_rel
+                data["predicted_ner_proba"] = predicted_ner_proba
+                data["predicted_rel_proba"] = predicted_rel_proba
+                output_w.write(json.dumps(data) + "\n")
+        logger.info("Predictions written to %s", out_path)
 
     return results
 
