@@ -17,6 +17,7 @@ import torch
 from tqdm import tqdm
 
 WEIGHTS_NAME = "pytorch_model.bin"
+SAFETENSORS_NAME = "model.safetensors"
 
 EVAL_KEYS = [
     "input_ids",
@@ -340,10 +341,9 @@ def get_checkpoints(args: Any) -> list:
     checkpoints = [args.model_dir]
 
     if args.eval_all_checkpoints:
-        checkpoints = list(
-            os.path.dirname(c)
-            for c in sorted(
-                glob.glob(args.model_dir + "/**/" + WEIGHTS_NAME, recursive=True)
-            )
+        found = sorted(
+            glob.glob(args.model_dir + "/**/" + WEIGHTS_NAME, recursive=True)
+            + glob.glob(args.model_dir + "/**/" + SAFETENSORS_NAME, recursive=True)
         )
+        checkpoints = list(dict.fromkeys(os.path.dirname(c) for c in found))
     return checkpoints
