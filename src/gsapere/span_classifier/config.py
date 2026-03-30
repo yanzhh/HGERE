@@ -19,7 +19,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional, Union
 
-import yaml
+
+from ..config import load_yaml_strict
 from pydantic import BaseModel, Field, model_validator
 from typing_extensions import Annotated
 
@@ -215,6 +216,15 @@ class PrunerTrainParams(BaseModel):
     do_test: bool = Field(
         default=True, description="Run evaluation on the test set after training."
     )
+    eval_train: bool = Field(
+        default=True, description="Evaluate on the train split during do_test."
+    )
+    eval_dev: bool = Field(
+        default=True, description="Evaluate on the dev split during do_test."
+    )
+    eval_test: bool = Field(
+        default=True, description="Evaluate on the test split during do_test."
+    )
     output_results: bool = Field(
         default=True, description="Persist predictions to disk after evaluation."
     )
@@ -357,8 +367,7 @@ class PrunerTrainConfig(BaseModel):
           case ``label_set`` and ``schema_version`` are hoisted from the top
           level into the pruner data automatically.
         """
-        with open(Path(path)) as f:
-            data: dict = yaml.safe_load(f)
+        data: dict = load_yaml_strict(path)
 
         if "pruner" in data:
             pruner_data: dict = dict(data["pruner"])

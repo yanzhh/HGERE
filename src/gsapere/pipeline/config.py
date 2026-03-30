@@ -8,11 +8,14 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator, Literal
+from typing import Generator, Literal, Optional
 
 import transformers
-import yaml
+
+from ..config import load_yaml_strict
 from pydantic import BaseModel, model_validator
+
+from ..span_classifier.config import PreFilterParams
 
 
 @contextmanager
@@ -103,6 +106,7 @@ class HGEREConfig(BaseModel):
     # Set to True only for gold-span / cross-dataset evaluation where every
     # candidate must receive a non-NIL label.
     force_non_nil: bool = False
+    pre_filter_params: Optional[PreFilterParams] = None
 
 
 class PipelineConfig(BaseModel):
@@ -115,6 +119,5 @@ class PipelineConfig(BaseModel):
     @classmethod
     def from_yaml(cls, path: str | Path) -> "PipelineConfig":
         """Load a PipelineConfig from a YAML file."""
-        with open(path) as f:
-            data = yaml.safe_load(f)
+        data = load_yaml_strict(path)
         return cls.model_validate(data)

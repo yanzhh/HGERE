@@ -105,6 +105,13 @@ class HGERERunner:
         self._model.to(device)
         self._model.eval()
         logger.info("HGERE model loaded from %s", model_path)
+        cfg = self._config
+        if cfg.pre_filter_params is not None:
+            logger.info(
+                "HGERE pre_filter_params: %s", cfg.pre_filter_params.model_dump()
+            )
+        else:
+            logger.info("HGERE pre_filter_params: None (using predicted_ner as-is)")
 
     def _make_args(self, n_gpu: int) -> object:
         cfg = self._config
@@ -128,6 +135,9 @@ class HGERERunner:
             shuffle=False,
             batch_by_size=False,
             preload_dataset=False,
+            pre_filter_params=(
+                cfg.pre_filter_params.model_dump() if cfg.pre_filter_params else None
+            ),
         )
 
     def _run_inference(
@@ -162,6 +172,11 @@ class HGERERunner:
                 no_sym=cfg.no_sym,
                 nocross=cfg.nocross,
                 local_rank=cfg.local_rank,
+                pre_filter_params=(
+                    cfg.pre_filter_params.model_dump()
+                    if cfg.pre_filter_params
+                    else None
+                ),
             )
             dataset = RelationDataset(
                 logger=logger,

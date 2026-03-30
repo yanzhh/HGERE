@@ -653,12 +653,15 @@ def run_train_span_classifier(args=None):
                         f"Best prune config: {prune_config}  (saved to {config_path})"
                     )
 
+            splits = []
+            if getattr(args, "eval_train", True):
+                splits.append(args.train_file)
+            if getattr(args, "eval_dev", True):
+                splits.append(args.dev_file)
+            if getattr(args, "eval_test", True):
+                splits.append(args.test_file)
             results = {}
-            for file_name in (
-                args.train_file,
-                args.dev_file,
-                args.test_file,
-            ):
+            for file_name in splits:
                 test_file = Path(args.data_dir) / file_name
                 split_name = test_file.name
                 if test_file.exists():

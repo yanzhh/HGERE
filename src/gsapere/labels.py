@@ -25,7 +25,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import List
 
-import yaml
+
+from .config import load_yaml_strict
 
 
 @dataclass
@@ -104,8 +105,7 @@ def load_label_scheme(name_or_path: str) -> LabelScheme:
     """
     path = Path(name_or_path)
     if path.is_file():
-        with path.open() as fh:
-            data = yaml.safe_load(fh)
+        data = load_yaml_strict(path)
         return _load_from_dict(data)
 
     config_file = files("gsapere") / "label_configs" / f"{name_or_path}.yaml"
@@ -116,8 +116,7 @@ def load_label_scheme(name_or_path: str) -> LabelScheme:
             f"Built-in sets: {available}. "
             "Provide a registered name or a path to a YAML file."
         )
-    with config_file.open() as fh:
-        data = yaml.safe_load(fh)
+    data = load_yaml_strict(config_file)
     return _load_from_dict(data)
 
 

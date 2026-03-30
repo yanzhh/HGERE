@@ -19,7 +19,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-import yaml
+
+from ..config import load_yaml_strict
 from pydantic import BaseModel, Field, model_validator
 
 from ..span_classifier.config import PreFilterParams
@@ -423,8 +424,7 @@ class HGERETrainConfig(BaseModel):
           case ``label_set`` and ``schema_version`` are hoisted from the top
           level into the hgere data automatically.
         """
-        with open(Path(path)) as f:
-            data: dict = yaml.safe_load(f)
+        data: dict = load_yaml_strict(path)
 
         if "hgere" in data:
             hgere_data: dict = dict(data["hgere"])

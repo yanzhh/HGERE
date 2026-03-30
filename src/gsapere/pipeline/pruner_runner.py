@@ -324,6 +324,7 @@ class PrunerRunner:
         for i, doc in enumerate(docs):
             out = dict(doc)
             out["ner_candidates_proba"] = ner_candidates_proba[i]
+            out["predicted_ner_proba"] = ner_candidates_proba[i]
             out["predicted_ner"] = predicted_ner[i]
             result.append(out)
         return result
