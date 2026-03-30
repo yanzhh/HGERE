@@ -181,11 +181,15 @@ class PrunerRunner:
     def __init__(self, config: PrunerConfig, label_set: str) -> None:
         self._config = config
         self._label_set = label_set
-        self._prefilter_params = (
-            _load_prefilter_params(config.prune_config)
-            if config.prune_config is not None
-            else dict(_DEFAULT_PREFILTER)
-        )
+        if config.prune_config is not None:
+            self._prefilter_params = _load_prefilter_params(config.prune_config)
+        else:
+            self._prefilter_params = {
+                "topk_ratio": config.topk_ratio,
+                "min_mentions_num": config.min_mentions_num,
+                "max_mentions_num": config.max_mentions_num,
+            }
+        logger.info("Pruner prefilter params: %s", self._prefilter_params)
         self._load_model()
 
     def _load_model(self) -> None:

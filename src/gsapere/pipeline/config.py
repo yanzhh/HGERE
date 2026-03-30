@@ -64,8 +64,14 @@ class PrunerConfig(BaseModel):
     max_seq_length: int = 256
     max_pair_length: int = 64
     max_mention_ori_length: int = 12
+    # Topk pre-filter params passed to run_pruner_inference (applied before final_pruning).
+    # Override defaults by setting these directly in the config.
+    # If prune_config is also set, it takes precedence.
+    topk_ratio: float = 0.5
+    min_mentions_num: int = 3
+    max_mentions_num: int = 18
     # Path to a best_config.json (from gsapere-train-prefilter) for pre-filtering
-    # topk params used inside run_pruner_inference.  None = use defaults.
+    # topk params used inside run_pruner_inference.  Overrides topk_ratio/min/max above.
     prune_config: str | None = None
     # Path to a RuleBasedPruner pattern file (.json) produced by gsapere-fit-rulebased-pruner.
     # When set, spans matching rulebased patterns are removed before the neural pruner runs.

@@ -12,6 +12,9 @@ pruner:
     # Path to best_config.json (from threshold_analysis) for pre-filtering
     # topk params inside run_pruner_inference.  Set to null to use defaults.
     rulebased_pruner_file: /home/ottowg/gsap-best-rules.json
+    topk_ratio: 8
+    min_mentions_num: 1
+    max_mentions_num: 60
     final_pruning:
         method: threshold
         threshold: 0.0789031982421875

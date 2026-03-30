@@ -145,6 +145,8 @@ class RelationDataset(DocumentDataset):
         # Reserve 4 slots for [CLS], [SEP], and the two subject marker tokens.
         max_num_subwords = self.max_seq_length - 4
 
+        n_predicted_ner_total = 0  # spans from predicted_ner (final_pruning output)
+
         for doc_idx in range(len(self._offsets)):
             doc = self._load_raw_document(doc_idx)
             tok_idx = self._tokenize_document(doc)
@@ -158,6 +160,10 @@ class RelationDataset(DocumentDataset):
                 raw = json.loads(f.readline())
 
             ner_candidates_all = self._select_candidate_ner(raw)
+
+            if self.do_pre_filter:
+                for sent_cands in raw.get("predicted_ner", []):
+                    n_predicted_ner_total += len(sent_cands)
 
             n_sents = len(doc.sentences)
             ner_gold_all = raw.get("ner", [[] for _ in range(n_sents)])
@@ -289,17 +295,32 @@ class RelationDataset(DocumentDataset):
         self.candidate_stats = self._compute_candidate_stats(
             self.global_predicted_ners, self.ner_golden_labels
         )
-        self.logger.info(
-            "Candidate stats: n_gold=%d  n_candidates=%d  "
-            "TP=%d  FP=%d  FN=%d  recall=%.3f  precision=%.3f",
-            self.candidate_stats.n_gold,
-            self.candidate_stats.n_candidates,
-            self.candidate_stats.n_tp,
-            self.candidate_stats.n_fp,
-            self.candidate_stats.n_fn,
-            self.candidate_stats.recall,
-            self.candidate_stats.precision,
-        )
+        if self.do_pre_filter:
+            self.logger.info(
+                "Candidate stats (pre_filter applied): n_gold=%d  "
+                "n_predicted_ner(final_pruning)=%d  n_candidates(pre_filter)=%d  "
+                "TP=%d  FP=%d  FN=%d  recall=%.3f  precision=%.3f",
+                self.candidate_stats.n_gold,
+                n_predicted_ner_total,
+                self.candidate_stats.n_candidates,
+                self.candidate_stats.n_tp,
+                self.candidate_stats.n_fp,
+                self.candidate_stats.n_fn,
+                self.candidate_stats.recall,
+                self.candidate_stats.precision,
+            )
+        else:
+            self.logger.info(
+                "Candidate stats: n_gold=%d  n_candidates=%d  "
+                "TP=%d  FP=%d  FN=%d  recall=%.3f  precision=%.3f",
+                self.candidate_stats.n_gold,
+                self.candidate_stats.n_candidates,
+                self.candidate_stats.n_tp,
+                self.candidate_stats.n_fp,
+                self.candidate_stats.n_fn,
+                self.candidate_stats.recall,
+                self.candidate_stats.precision,
+            )
 
     @staticmethod
     def _compute_candidate_stats(
