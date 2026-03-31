@@ -113,6 +113,7 @@ class HGEREConfig(BaseModel):
     # candidate must receive a non-NIL label.
     force_non_nil: bool = False
     pre_filter_params: Optional[PreFilterParams] = None
+    n_workers: int = 4
 
 
 class PipelineConfig(BaseModel):

@@ -97,6 +97,9 @@ def _build_parser():
     p.add_argument("--no_cuda", action="store_true")
     p.add_argument("--local_rank", type=int, default=-1)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--n_workers", type=int, default=4, help="DataLoader worker processes."
+    )
 
     # --- model architecture (must match the checkpoint) ---
     p.add_argument("--alpha", type=float, default=1.0)
@@ -287,7 +290,7 @@ def cli():
             batch_size=args.eval_batch_size,
             shuffle=False,
             batch_by_size=False,
-            n_workers=4,
+            n_workers=args.n_workers,
             pin_memory=True,
         )
         logger.info("Loaded %d examples from %s", len(dataset), args.input_file)

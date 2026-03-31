@@ -135,7 +135,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         logger = get_logger(args, exp_path, args.eval_test)
 
     else:
-        exp_path = create_exp_dir(args.model_dir, scripts_to_save=[])
+        exp_path = create_exp_dir(args.model_dir, scripts_to_save=[]) or args.model_dir
         logger = get_logger(args, exp_path, args.eval_test)
 
     if args.do_train:

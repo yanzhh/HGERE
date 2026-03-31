@@ -49,11 +49,6 @@ import pdb
 
 
 class BertForHyperGNN(BertPreTrainedModel):
-    # Disable the fast-init path that leaves custom-head parameters absent from
-    # the pretrained BERT checkpoint as raw uninitialized memory.  Mirrors the
-    # same fix applied to ModernBertForHyperGNN.
-    _supports_assign_param_buffer = False
-
     def __init__(self, config, args=None):
         super().__init__(config)
         self.max_seq_length = config.max_seq_length

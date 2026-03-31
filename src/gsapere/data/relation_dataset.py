@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import random
 from typing import Any
+
+import numpy as np
 
 import torch
 from torch.utils.data import DataLoader
@@ -719,12 +722,19 @@ class RelationDataset(DocumentDataset):
         sampler_cls = (
             BucketSampler if self.local_rank == -1 else DistributedBucketSampler
         )
+
+        def _worker_init_fn(worker_id: int) -> None:
+            worker_seed = torch.initial_seed() % 2**32
+            random.seed(worker_seed + worker_id)
+            np.random.seed(worker_seed + worker_id)
+
         self.loader = DataLoader(
             dataset=self,
             batch_sampler=sampler_cls(buckets=self.buckets),
             num_workers=n_workers,
             collate_fn=self.collate_fn,
             pin_memory=pin_memory,
+            worker_init_fn=_worker_init_fn if n_workers > 0 else None,
         )
         return self.loader
 

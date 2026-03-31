@@ -7,8 +7,10 @@ import numpy as np
 import torch
 
 
-def get_logger(args, log_path, test: bool=False):
-    log_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+def get_logger(args, log_path, test: bool = False):
+    log_formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
     logger = logging.getLogger()
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
@@ -16,9 +18,9 @@ def get_logger(args, log_path, test: bool=False):
     for f in logger.filters[:]:
         logger.removeFilters(f)
     if test:
-        log_file = f'test_{args.hostname}.log'
+        log_file = f"test_{args.hostname}.log"
     else:
-        log_file = f'all_{args.hostname}.log'
+        log_file = f"all_{args.hostname}.log"
     file_handler = logging.FileHandler(os.path.join(log_path, log_file))
     file_handler.setFormatter(log_formatter)
     logger.addHandler(file_handler)
@@ -32,9 +34,12 @@ def get_logger(args, log_path, test: bool=False):
     # not used: datefmt="%m/%d/%Y %H:%M:%S",
     return logger
 
+
 def set_seed(args):
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False

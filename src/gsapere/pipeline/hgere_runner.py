@@ -189,7 +189,7 @@ class HGERERunner:
                 batch_size=args.eval_batch_size,
                 shuffle=False,
                 batch_by_size=False,
-                n_workers=4,
+                n_workers=cfg.n_workers,
                 pin_memory=True,
             )
 

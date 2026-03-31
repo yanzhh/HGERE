@@ -201,7 +201,7 @@ def load_dataset(
         batch_size=batch_size,
         shuffle=args.shuffle,
         batch_by_size=getattr(args, "batch_by_size", False),
-        n_workers=32,
+        n_workers=getattr(args, "n_workers", 32),
         pin_memory=True,
     )
     logger.info("  Num examples = %d", len(dataset))
