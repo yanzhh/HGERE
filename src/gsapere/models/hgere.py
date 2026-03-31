@@ -49,6 +49,11 @@ import pdb
 
 
 class BertForHyperGNN(BertPreTrainedModel):
+    # Disable the fast-init path that leaves custom-head parameters absent from
+    # the pretrained BERT checkpoint as raw uninitialized memory.  Mirrors the
+    # same fix applied to ModernBertForHyperGNN.
+    _supports_assign_param_buffer = False
+
     def __init__(self, config, args=None):
         super().__init__(config)
         self.max_seq_length = config.max_seq_length
@@ -142,7 +147,7 @@ class BertForHyperGNN(BertPreTrainedModel):
                 LayerNorm(rel_dim, eps=1e-6) if args.layernorm else Identity()
             )
 
-        self.init_weights()
+        self.post_init()
 
     def forward(
         self,
@@ -357,9 +362,7 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         if isinstance(module, nn.Linear) and not any(
             module is m for m in self.bert.modules()
         ):
-            nn.init.normal_(
-                module.weight, mean=0.0, std=self.config.hidden_size**-0.5
-            )
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.hidden_size**-0.5)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
 

@@ -13,9 +13,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 import torch
+import yaml
 from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from tqdm import tqdm, trange
@@ -391,6 +390,12 @@ def train(
                     best_f1 = f1_re_plus
                     best_result = results
                     logger.info(f"New Best F1+: {best_f1}")
+                    logger.info(
+                        f"[WEIGHT CHECK before save] rel_cls.weight sum: "
+                        f"{model.rel_cls.weight.data.sum():.6f}  "
+                        f"ner_cls last weight sum: "
+                        f"{list(model.ner_cls.parameters())[-1].data.sum():.6f}"
+                    )
                     # @TODO: also save optimizer, scheduler, scaler and best_f1
                     #        Then further training from a checkpoint is possible
                     _save_model(
