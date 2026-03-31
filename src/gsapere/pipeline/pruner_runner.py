@@ -20,8 +20,8 @@ from gsapere.pipeline.config import (
     PrunerConfig,
     suppress_transformers_warnings,
 )
-from gsapere.span_classifier.neural.evaluate import run_pruner_inference
-from gsapere.span_classifier.neural.train import MODEL_CLASSES
+from gsapere.pruner.evaluate import run_pruner_inference
+from gsapere.pruner.train import MODEL_CLASSES
 
 logger = logging.getLogger(__name__)
 

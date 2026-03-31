@@ -26,7 +26,7 @@ from ..data.samplers import (
     create_shuffled_batches,
     create_size_sorted_batches,
 )
-from ..span_classifier.neural.evaluate import _select_sent_spans
+from ..pruner.evaluate import _select_sent_spans
 
 
 # ---------------------------------------------------------------------------

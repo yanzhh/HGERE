@@ -26,8 +26,11 @@ Supporting modules
 """
 
 from transformers import (
+    AutoTokenizer,
+    BertConfig,
     BertModel,
     BertPreTrainedModel,
+    ModernBertConfig,
     ModernBertModel,
     ModernBertPreTrainedModel,
 )
@@ -2029,3 +2032,13 @@ class LinearMessegePasser(Module):
 
     def forward(self, x_s, x_r):
         return self.net(torch.cat([x_s, x_r], dim=-1))
+
+
+# ---------------------------------------------------------------------------
+# Model registry — single source of truth for model_type → (config, model, tokenizer)
+# ---------------------------------------------------------------------------
+
+MODEL_CLASSES: dict[str, tuple] = {
+    "hyper": (BertConfig, BertForHyperGNN, AutoTokenizer),
+    "modernberthyper": (ModernBertConfig, ModernBertForHyperGNN, AutoTokenizer),
+}

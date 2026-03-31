@@ -32,7 +32,7 @@ from gsapere.hgere.config import (
     SUPPORTED_SCHEMA_VERSIONS as HGERE_SUPPORTED_VERSIONS,
     HGERETrainConfig,
 )
-from gsapere.span_classifier.config import (
+from gsapere.pruner.config import (
     CURRENT_SCHEMA_VERSION as PRUNER_SCHEMA_VERSION,
     SUPPORTED_SCHEMA_VERSIONS as PRUNER_SUPPORTED_VERSIONS,
     PrunerTrainConfig,
@@ -237,7 +237,7 @@ def render_pruner_document() -> str:
     lines += [
         "# Pruner parameter reference",
         "",
-        "> **Auto-generated** from `hgere.span_classifier.config.PrunerTrainConfig`.",
+        "> **Auto-generated** from `gsapere.pruner.config.PrunerTrainConfig`.",
         "> Do not edit by hand — run `uv run generate-pruner-docs` to regenerate.",
         "",
         "## Schema versioning",

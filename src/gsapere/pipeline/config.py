@@ -15,7 +15,7 @@ import transformers
 from ..config import load_yaml_strict
 from pydantic import BaseModel, model_validator
 
-from ..span_classifier.config import PreFilterParams
+from ..pre_filter.config import PreFilterParams
 
 
 @contextmanager

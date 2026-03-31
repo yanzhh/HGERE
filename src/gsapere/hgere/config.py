@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Optional
 from ..config import load_yaml_strict
 from pydantic import BaseModel, Field, model_validator
 
-from ..span_classifier.config import PreFilterParams
+from ..pre_filter.config import PreFilterParams
 
 if TYPE_CHECKING:
     pass

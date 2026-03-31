@@ -29,14 +29,14 @@ import pandas as pd
 from tabulate import tabulate
 
 from ..evaluation.pruner import compute_metrics
-from ..span_classifier.rulebased import (
+from ..pre_filter import (
     RuleBasedPruner,
     _build_type_mask,
     collect_stats,
     load_docs,
     min_count_from_entity_ratio,
 )
-from ..span_classifier.rulebased.statistics import (
+from ..pre_filter.statistics import (
     AFTER,
     BEFORE,
     END,

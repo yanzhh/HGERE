@@ -15,20 +15,16 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from transformers import AutoTokenizer, BertConfig
 
 from gsapere.data.config import RelationDatasetParams
 from gsapere.data.relation_dataset import RelationDataset
 from gsapere.hgere.inference import infer_hgere
+from gsapere.hgere.train_setup import resolve_checkpoint
 from gsapere.labels import LABELS
-from gsapere.models.hgere import BertForHyperGNN
+from gsapere.models.hgere import MODEL_CLASSES
 from gsapere.pipeline.config import HGEREConfig, suppress_transformers_warnings
 
 logger = logging.getLogger(__name__)
-
-MODEL_CLASSES: dict[str, tuple] = {
-    "hyper": (BertConfig, BertForHyperGNN, AutoTokenizer),
-}
 
 
 class HGERERunner:
@@ -49,16 +45,9 @@ class HGERERunner:
 
         model_path = Path(cfg.model_dir).absolute()
         if not (model_path / "config.json").exists():
-            checkpoints = sorted(
-                [
-                    p
-                    for p in model_path.iterdir()
-                    if p.is_dir() and p.name.startswith("checkpoint-")
-                ],
-                key=lambda p: int(p.name.split("-")[-1]),
-            )
-            if checkpoints:
-                model_path = checkpoints[-1]
+            resolved = resolve_checkpoint(model_path)
+            if resolved is not None:
+                model_path = resolved
                 logger.info("HGERE: using checkpoint %s", model_path)
 
         labels = LABELS[self._label_set]

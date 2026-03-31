@@ -9,29 +9,13 @@ from typing import Any
 
 import torch
 
-from transformers import (
-    AutoTokenizer,
-    BertConfig,
-    ModernBertConfig,
-)
-
 from ..data.config import RelationDatasetParams
 from ..data.relation_dataset import RelationDataset
 from ..hgere.evaluate import evaluate, get_checkpoints
 from ..hgere.train import log_candidate_stats_to_wandb, train
 from ..labels import LABELS
-from ..models.hgere import BertForHyperGNN, ModernBertForHyperGNN
+from ..models.hgere import MODEL_CLASSES
 from ..utils import set_seed
-
-# ---------------------------------------------------------------------------
-# Model registry
-# ---------------------------------------------------------------------------
-
-
-MODEL_CLASSES: dict[str, tuple[Any, Any, Any]] = {
-    "hyper": (BertConfig, BertForHyperGNN, AutoTokenizer),
-    "modernberthyper": (ModernBertConfig, ModernBertForHyperGNN, AutoTokenizer),
-}
 
 
 def setup_training(args, logger):
@@ -302,20 +286,28 @@ def adjust_tokenizer(
             word_embeddings[obje].copy_(word_embeddings[object_id])
 
 
-def get_last_checkpoint(args: Any, checkpoint_prefix: str) -> tuple:
-    """search for saved checkpoint fold"""
-    checkpoints = os.listdir(args.model_dir)
-    global_steps = []
-    for checkpoint_fold in checkpoints:
-        if checkpoint_fold.startswith(checkpoint_prefix):
-            global_step = int(checkpoint_fold.split("-")[-1])
-            global_steps.append(global_step)
-    if len(global_steps) > 0:
-        max_global_step = max(global_steps)
-        saved_checkpoint = os.path.join(
-            args.model_dir, f"{checkpoint_prefix}-{max_global_step}"
-        )
-    else:
-        saved_checkpoint = None
-        max_global_step = 0
-    return saved_checkpoint, max_global_step
+def resolve_checkpoint(model_dir: Path, prefix: str = "checkpoint") -> Path | None:
+    """Return the latest ``<prefix>-N`` subdirectory in *model_dir*, or ``None``.
+
+    Scans *model_dir* for subdirectories whose names start with *prefix*,
+    picks the one with the highest integer suffix, and returns its full path.
+    Returns ``None`` when no matching subdirectory exists.
+    """
+    candidates = [
+        p for p in model_dir.iterdir() if p.is_dir() and p.name.startswith(prefix + "-")
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: int(p.name.split("-")[-1]))
+
+
+def get_last_checkpoint(args: Any, checkpoint_prefix: str) -> tuple[str | None, int]:
+    """Return (checkpoint_path_str, global_step) for the latest saved checkpoint.
+
+    Thin wrapper around :func:`resolve_checkpoint` kept for backwards
+    compatibility with the training entry point.
+    """
+    result = resolve_checkpoint(Path(args.model_dir), prefix=checkpoint_prefix)
+    if result is None:
+        return None, 0
+    return str(result), int(result.name.split("-")[-1])

@@ -17,7 +17,7 @@ import torch
 
 from gsapere.data.base_dataset import DocumentDataset
 from gsapere.labels import load_label_scheme
-from gsapere.span_classifier.rulebased import RuleBasedPruner
+from gsapere.pre_filter import RuleBasedPruner
 
 
 class PrunerDataset(DocumentDataset):
