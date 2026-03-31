@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from gsapere.commands.train_hgere import main as train_hgere_main
-from gsapere.commands.train_span_classifier import main as train_span_classifier_main
+from gsapere.commands.train_pruner import main as train_pruner_main
 
 
 # ---------------------------------------------------------------------------
@@ -68,22 +68,22 @@ class TestTrainSpanClassifier:
         return p
 
     def test_positional_config_loads(self, tmp_path: Path) -> None:
-        """Positional YAML arg loads config and calls run_train_span_classifier."""
+        """Positional YAML arg loads config and calls run_train_pruner."""
         config_path = self._write_config(tmp_path)
         with patch(
-            "gsapere.commands.train_span_classifier.run_train_span_classifier"
+            "gsapere.commands.train_pruner.run_train_pruner"
         ) as mock_run:
-            train_span_classifier_main([str(config_path)])
+            train_pruner_main([str(config_path)])
         mock_run.assert_called_once()
 
     def test_nonexistent_config_exits(self, tmp_path: Path) -> None:
         with pytest.raises(SystemExit) as exc_info:
-            train_span_classifier_main([str(tmp_path / "missing.yaml")])
+            train_pruner_main([str(tmp_path / "missing.yaml")])
         assert exc_info.value.code != 0
 
     def test_no_args_exits(self) -> None:
         with pytest.raises(SystemExit) as exc_info:
-            train_span_classifier_main([])
+            train_pruner_main([])
         assert exc_info.value.code != 0
 
 

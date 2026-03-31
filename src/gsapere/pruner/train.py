@@ -400,7 +400,7 @@ def get_span_optimizer(model_named_parameters, args):
     return optimizer
 
 
-def run_train_span_classifier(args=None):
+def run_train_pruner(args=None):
     if args is None:
         from gsapere.commands.train_pruner import parse_arguments
 

@@ -1,6 +1,6 @@
 """Shared utilities for config-driven CLI entry points.
 
-Used by both ``train_hgere`` and ``train_span_classifier`` to avoid
+Used by both ``train_hgere`` and ``train_pruner`` to avoid
 duplicating the positional-arg shortcut pattern, JSON arg saving, and
 serialisability checks.
 """

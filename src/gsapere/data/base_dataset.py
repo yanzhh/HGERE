@@ -154,10 +154,22 @@ class DocumentDataset(Dataset, ABC):
             all_tokens.extend(sent.tokens)
             sentence_boundaries.append(len(all_tokens))
 
-        # Whitespace-only tokens produce no subwords and break the word_id
-        # alignment.  Replace them with "." so every position gets at least one
-        # subword; the original all_tokens list (and all span indices) are unchanged.
-        tokens_for_tokenizer = [tok if tok.strip() else "." for tok in all_tokens]
+        # Whitespace-only tokens and tokens consisting entirely of characters that
+        # tokenizers cannot map to subwords (combining marks, control chars, format
+        # chars — e.g. U+0302 combining circumflex) produce no subwords and break
+        # the word_id alignment.  Replace them with "." so every position gets at
+        # least one subword; the original all_tokens list (and all span indices) are
+        # unchanged.
+        _INVISIBLE_CATEGORIES = frozenset({"Mn", "Mc", "Me", "Cc", "Cf", "Cs", "Co"})
+
+        def _needs_substitution(tok: str) -> bool:
+            if not tok.strip():
+                return True
+            return all(unicodedata.category(ch) in _INVISIBLE_CATEGORIES for ch in tok)
+
+        tokens_for_tokenizer = [
+            tok if not _needs_substitution(tok) else "." for tok in all_tokens
+        ]
 
         # Single tokenizer call for the whole document
         enc = self.tokenizer(

@@ -29,7 +29,7 @@ import sys
 from typing import Any, Optional
 
 from ..pruner.config import PrunerTrainConfig
-from ..pruner.train import run_train_span_classifier
+from ..pruner.train import run_train_pruner
 from ._cli_utils import load_config_from_argv
 
 # ---------------------------------------------------------------------------
@@ -88,4 +88,4 @@ def main(argv: Optional[list[str]] = None) -> None:
     )
 
     args = _config_to_namespace(config)
-    run_train_span_classifier(args)
+    run_train_pruner(args)

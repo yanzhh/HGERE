@@ -58,7 +58,11 @@ class RuleBasedPruner:
         if context_before:
             if self._max_before is None:
                 self._max_before = max(
-                    (sum(1 for t in p if t != BEFORE) for p in self.prune_patterns if p[-1] == BEFORE),
+                    (
+                        sum(1 for t in p if t != BEFORE)
+                        for p in self.prune_patterns
+                        if p[-1] == BEFORE
+                    ),
                     default=0,
                 )
             if self._max_before:
@@ -68,7 +72,11 @@ class RuleBasedPruner:
         if context_after:
             if self._max_after is None:
                 self._max_after = max(
-                    (sum(1 for t in p if t != AFTER) for p in self.prune_patterns if p[0] == AFTER),
+                    (
+                        sum(1 for t in p if t != AFTER)
+                        for p in self.prune_patterns
+                        if p[0] == AFTER
+                    ),
                     default=0,
                 )
             if self._max_after:

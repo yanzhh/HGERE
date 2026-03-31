@@ -25,7 +25,7 @@ from gsapere.config.cli_gen import (
     collect_flat_fields,
     namespace_to_nested_dict,
 )
-from gsapere.span_classifier.config import PrunerTrainConfig
+from gsapere.pruner.config import PrunerTrainConfig
 
 
 # ---------------------------------------------------------------------------
