@@ -111,9 +111,15 @@ def setup_training(args, logger):
                     checkpoint, config=config, args=args
                 )
                 model.to(args.device)
+                logger.info(
+                    f"[WEIGHT CHECK after reload] rel_cls.weight sum: "
+                    f"{model.rel_cls.weight.data.sum():.6f}  "
+                    f"ner_cls last weight sum: "
+                    f"{list(model.ner_cls.parameters())[-1].data.sum():.6f}"
+                )
             # eval train
             if args.eval_train:
-                report[args.dev_file] = evaluate(
+                report[args.train_file] = evaluate(
                     model,
                     train_dataset,
                     args,
