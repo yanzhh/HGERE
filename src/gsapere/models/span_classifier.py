@@ -79,9 +79,9 @@ class BertForSpanMarkerNerPruner(BertPreTrainedModel):
         )  # config.alpha: loss weight for Nil type
         self.onedropout = config.onedropout
 
-        self.init_weights()
+        self.post_init()
 
-        # init_weights() does not handle raw nn.Parameter objects inside custom
+        # post_init() does not handle raw nn.Parameter objects inside custom
         # modules like BiSpanRepr (only nn.Linear / Embedding / LayerNorm).
         # Re-run reset_parameters() to ensure weight and bias are properly set.
         if self.biaf_span:
@@ -248,9 +248,7 @@ class ModernBertForSpanMarkerNerPruner(ModernBertPreTrainedModel):
         if isinstance(module, nn.Linear) and not any(
             module is m for m in self.bert.modules()
         ):
-            nn.init.normal_(
-                module.weight, mean=0.0, std=self.config.hidden_size**-0.5
-            )
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.hidden_size**-0.5)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
 
@@ -344,10 +342,17 @@ class ModernBertForSpanMarkerNerPruner(ModernBertPreTrainedModel):
             # where L is the per-sample actual subword sentence length.
             # Use gather so each sample uses its own offset.
             hidden_dim = hidden_states.shape[-1]
-            arange = torch.arange(ent_len, device=hidden_states.device, dtype=torch.long)
-            e1_offsets = sent_subword_length.unsqueeze(1) + arange.unsqueeze(0)  # (bsz, ent_len)
+            arange = torch.arange(
+                ent_len, device=hidden_states.device, dtype=torch.long
+            )
+            e1_offsets = sent_subword_length.unsqueeze(1) + arange.unsqueeze(
+                0
+            )  # (bsz, ent_len)
             e2_offsets = e1_offsets + ent_len
-            expand = lambda o: o.unsqueeze(-1).expand(-1, -1, hidden_dim)
+
+            def expand(o):
+                return o.unsqueeze(-1).expand(-1, -1, hidden_dim)
+
             e1_hidden_states = torch.gather(hidden_states, 1, expand(e1_offsets))
             e2_hidden_states = torch.gather(hidden_states, 1, expand(e2_offsets))
         else:
@@ -501,9 +506,12 @@ class BiSpanRepr(nn.Module):
         # in from_pretrained (which may leave missing-key params as garbage
         # memory) cannot produce corrupt weights or biases at forward time.
         for proj in [
-            self.proj11, self.proj12,
-            self.proj21, self.proj22,
-            self.proj1, self.proj2,
+            self.proj11,
+            self.proj12,
+            self.proj21,
+            self.proj22,
+            self.proj1,
+            self.proj2,
         ]:
             proj.reset_parameters()
         return

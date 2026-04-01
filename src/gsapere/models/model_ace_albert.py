@@ -211,7 +211,11 @@ class AlBertForBaselines(AlbertPreTrainedModel):
             [config.alpha] + [1.0] * (self.num_labels - 1), dtype=torch.float32
         )
 
-        if self.args.layernorm_1st and self.args.baseline in {"firstorder", "mfvi", "gnn"}:
+        if self.args.layernorm_1st and self.args.baseline in {
+            "firstorder",
+            "mfvi",
+            "gnn",
+        }:
             self.sub_layernorm = (
                 nn.LayerNorm(ent_dim, eps=1e-6) if args.layernorm else nn.Identity()
             )
@@ -252,11 +256,17 @@ class AlBertForBaselines(AlbertPreTrainedModel):
         tot_seq_len = input_ids.shape[-1]
         ent_len = (tot_seq_len - seq_len) // 2
 
-        obj_start_states = hidden_states[:, seq_len : seq_len + ent_len][:, :max_ent_num, :]
+        obj_start_states = hidden_states[:, seq_len : seq_len + ent_len][
+            :, :max_ent_num, :
+        ]
         obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
 
-        sub_start_states = hidden_states[torch.arange(sum(ent_numbers)), sub_positions[:, 0]]
-        sub_end_states = hidden_states[torch.arange(sum(ent_numbers)), sub_positions[:, 1]]
+        sub_start_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+        ]
+        sub_end_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
+        ]
 
         sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)
         obj_reprs = self.obj_encoder(obj_start_states, obj_end_states)
@@ -276,7 +286,11 @@ class AlBertForBaselines(AlbertPreTrainedModel):
         uni_obj_reprs *= mask1d.unsqueeze(-1)
         rel_reprs *= mask2d.unsqueeze(-1)
 
-        if self.args.layernorm_1st and self.args.baseline in {"firstorder", "mfvi", "gnn"}:
+        if self.args.layernorm_1st and self.args.baseline in {
+            "firstorder",
+            "mfvi",
+            "gnn",
+        }:
             sub_reprs = self.sub_layernorm(sub_reprs)
             uni_obj_reprs = self.obj_layernorm(uni_obj_reprs)
             rel_reprs = self.rel_layernorm(rel_reprs)
@@ -290,8 +304,13 @@ class AlBertForBaselines(AlbertPreTrainedModel):
             objscores = self.obj_scorer(uni_obj_reprs)
             relscores = self.rel_cls(rel_reprs)
             subscores, objscores, re_prediction_scores = self.mfvigraph(
-                sub_reprs, uni_obj_reprs, rel_reprs,
-                subscores, objscores, relscores, ent_numbers,
+                sub_reprs,
+                uni_obj_reprs,
+                rel_reprs,
+                subscores,
+                objscores,
+                relscores,
+                ent_numbers,
             )
             ner_prediction_scores = subscores + objscores
 
@@ -323,7 +342,8 @@ class AlBertForBaselines(AlbertPreTrainedModel):
             )
             if self.args.baseline in {"firstorder", "mfvi", "gnn"}:
                 ner_loss = loss_fct_ner(
-                    ner_prediction_scores.view(-1, self.num_ner_labels), ner_labels.view(-1)
+                    ner_prediction_scores.view(-1, self.num_ner_labels),
+                    ner_labels.view(-1),
                 )
             else:
                 # NOTE: `bsz` is undefined — known bug in original code
@@ -365,27 +385,44 @@ class AlbertForHyperGNN(AlbertPreTrainedModel):
 
         if args.factor_type == "ternary":
             self.htnnlayer = HyperGNNTernaryGraph(
-                ent_dim=ent_dim, rel_dim=rel_dim,
-                dropout=config.hidden_dropout_prob, args=args,
+                ent_dim=ent_dim,
+                rel_dim=rel_dim,
+                dropout=config.hidden_dropout_prob,
+                args=args,
             )
         elif self.args.factor_type in {
-            "sib", "cop", "gp", "sibcop", "sibgp", "copgp", "sibcopgp"
+            "sib",
+            "cop",
+            "gp",
+            "sibcop",
+            "sibgp",
+            "copgp",
+            "sibcopgp",
         }:
             self.htnnlayer = HyperGNNBinaryGraph(
                 rel_dim=rel_dim, dropout=config.hidden_dropout_prob, args=args
             )
         elif self.args.factor_type in {
-            "tersib", "tercop", "tergp", "tersibcop",
-            "tersibgp", "tercopgp", "tersibcopgp",
+            "tersib",
+            "tercop",
+            "tergp",
+            "tersibcop",
+            "tersibgp",
+            "tercopgp",
+            "tersibcopgp",
         }:
             self.htnnlayer = HyperGNNHybridGraph(
-                ent_dim=ent_dim, rel_dim=rel_dim,
-                dropout=config.hidden_dropout_prob, args=args,
+                ent_dim=ent_dim,
+                rel_dim=rel_dim,
+                dropout=config.hidden_dropout_prob,
+                args=args,
             )
         else:
             pdb.set_trace()
 
-        self.ner_cls = CatEncoder(input_dims=[ent_dim] * 2, output_dim=self.num_ner_labels)
+        self.ner_cls = CatEncoder(
+            input_dims=[ent_dim] * 2, output_dim=self.num_ner_labels
+        )
         self.rel_cls = nn.Linear(rel_dim, self.num_labels)
 
         self.alpha = torch.tensor(
@@ -433,11 +470,17 @@ class AlbertForHyperGNN(AlbertPreTrainedModel):
         tot_seq_len = input_ids.shape[-1]
         ent_len = (tot_seq_len - seq_len) // 2
 
-        obj_start_states = hidden_states[:, seq_len : seq_len + ent_len][:, :max_ent_num, :]
+        obj_start_states = hidden_states[:, seq_len : seq_len + ent_len][
+            :, :max_ent_num, :
+        ]
         obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
 
-        sub_start_states = hidden_states[torch.arange(sum(ent_numbers)), sub_positions[:, 0]]
-        sub_end_states = hidden_states[torch.arange(sum(ent_numbers)), sub_positions[:, 1]]
+        sub_start_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+        ]
+        sub_end_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
+        ]
 
         sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)
         obj_reprs = self.obj_encoder(obj_start_states, obj_end_states)
@@ -463,8 +506,14 @@ class AlbertForHyperGNN(AlbertPreTrainedModel):
             rel_reprs = self.rel_layernorm(rel_reprs)
 
         if self.args.factor_type in {
-            "ternary", "tersib", "tercop", "tergp",
-            "tersibcop", "tersibgp", "tercopgp", "tersibcopgp",
+            "ternary",
+            "tersib",
+            "tercop",
+            "tergp",
+            "tersibcop",
+            "tersibgp",
+            "tercopgp",
+            "tersibcopgp",
         }:
             sub_reprs, uni_obj_reprs, rel_reprs = self.htnnlayer(
                 sub_reprs, uni_obj_reprs, rel_reprs, ent_numbers
@@ -483,10 +532,12 @@ class AlbertForHyperGNN(AlbertPreTrainedModel):
             re_prediction_scores = re_prediction_scores.float()
             ner_prediction_scores = ner_prediction_scores.float()
             re_loss = loss_fct_re(
-                re_prediction_scores.reshape(-1, self.num_labels), rel_labels.reshape(-1)
+                re_prediction_scores.reshape(-1, self.num_labels),
+                rel_labels.reshape(-1),
             )
             ner_loss = loss_fct_ner(
-                ner_prediction_scores.reshape(-1, self.num_ner_labels), ner_labels.reshape(-1)
+                ner_prediction_scores.reshape(-1, self.num_ner_labels),
+                ner_labels.reshape(-1),
             )
             loss = re_loss + ner_loss
             outputs = (loss, re_loss, ner_loss) + outputs

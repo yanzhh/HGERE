@@ -36,13 +36,13 @@ class MFVI(nn.Module):
             input_dim2=ent_dim,
             input_dim3=rel_dim,
             rank=mem_dim,
-            output_dim=n_ent_labels ** 2 * n_rel_labels,
+            output_dim=n_ent_labels**2 * n_rel_labels,
         )
 
         self.bin_scorer = BiafEncoder(
             input_dim1=rel_dim,
             input_dim2=rel_dim,
-            output_dim=n_rel_labels ** 2,
+            output_dim=n_rel_labels**2,
             rank=mem_dim,
             factorize=True,
         )
@@ -105,7 +105,14 @@ class MFVI(nn.Module):
         return Frij + Frjk
 
     def mfvi_ternary(
-        self, sub_reprs, obj_reprs, rel_reprs, subscores, objscores, relscores, ent_numbers
+        self,
+        sub_reprs,
+        obj_reprs,
+        rel_reprs,
+        subscores,
+        objscores,
+        relscores,
+        ent_numbers,
     ):
         bs, ne, _ = sub_reprs.shape
         batch_mask1d = get_ent_mask1d(ent_numbers)
@@ -135,7 +142,14 @@ class MFVI(nn.Module):
         return qsv, qov, qrv
 
     def mfvi_hybrid(
-        self, sub_reprs, obj_reprs, rel_reprs, subscores, objscores, relscores, ent_numbers
+        self,
+        sub_reprs,
+        obj_reprs,
+        rel_reprs,
+        subscores,
+        objscores,
+        relscores,
+        ent_numbers,
     ):
         bs, ne, _ = sub_reprs.shape
         batch_mask1d = get_ent_mask1d(ent_numbers)
@@ -194,18 +208,42 @@ class MFVI(nn.Module):
         return qsv, qov, qrv
 
     def forward(
-        self, sub_reprs, obj_reprs, rel_reprs, subscores, objscores, relscores, ent_numbers
+        self,
+        sub_reprs,
+        obj_reprs,
+        rel_reprs,
+        subscores,
+        objscores,
+        relscores,
+        ent_numbers,
     ):
         if self.args.factor_type == "ternary":
             subscores, objscores, relscores = self.mfvi_ternary(
-                sub_reprs, obj_reprs, rel_reprs, subscores, objscores, relscores, ent_numbers
+                sub_reprs,
+                obj_reprs,
+                rel_reprs,
+                subscores,
+                objscores,
+                relscores,
+                ent_numbers,
             )
         elif self.args.factor_type in {
-            "tersib", "tercop", "tergp", "tersibcop",
-            "tersibgp", "tercopgp", "tersibcopgp",
+            "tersib",
+            "tercop",
+            "tergp",
+            "tersibcop",
+            "tersibgp",
+            "tercopgp",
+            "tersibcopgp",
         }:
             subscores, objscores, relscores = self.mfvi_hybrid(
-                sub_reprs, obj_reprs, rel_reprs, subscores, objscores, relscores, ent_numbers
+                sub_reprs,
+                obj_reprs,
+                rel_reprs,
+                subscores,
+                objscores,
+                relscores,
+                ent_numbers,
             )
         else:
             raise ValueError("We do not experiment on binary config")
@@ -245,9 +283,15 @@ class GNN(nn.Module):
         self.rv = nn.Linear(mem_dim, 1, bias=False)
         self.fc_r = nn.Linear(mem_dim, rel_dim)
 
-        self.layernorm_s = nn.LayerNorm(ent_dim, eps=1e-6) if layernorm else nn.Identity()
-        self.layernorm_o = nn.LayerNorm(ent_dim, eps=1e-6) if layernorm else nn.Identity()
-        self.layernorm_r = nn.LayerNorm(rel_dim, eps=1e-6) if layernorm else nn.Identity()
+        self.layernorm_s = (
+            nn.LayerNorm(ent_dim, eps=1e-6) if layernorm else nn.Identity()
+        )
+        self.layernorm_o = (
+            nn.LayerNorm(ent_dim, eps=1e-6) if layernorm else nn.Identity()
+        )
+        self.layernorm_r = (
+            nn.LayerNorm(rel_dim, eps=1e-6) if layernorm else nn.Identity()
+        )
 
     def update_rel(self, sub_reprs, obj_reprs, rel_reprs):
         res = rel_reprs
@@ -264,7 +308,9 @@ class GNN(nn.Module):
         energy = self.attn_combine_r(comb)
         energy = self.rv(energy).squeeze(-1)
         attention = energy.softmax(dim=-1)
-        output = torch.einsum("bijk,bijkd->bijd", attention, total_h.to(attention.dtype))
+        output = torch.einsum(
+            "bijk,bijkd->bijd", attention, total_h.to(attention.dtype)
+        )
         output = self.dropout(self.fc_r(output)) + res
         output = self.layernorm_r(output)
         return output

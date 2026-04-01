@@ -193,10 +193,14 @@ class BertForBaselines(BertPreTrainedModel):
         if self.args.baseline in {"firstorder", "mfvi", "gnn"}:
             if self.args.baseline == "firstorder":
                 self.sub_encoder = CatEncoder(
-                    input_dims=[config.hidden_size] * 2, output_dim=args.ent_dim, proj=True
+                    input_dims=[config.hidden_size] * 2,
+                    output_dim=args.ent_dim,
+                    proj=True,
                 )
                 self.obj_encoder = CatEncoder(
-                    input_dims=[config.hidden_size] * 2, output_dim=args.ent_dim, proj=True
+                    input_dims=[config.hidden_size] * 2,
+                    output_dim=args.ent_dim,
+                    proj=True,
                 )
                 sub_dim = self.sub_encoder.output_dim
                 obj_dim = self.obj_encoder.output_dim
@@ -208,10 +212,14 @@ class BertForBaselines(BertPreTrainedModel):
 
             elif args.baseline == "mfvi":
                 self.sub_encoder = CatEncoder(
-                    input_dims=[config.hidden_size] * 2, output_dim=args.ent_dim, proj=True
+                    input_dims=[config.hidden_size] * 2,
+                    output_dim=args.ent_dim,
+                    proj=True,
                 )
                 self.obj_encoder = CatEncoder(
-                    input_dims=[config.hidden_size] * 2, output_dim=args.ent_dim, proj=True
+                    input_dims=[config.hidden_size] * 2,
+                    output_dim=args.ent_dim,
+                    proj=True,
                 )
                 sub_dim = self.sub_encoder.output_dim
                 obj_dim = self.obj_encoder.output_dim
@@ -271,7 +279,11 @@ class BertForBaselines(BertPreTrainedModel):
             [config.alpha] + [1.0] * (self.num_labels - 1), dtype=torch.float32
         )
 
-        if self.args.layernorm_1st and self.args.baseline in {"firstorder", "mfvi", "gnn"}:
+        if self.args.layernorm_1st and self.args.baseline in {
+            "firstorder",
+            "mfvi",
+            "gnn",
+        }:
             self.sub_layernorm = (
                 nn.LayerNorm(ent_dim, eps=1e-6) if args.layernorm else nn.Identity()
             )
@@ -312,11 +324,17 @@ class BertForBaselines(BertPreTrainedModel):
         tot_seq_len = input_ids.shape[-1]
         ent_len = (tot_seq_len - seq_len) // 2
 
-        obj_start_states = hidden_states[:, seq_len : seq_len + ent_len][:, :max_ent_num, :]
+        obj_start_states = hidden_states[:, seq_len : seq_len + ent_len][
+            :, :max_ent_num, :
+        ]
         obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
 
-        sub_start_states = hidden_states[torch.arange(sum(ent_numbers)), sub_positions[:, 0]]
-        sub_end_states = hidden_states[torch.arange(sum(ent_numbers)), sub_positions[:, 1]]
+        sub_start_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+        ]
+        sub_end_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
+        ]
 
         if self.args.baseline in {"firstorder", "mfvi", "gnn"}:
             sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)
@@ -327,7 +345,9 @@ class BertForBaselines(BertPreTrainedModel):
             rel_reprs_split = torch.split(rel_reprs, ent_numbers.tolist())
             rel_reprs = pad_sequence(rel_reprs_split, batch_first=True, padding_value=0)
             obj_reprs_split = torch.split(obj_reprs, ent_numbers.tolist())
-            obj_reprs = pad_sequence(obj_reprs_split, batch_first=True, padding_value=-1e4)
+            obj_reprs = pad_sequence(
+                obj_reprs_split, batch_first=True, padding_value=-1e4
+            )
             uni_obj_reprs = torch.max(obj_reprs, dim=1)[0]
             sub_reprs_split = torch.split(sub_reprs, ent_numbers.tolist())
             sub_reprs = pad_sequence(sub_reprs_split, batch_first=True, padding_value=0)
@@ -347,8 +367,13 @@ class BertForBaselines(BertPreTrainedModel):
                 objscores = self.obj_scorer(uni_obj_reprs)
                 relscores = self.rel_cls(rel_reprs)
                 subscores, objscores, re_prediction_scores = self.mfvigraph(
-                    sub_reprs, uni_obj_reprs, rel_reprs,
-                    subscores, objscores, relscores, ent_numbers,
+                    sub_reprs,
+                    uni_obj_reprs,
+                    rel_reprs,
+                    subscores,
+                    objscores,
+                    relscores,
+                    ent_numbers,
                 )
                 ner_prediction_scores = subscores + objscores
 
@@ -389,19 +414,22 @@ class BertForBaselines(BertPreTrainedModel):
                     re_prediction_scores.view(-1, self.num_labels), rel_labels.view(-1)
                 )
                 ner_loss = loss_fct_ner(
-                    ner_prediction_scores.view(-1, self.num_ner_labels), ner_labels.view(-1)
+                    ner_prediction_scores.view(-1, self.num_ner_labels),
+                    ner_labels.view(-1),
                 )
             else:
                 mask1d = get_ent_mask1d(ent_numbers)
-                selected_rel_labels = rel_labels.masked_select(mask1d.unsqueeze(-1)).reshape(
-                    bsz, -1
-                )
+                selected_rel_labels = rel_labels.masked_select(
+                    mask1d.unsqueeze(-1)
+                ).reshape(bsz, -1)
                 re_loss = loss_fct_re(
                     re_prediction_scores.view(-1, self.num_labels),
                     selected_rel_labels.view(-1),
                 )
                 ner_labels_exp = torch.zeros(
-                    size=(bsz, max_ent_num), dtype=ner_labels.dtype, device=ner_labels.device
+                    size=(bsz, max_ent_num),
+                    dtype=ner_labels.dtype,
+                    device=ner_labels.device,
                 )
                 for i in range(ner_labels.shape[0]):
                     ner_labels_exp[: ent_numbers[i]] = ner_labels[i]
