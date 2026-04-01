@@ -508,45 +508,49 @@ class RelationDataset(DocumentDataset):
             pos2label[(subj_begin, subj_end, obj_begin, obj_end)] = label_map[
                 relation_label
             ]
+
+            # For symmetric relations, normalise to canonical direction
+            # (lexicographically smaller span as subject) so that both
+            # A→B and B→A annotations in the data collapse to one gold entry.
+            sym_label_set = frozenset(sym_labels[1:])
+            if relation_label in sym_label_set and (obj_begin, obj_end) < (
+                subj_begin,
+                subj_end,
+            ):
+                c_subj = (obj_begin, obj_end)
+                c_obj = (subj_begin, subj_end)
+            else:
+                c_subj = (subj_begin, subj_end)
+                c_obj = (obj_begin, obj_end)
+
             golden_additions.add(
                 (
                     (doc_idx, sentence_idx),
-                    (subj_begin, subj_end),
-                    (obj_begin, obj_end),
+                    c_subj,
+                    c_obj,
                     relation_label,
                 )
             )
 
             # Expand RE+ gold to all valid (s_type, o_type) combos
             s_types = gold_span_multi_types.get(
-                (subj_begin, subj_end),
-                {entity_labels_gold.get((subj_begin, subj_end), "NIL")},
+                c_subj,
+                {entity_labels_gold.get(c_subj, "NIL")},
             )
             o_types = gold_span_multi_types.get(
-                (obj_begin, obj_end),
-                {entity_labels_gold.get((obj_begin, obj_end), "NIL")},
+                c_obj,
+                {entity_labels_gold.get(c_obj, "NIL")},
             )
             for s_type in s_types:
                 for o_type in o_types:
                     golden_with_ner_additions.add(
                         (
                             (doc_idx, sentence_idx),
-                            (subj_begin, subj_end, s_type),
-                            (obj_begin, obj_end, o_type),
+                            c_subj + (s_type,),
+                            c_obj + (o_type,),
                             relation_label,
                         )
                     )
-
-            if relation_label in sym_labels[1:]:
-                # Symmetric: reverse direction carries the same label.
-                golden_additions.add(
-                    (
-                        (doc_idx, sentence_idx),
-                        (obj_begin, obj_end),
-                        (subj_begin, subj_end),
-                        relation_label,
-                    )
-                )
 
         if dropped_sig_counter:
             sig_summary = "; ".join(

@@ -198,6 +198,40 @@ def mock_labels() -> MagicMock:
 
 
 @pytest.fixture
+def mock_labels_with_sym() -> MagicMock:
+    """Mock labels with a symmetric relation label 'Similar'."""
+    labels = MagicMock()
+    labels.ner = ["NIL", "Method", "Task", "Dataset"]
+    rel_obj = MagicMock()
+    rel_obj.all = ["NIL", "Similar", "Used-for"]
+    # symmetric(only_nil=True) → ["NIL"], symmetric(only_nil=False) → ["NIL", "Similar"]
+    rel_obj.symmetric.side_effect = lambda only_nil=False: (
+        ["NIL"] if only_nil else ["NIL", "Similar"]
+    )
+    labels.rel = rel_obj
+    return labels
+
+
+@pytest.fixture
+def relation_jsonl_sym_reverse(tmp_path: Path) -> Path:
+    """JSONL with a symmetric relation annotated in reverse direction.
+
+    Gold: span (2,2) → span (1,1) with 'Similar' (reverse of canonical).
+    Canonical is (1,1) < (2,2), so after normalisation both map to (1,1)→(2,2).
+    """
+    doc = {
+        "doc_key": "doc_sym_rev",
+        "sentences": [["The", "model", "trains", "fast"]],
+        "ner": [[[1, 1, "Method"], [2, 2, "Method"]]],
+        "predicted_ner": [[[1, 1, "Method"], [2, 2, "Method"]]],
+        "relations": [[[2, 2, 1, 1, "Similar"]]],  # reverse direction
+    }
+    path = tmp_path / "relation_sym_rev.jsonl"
+    path.write_text(json.dumps(doc) + "\n")
+    return path
+
+
+@pytest.fixture
 def relation_jsonl_path_with_fp(tmp_path: Path) -> Path:
     """JSONL for candidate-stats tests: predicted_ner has 1 FP and 1 FN vs gold ner.
 

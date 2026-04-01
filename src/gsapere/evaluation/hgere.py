@@ -153,6 +153,25 @@ def _predicted_relations_with_ner(docs: List[dict]) -> List[Tuple]:
 # ---------------------------------------------------------------------------
 
 
+def _normalize_sym_rels(
+    relations: List[Tuple], sym_label_set: frozenset
+) -> List[Tuple]:
+    """Return *relations* with symmetric-label entries in canonical direction.
+
+    For a symmetric relation label, the canonical direction has the
+    lexicographically smaller (o_start, o_end) span as subject.  Both
+    gold and predicted lists should be normalised before comparison so
+    that A→B and B→A are treated as the same annotation.
+    """
+    result = []
+    for rel in relations:
+        doc_id, sent_idx, s_start, s_end, o_start, o_end, label = rel
+        if label in sym_label_set and (o_start, o_end) < (s_start, s_end):
+            s_start, s_end, o_start, o_end = o_start, o_end, s_start, s_end
+        result.append((doc_id, sent_idx, s_start, s_end, o_start, o_end, label))
+    return result
+
+
 def _prf1(tp: int, n_gold: int, n_pred: int) -> Tuple[float, float, float]:
     precision = tp / n_pred if n_pred > 0 else 0.0
     recall = tp / n_gold if n_gold > 0 else 0.0
@@ -279,17 +298,30 @@ def compute_ner_metrics_per_type(docs: List[dict]) -> Dict[str, Dict]:
 # ---------------------------------------------------------------------------
 
 
-def compute_rel_metrics(docs: List[dict]) -> Dict:
+def compute_rel_metrics(docs: List[dict], sym_labels: Tuple[str, ...] = ()) -> Dict:
     """Compute relation P/R/F1 without entity-type matching (re metric).
 
     Returns micro, macro, and weighted-macro averages.
+
+    Args:
+        docs: Prediction documents.
+        sym_labels: Tuple of symmetric/undirected relation labels.  Both gold
+            and predicted relations with these labels are normalised to a
+            canonical direction (lexicographically smaller span as subject)
+            before matching so that A→B and B→A count as the same annotation.
     """
-    gold = set(_gold_relations(docs))
-    pred = set(_predicted_relations(docs))
+    sym_label_set = frozenset(sym_labels)
+    gold_raw = _gold_relations(docs)
+    pred_raw = _predicted_relations(docs)
+    if sym_label_set:
+        gold_raw = _normalize_sym_rels(gold_raw, sym_label_set)
+        pred_raw = _normalize_sym_rels(pred_raw, sym_label_set)
+    gold = set(gold_raw)
+    pred = set(pred_raw)
     tp = len(gold & pred)
     micro_p, micro_r, micro_f1 = _prf1(tp, len(gold), len(pred))
 
-    per_type = compute_rel_metrics_per_type(docs)
+    per_type = compute_rel_metrics_per_type(docs, sym_labels=sym_labels)
     macro_p, macro_r, macro_f1 = _macro_weighted(per_type, weighted=False)
     wmacro_p, wmacro_r, wmacro_f1 = _macro_weighted(per_type, weighted=True)
 
@@ -311,7 +343,9 @@ def compute_rel_metrics(docs: List[dict]) -> Dict:
     }
 
 
-def compute_rel_metrics_with_ner(docs: List[dict]) -> Dict:
+def compute_rel_metrics_with_ner(
+    docs: List[dict], sym_labels: Tuple[str, ...] = ()
+) -> Dict:
     """Compute relation P/R/F1 where entity types must also match (re+ metric).
 
     For spans with multiple gold labels (double annotations), a predicted
@@ -319,12 +353,30 @@ def compute_rel_metrics_with_ner(docs: List[dict]) -> Dict:
     predicted entity type for each span matches ANY valid gold type for that
     span. The recall denominator is the number of unique gold relations (same
     as the RE metric).
+
+    Args:
+        docs: Prediction documents.
+        sym_labels: Tuple of symmetric/undirected relation labels.  Both gold
+            and predicted relations with these labels are normalised to a
+            canonical direction before matching.
     """
+    sym_label_set = frozenset(sym_labels)
     gold_span_types = _gold_span_types(docs)
-    gold_rel_set = set(_gold_relations(docs))
+    gold_raw = _gold_relations(docs)
+    if sym_label_set:
+        gold_raw = _normalize_sym_rels(gold_raw, sym_label_set)
+    gold_rel_set = set(gold_raw)
     n_gold = len(gold_rel_set)
 
     pred_list = _predicted_relations_with_ner(docs)
+    if sym_label_set:
+        # Normalise the span positions in the augmented list
+        normalised = []
+        for doc_id, sent_idx, ss, se, s_type, os, oe, o_type, label in pred_list:
+            if label in sym_label_set and (os, oe) < (ss, se):
+                ss, se, s_type, os, oe, o_type = os, oe, o_type, ss, se, s_type
+            normalised.append((doc_id, sent_idx, ss, se, s_type, os, oe, o_type, label))
+        pred_list = normalised
 
     # Unique predicted relations (span-pair + label, ignoring entity types for n_pred)
     n_pred = len(
@@ -419,10 +471,16 @@ def compute_rel_metrics_with_ner(docs: List[dict]) -> Dict:
     }
 
 
-def compute_rel_metrics_per_type(docs: List[dict]) -> Dict[str, Dict]:
+def compute_rel_metrics_per_type(
+    docs: List[dict], sym_labels: Tuple[str, ...] = ()
+) -> Dict[str, Dict]:
     """Compute relation P/R/F1 per relation type."""
+    sym_label_set = frozenset(sym_labels)
     gold_relations = _gold_relations(docs)
     pred_relations = _predicted_relations(docs)
+    if sym_label_set:
+        gold_relations = _normalize_sym_rels(gold_relations, sym_label_set)
+        pred_relations = _normalize_sym_rels(pred_relations, sym_label_set)
     all_types = sorted(set(r[-1] for r in gold_relations))
 
     results: Dict[str, Dict] = {}
@@ -502,10 +560,16 @@ def compute_pruner_metrics(docs: List[dict], threshold: float) -> Dict:
 # ---------------------------------------------------------------------------
 
 
-def evaluate(docs: List[dict]) -> Dict:
-    """Run full NER + RE evaluation and return all metrics in a flat dict."""
+def evaluate(docs: List[dict], sym_labels: Tuple[str, ...] = ()) -> Dict:
+    """Run full NER + RE evaluation and return all metrics in a flat dict.
+
+    Args:
+        docs: Prediction documents.
+        sym_labels: Tuple of symmetric/undirected relation labels passed
+            through to relation metric functions.
+    """
     metrics: Dict = {}
     metrics.update(compute_ner_metrics(docs))
-    metrics.update(compute_rel_metrics(docs))
-    metrics.update(compute_rel_metrics_with_ner(docs))
+    metrics.update(compute_rel_metrics(docs, sym_labels=sym_labels))
+    metrics.update(compute_rel_metrics_with_ner(docs, sym_labels=sym_labels))
     return metrics

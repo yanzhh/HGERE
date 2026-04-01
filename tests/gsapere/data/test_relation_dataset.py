@@ -478,3 +478,75 @@ class TestSelfRelationWarning:
         )
         # Self-relation is dropped; golden_labels should be empty
         assert len(ds.golden_labels) == 0
+
+
+# ---------------------------------------------------------------------------
+# Symmetric relation handling
+# ---------------------------------------------------------------------------
+
+
+class TestSymmetricRelationHandling:
+    def test_reverse_annotated_sym_rel_maps_to_canonical(
+        self,
+        relation_jsonl_sym_reverse: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels_with_sym: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        """A sym relation annotated as B→A should appear as A→B (canonical) in golden_labels."""
+        # relation_params has no_sym=True; override to no_sym=False so 'Similar' is sym
+        from gsapere.data.config import RelationDatasetParams
+
+        params_sym = RelationDatasetParams(
+            max_seq_length=64,
+            use_typemarker=False,
+            local_rank=-1,
+            model_type="bert",
+            no_sym=False,
+            nocross=False,
+            max_pair_length=10,
+        )
+        ds = _make_dataset(
+            relation_jsonl_sym_reverse, mock_tokenizer, mock_labels_with_sym, params_sym
+        )
+        # Gold has (2,2)→(1,1); canonical is (1,1)→(2,2)
+        doc_id = 0
+        sent_id = 0
+        canonical = ((doc_id, sent_id), (1, 1), (2, 2), "Similar")
+        reverse = ((doc_id, sent_id), (2, 2), (1, 1), "Similar")
+        assert canonical in ds.golden_labels
+        assert reverse not in ds.golden_labels
+
+    def test_duplicate_sym_directions_deduplicated(
+        self,
+        tmp_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels_with_sym: MagicMock,
+    ) -> None:
+        """Both A→B and B→A in gold for a sym label → only 1 entry in golden_labels."""
+        import json
+
+        doc = {
+            "doc_key": "doc_sym_both",
+            "sentences": [["word0", "word1", "word2", "word3"]],
+            "ner": [[[1, 1, "Method"], [2, 2, "Method"]]],
+            "predicted_ner": [[[1, 1, "Method"], [2, 2, "Method"]]],
+            "relations": [[[1, 1, 2, 2, "Similar"], [2, 2, 1, 1, "Similar"]]],
+        }
+        path = tmp_path / "sym_both.jsonl"
+        path.write_text(json.dumps(doc) + "\n")
+
+        from gsapere.data.config import RelationDatasetParams
+
+        params_sym = RelationDatasetParams(
+            max_seq_length=64,
+            use_typemarker=False,
+            local_rank=-1,
+            model_type="bert",
+            no_sym=False,
+            nocross=False,
+            max_pair_length=10,
+        )
+        ds = _make_dataset(path, mock_tokenizer, mock_labels_with_sym, params_sym)
+        sym_gold = [e for e in ds.golden_labels if e[-1] == "Similar"]
+        assert len(sym_gold) == 1
