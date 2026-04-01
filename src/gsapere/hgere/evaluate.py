@@ -63,6 +63,7 @@ def evaluate(
     rel_label_list = list(eval_dataset.label_list)
     n_rel_label = len(rel_label_list)
     sym_labels = list(eval_dataset.sym_labels)
+    sym_label_set = frozenset(sym_labels[1:])
     n_syms = len(sym_labels)
     n_unsyms = n_rel_label - n_syms
 
@@ -227,10 +228,23 @@ def evaluate(
         output_pred_ner = []
         output_pred_ner_proba = []
         for subj_span, subj_label, obj_span, obj_label, label, score in sent_relations:
-            sent_relation_keys.add((sent_id, subj_span, obj_span, label))
+            # Normalise symmetric relations to canonical direction for TP matching
+            if label in sym_label_set and obj_span < subj_span:
+                match_subj, match_obj = obj_span, subj_span
+                match_subj_lbl, match_obj_lbl = obj_label, subj_label
+            else:
+                match_subj, match_obj = subj_span, obj_span
+                match_subj_lbl, match_obj_lbl = subj_label, obj_label
+            sent_relation_keys.add((sent_id, match_subj, match_obj, label))
             sent_relation_keys_with_ner.add(
-                (sent_id, subj_span + (subj_label,), obj_span + (obj_label,), label)
+                (
+                    sent_id,
+                    match_subj + (match_subj_lbl,),
+                    match_obj + (match_obj_lbl,),
+                    label,
+                )
             )
+            # Preserve original model-predicted direction in output
             output_pred_rels.append(subj_span + obj_span + (label,))
             output_pred_rels_proba.append(subj_span + obj_span + (label, score))
         for ent_span, (label, score) in sent_ents_pred.items():
