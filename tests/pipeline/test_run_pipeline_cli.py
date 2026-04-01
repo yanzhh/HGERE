@@ -173,7 +173,9 @@ class TestValidateInputOutputTypes:
 
 def _make_mock_pipeline(docs: list[dict]) -> MagicMock:
     mock = MagicMock()
-    mock.process_documents.side_effect = lambda batch, **kw: [_make_enriched(d) for d in batch]
+    mock.process_documents.side_effect = lambda batch, **kw: [
+        _make_enriched(d) for d in batch
+    ]
     return mock
 
 
@@ -187,18 +189,27 @@ class TestCliSingleFile:
         mock_pipeline = _make_mock_pipeline(docs)
         with (
             patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
-            patch.object(sys, "argv", [
-                "run-pipeline",
-                "--config", "fake.yaml",
-                "--input", str(input_file),
-                "--output", str(output_file),
-            ]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(input_file),
+                    "--output",
+                    str(output_file),
+                ],
+            ),
         ):
             MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
 
         assert output_file.exists()
-        lines = [json.loads(l) for l in output_file.read_text().splitlines() if l]
+        lines = [
+            json.loads(line) for line in output_file.read_text().splitlines() if line
+        ]
         assert len(lines) == 2
         assert all("predicted_ner" in d for d in lines)
 
@@ -211,11 +222,17 @@ class TestCliSingleFile:
         mock_pipeline = _make_mock_pipeline(docs)
         with (
             patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
-            patch.object(sys, "argv", [
-                "run-pipeline",
-                "--config", "fake.yaml",
-                "--input", str(input_file),
-            ]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(input_file),
+                ],
+            ),
         ):
             MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
@@ -225,12 +242,19 @@ class TestCliSingleFile:
     def test_missing_input_exits(self, tmp_path: Path) -> None:
         with (
             patch("gsapere.commands.run_pipeline.Pipeline"),
-            patch.object(sys, "argv", [
-                "run-pipeline",
-                "--config", "fake.yaml",
-                "--input", str(tmp_path / "nonexistent.jsonl"),
-                "--output", str(tmp_path / "out.jsonl"),
-            ]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(tmp_path / "nonexistent.jsonl"),
+                    "--output",
+                    str(tmp_path / "out.jsonl"),
+                ],
+            ),
             pytest.raises(SystemExit),
         ):
             cli()
@@ -250,12 +274,19 @@ class TestCliDirectoryMode:
 
         with (
             patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
-            patch.object(sys, "argv", [
-                "run-pipeline",
-                "--config", "fake.yaml",
-                "--input", str(input_dir),
-                "--output", str(output_dir),
-            ]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                ],
+            ),
         ):
             MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
@@ -272,12 +303,19 @@ class TestCliDirectoryMode:
         mock_pipeline = _make_mock_pipeline([_make_doc("x")])
         with (
             patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
-            patch.object(sys, "argv", [
-                "run-pipeline",
-                "--config", "fake.yaml",
-                "--input", str(input_dir),
-                "--output", str(output_dir),
-            ]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                ],
+            ),
         ):
             MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
@@ -293,11 +331,17 @@ class TestCliDirectoryMode:
         mock_pipeline = _make_mock_pipeline([_make_doc("x")])
         with (
             patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
-            patch.object(sys, "argv", [
-                "run-pipeline",
-                "--config", "fake.yaml",
-                "--input", str(input_dir),
-            ]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(input_dir),
+                ],
+            ),
         ):
             MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
@@ -314,12 +358,19 @@ class TestCliDirectoryMode:
         mock_pipeline = _make_mock_pipeline([_make_doc("x")])
         with (
             patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
-            patch.object(sys, "argv", [
-                "run-pipeline",
-                "--config", "fake.yaml",
-                "--input", str(input_dir),
-                "--output", str(output_dir),
-            ]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                ],
+            ),
         ):
             MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
@@ -336,12 +387,19 @@ class TestCliDirectoryMode:
         mock_pipeline = _make_mock_pipeline([_make_doc("a"), _make_doc("b")])
         with (
             patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
-            patch.object(sys, "argv", [
-                "run-pipeline",
-                "--config", "fake.yaml",
-                "--input", str(input_dir),
-                "--output", str(output_dir),
-            ]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                ],
+            ),
         ):
             MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
@@ -357,12 +415,19 @@ class TestCliDirectoryMode:
 
         with (
             patch("gsapere.commands.run_pipeline.Pipeline"),
-            patch.object(sys, "argv", [
-                "run-pipeline",
-                "--config", "fake.yaml",
-                "--input", str(input_dir),
-                "--output", str(output_file),
-            ]),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_file),
+                ],
+            ),
             pytest.raises(SystemExit),
         ):
             cli()

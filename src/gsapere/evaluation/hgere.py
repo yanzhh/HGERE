@@ -72,39 +72,16 @@ def _gold_relations(docs: List[dict]) -> List[Tuple]:
     return relations
 
 
-def _gold_relations_with_ner(docs: List[dict]) -> List[Tuple]:
-    """Return gold relations augmented with gold entity types.
-
-    Returns (doc_id, sent_idx, s_start, s_end, s_type, o_start, o_end, o_type, label).
-    """
-    ner_lookup: Dict[Tuple, str] = {}
+def _gold_span_types(docs: List[dict]) -> Dict[Tuple, set]:
+    """Return a dict mapping (doc_id, sent_idx, start, end) to the set of all gold types."""
+    lookup: Dict[Tuple, set] = {}
     for doc in docs:
         doc_id = doc["doc_id"]
         for sent_idx, sent_ner in enumerate(doc.get("ner", [])):
             for start, end, etype in sent_ner:
-                ner_lookup[(doc_id, sent_idx, start, end)] = etype
-
-    relations = []
-    for doc in docs:
-        doc_id = doc["doc_id"]
-        for sent_idx, sent_rels in enumerate(doc.get("relations", [])):
-            for s_start, s_end, o_start, o_end, label in sent_rels:
-                s_type = ner_lookup.get((doc_id, sent_idx, s_start, s_end), "")
-                o_type = ner_lookup.get((doc_id, sent_idx, o_start, o_end), "")
-                relations.append(
-                    (
-                        doc_id,
-                        sent_idx,
-                        s_start,
-                        s_end,
-                        s_type,
-                        o_start,
-                        o_end,
-                        o_type,
-                        label,
-                    )
-                )
-    return relations
+                key = (doc_id, sent_idx, start, end)
+                lookup.setdefault(key, set()).add(etype)
+    return lookup
 
 
 # ---------------------------------------------------------------------------
@@ -216,11 +193,35 @@ def _macro_weighted(
 
 
 def compute_ner_metrics(docs: List[dict]) -> Dict:
-    """Compute overall NER metrics: micro, macro, and weighted-macro P/R/F1."""
-    gold = set(_gold_entities(docs))
-    pred = set(_predicted_entities(docs))
-    tp = len(gold & pred)
-    micro_p, micro_r, micro_f1 = _prf1(tp, len(gold), len(pred))
+    """Compute overall NER metrics: micro, macro, and weighted-macro P/R/F1.
+
+    For spans with multiple gold labels (double annotations), a predicted span
+    is a TP if its predicted type matches ANY valid gold type. The recall
+    denominator is the number of unique gold span positions (not annotation count)
+    since the model can only predict one type per span.
+    """
+    gold_span_types = _gold_span_types(
+        docs
+    )  # (doc_id, sent_idx, start, end) → set[str]
+    n_gold = len(gold_span_types)
+    n_gold_annotations = sum(len(v) for v in gold_span_types.values())
+
+    pred_entities = _predicted_entities(docs)
+
+    # TP: predicted span whose type matches any valid gold type
+    tp = 0
+    seen_pred_spans: set = set()
+    for doc_id, sent_idx, start, end, pred_type in pred_entities:
+        span_key = (doc_id, sent_idx, start, end)
+        if span_key in seen_pred_spans:
+            continue
+        seen_pred_spans.add(span_key)
+        valid_types = gold_span_types.get(span_key, set())
+        if pred_type in valid_types:
+            tp += 1
+
+    n_pred = len(seen_pred_spans)
+    micro_p, micro_r, micro_f1 = _prf1(tp, n_gold, n_pred)
 
     per_type = compute_ner_metrics_per_type(docs)
     macro_p, macro_r, macro_f1 = _macro_weighted(per_type, weighted=False)
@@ -237,10 +238,12 @@ def compute_ner_metrics(docs: List[dict]) -> Dict:
         "ner_wmacro_recall": wmacro_r,
         "ner_wmacro_f1": wmacro_f1,
         "ner_tp": tp,
-        "ner_fp": len(pred - gold),
-        "ner_fn": len(gold - pred),
-        "ner_n_gold": len(gold),
-        "ner_n_pred": len(pred),
+        "ner_fp": n_pred - tp,
+        "ner_fn": n_gold - tp,
+        "ner_n_gold": n_gold,
+        "ner_n_pred": n_pred,
+        "ner_n_gold_unique_spans": n_gold,
+        "ner_n_gold_annotations": n_gold_annotations,
     }
 
 
@@ -311,24 +314,89 @@ def compute_rel_metrics(docs: List[dict]) -> Dict:
 def compute_rel_metrics_with_ner(docs: List[dict]) -> Dict:
     """Compute relation P/R/F1 where entity types must also match (re+ metric).
 
-    Returns micro, macro, and weighted-macro averages.
+    For spans with multiple gold labels (double annotations), a predicted
+    relation is a TP if the span pair + relation label matches gold AND the
+    predicted entity type for each span matches ANY valid gold type for that
+    span. The recall denominator is the number of unique gold relations (same
+    as the RE metric).
     """
-    gold_list = _gold_relations_with_ner(docs)
-    pred_list = _predicted_relations_with_ner(docs)
-    gold = set(gold_list)
-    pred = set(pred_list)
-    tp = len(gold & pred)
-    micro_p, micro_r, micro_f1 = _prf1(tp, len(gold), len(pred))
+    gold_span_types = _gold_span_types(docs)
+    gold_rel_set = set(_gold_relations(docs))
+    n_gold = len(gold_rel_set)
 
-    # Per-type (label is last element)
-    all_types = sorted(set(r[-1] for r in gold_list))
+    pred_list = _predicted_relations_with_ner(docs)
+
+    # Unique predicted relations (span-pair + label, ignoring entity types for n_pred)
+    n_pred = len(
+        {(d, si, ss, se, os, oe, lb) for d, si, ss, se, _, os, oe, _, lb in pred_list}
+    )
+
+    # TP: relation matches gold span-pair+label AND both entity types are valid
+    seen_tp: set = set()
+    tp = 0
+    for (
+        doc_id,
+        sent_idx,
+        s_start,
+        s_end,
+        s_type,
+        o_start,
+        o_end,
+        o_type,
+        label,
+    ) in pred_list:
+        gold_key = (doc_id, sent_idx, s_start, s_end, o_start, o_end, label)
+        if gold_key not in gold_rel_set:
+            continue
+        valid_s = gold_span_types.get((doc_id, sent_idx, s_start, s_end), set())
+        valid_o = gold_span_types.get((doc_id, sent_idx, o_start, o_end), set())
+        if s_type in valid_s and o_type in valid_o and gold_key not in seen_tp:
+            tp += 1
+            seen_tp.add(gold_key)
+
+    micro_p, micro_r, micro_f1 = _prf1(tp, n_gold, n_pred)
+
+    # Per-type metrics
+    all_types = sorted(set(r[-1] for r in gold_rel_set))
     per_type: Dict[str, Dict] = {}
     for rtype in all_types:
-        g = {r for r in gold_list if r[-1] == rtype}
-        p_set = {r for r in pred_list if r[-1] == rtype}
-        tp_t = len(g & p_set)
-        pp, rr, ff = _prf1(tp_t, len(g), len(p_set))
-        per_type[rtype] = {"precision": pp, "recall": rr, "f1": ff, "n_gold": len(g)}
+        type_gold = {r for r in gold_rel_set if r[-1] == rtype}
+        type_pred = [row for row in pred_list if row[-1] == rtype]
+        type_n_gold = len(type_gold)
+        type_n_pred = len(
+            {
+                (d, si, ss, se, os, oe, lb)
+                for d, si, ss, se, _, os, oe, _, lb in type_pred
+            }
+        )
+        type_seen: set = set()
+        type_tp = 0
+        for (
+            doc_id,
+            sent_idx,
+            s_start,
+            s_end,
+            s_type,
+            o_start,
+            o_end,
+            o_type,
+            label,
+        ) in type_pred:
+            gold_key = (doc_id, sent_idx, s_start, s_end, o_start, o_end, label)
+            if gold_key not in type_gold:
+                continue
+            valid_s = gold_span_types.get((doc_id, sent_idx, s_start, s_end), set())
+            valid_o = gold_span_types.get((doc_id, sent_idx, o_start, o_end), set())
+            if s_type in valid_s and o_type in valid_o and gold_key not in type_seen:
+                type_tp += 1
+                type_seen.add(gold_key)
+        pp, rr, ff = _prf1(type_tp, type_n_gold, type_n_pred)
+        per_type[rtype] = {
+            "precision": pp,
+            "recall": rr,
+            "f1": ff,
+            "n_gold": type_n_gold,
+        }
 
     macro_p, macro_r, macro_f1 = _macro_weighted(per_type, weighted=False)
     wmacro_p, wmacro_r, wmacro_f1 = _macro_weighted(per_type, weighted=True)
@@ -344,10 +412,10 @@ def compute_rel_metrics_with_ner(docs: List[dict]) -> Dict:
         "re+_wmacro_recall": wmacro_r,
         "re+_wmacro_f1": wmacro_f1,
         "re+_tp": tp,
-        "re+_fp": len(pred - gold),
-        "re+_fn": len(gold - pred),
-        "re+_n_gold": len(gold),
-        "re+_n_pred": len(pred),
+        "re+_fp": n_pred - tp,
+        "re+_fn": n_gold - tp,
+        "re+_n_gold": n_gold,
+        "re+_n_pred": n_pred,
     }
 
 

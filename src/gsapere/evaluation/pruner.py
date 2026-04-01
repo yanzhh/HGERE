@@ -25,6 +25,7 @@ lmin = min_mentions_num, lmax = max_mentions_num.
 Matching is span-level (doc_id, sent_idx, start, end) because the pruner does
 not predict entity types.
 """
+
 import json
 from itertools import product
 from typing import Dict, List, Optional, Tuple
@@ -36,6 +37,7 @@ from sklearn.metrics import precision_recall_fscore_support  # noqa: F401 (avail
 # I/O
 # ---------------------------------------------------------------------------
 
+
 def load_predictions(filepath: str) -> List[dict]:
     """Load entity predictions from a jsonl file."""
     with open(filepath) as f:
@@ -45,6 +47,7 @@ def load_predictions(filepath: str) -> List[dict]:
 # ---------------------------------------------------------------------------
 # Entity extraction
 # ---------------------------------------------------------------------------
+
 
 def _gold_spans(docs: List[dict]) -> List[Tuple]:
     """Return (doc_id, sent_idx, start, end) for every gold entity."""
@@ -93,6 +96,7 @@ def _predicted_spans(docs: List[dict], threshold: float) -> List[Tuple]:
 # Core metrics
 # ---------------------------------------------------------------------------
 
+
 def _compute_counts(
     gold_spans: List[Tuple],
     predicted_spans: List[Tuple],
@@ -115,7 +119,13 @@ def _compute_counts(
     tp = len(gold_set & pred_set)
     fp = len(pred_set - gold_set)
     fn = len(gold_set - pred_set)
-    counts = {"tp": tp, "fp": fp, "fn": fn, "n_gold": len(gold_set), "n_pred": len(pred_set)}
+    counts = {
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "n_gold": len(gold_set),
+        "n_pred": len(pred_set),
+    }
     if all_candidate_spans is not None:
         counts["n_gold_in_pool"] = len(gold_set & set(all_candidate_spans))
     return counts
@@ -126,9 +136,12 @@ def _metrics_from_counts(counts: Dict) -> Dict:
     n_pred = counts["n_pred"]
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1        = (2 * precision * recall / (precision + recall)
-                 if (precision + recall) > 0 else 0.0)
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = (
+        2 * precision * recall / (precision + recall)
+        if (precision + recall) > 0
+        else 0.0
+    )
     # Share of predicted candidates that are false positives (FP / n_predicted).
     false_positive_share = fp / n_pred if n_pred > 0 else 0.0
 
@@ -151,12 +164,14 @@ def compute_metrics(
     Pass *all_candidate_spans* (the full pruner pool at threshold=0) to also
     compute n_gold_in_pool, which enables a correct TN calculation.
     """
-    return _metrics_from_counts(_compute_counts(gold_spans, predicted_spans, all_candidate_spans))
+    return _metrics_from_counts(
+        _compute_counts(gold_spans, predicted_spans, all_candidate_spans)
+    )
 
 
 def compute_metrics_per_type(
-    gold_entities: List[Tuple],        # (doc_id, sent_idx, start, end, type)
-    predicted_spans: List[Tuple],      # (doc_id, sent_idx, start, end)  — no type
+    gold_entities: List[Tuple],  # (doc_id, sent_idx, start, end, type)
+    predicted_spans: List[Tuple],  # (doc_id, sent_idx, start, end)  — no type
     entity_types: List[str],
 ) -> Dict[str, Dict]:
     """Compute recall per gold entity type.
@@ -190,20 +205,23 @@ def compute_metrics_per_type(
 # Threshold-level API
 # ---------------------------------------------------------------------------
 
+
 def compute_metrics_at_threshold(
     docs: List[dict],
     threshold: float,
     entity_types: List[str] = None,
 ) -> Dict:
     """Compute all metrics at a single threshold."""
-    gold_spans      = _gold_spans(docs)
-    all_candidates  = _all_candidate_spans(docs)
-    predicted       = _predicted_spans(docs, threshold)
-    metrics         = compute_metrics(gold_spans, predicted, all_candidate_spans=all_candidates)
+    gold_spans = _gold_spans(docs)
+    all_candidates = _all_candidate_spans(docs)
+    predicted = _predicted_spans(docs, threshold)
+    metrics = compute_metrics(gold_spans, predicted, all_candidate_spans=all_candidates)
     metrics["threshold"] = threshold
     if entity_types:
         gold_entities = _gold_entities(docs)
-        metrics["per_type"] = compute_metrics_per_type(gold_entities, predicted, entity_types)
+        metrics["per_type"] = compute_metrics_per_type(
+            gold_entities, predicted, entity_types
+        )
     return metrics
 
 
@@ -216,7 +234,7 @@ def threshold_sweep(
 
     Gold spans are extracted once; only predictions change per threshold.
     """
-    gold_spans    = _gold_spans(docs)
+    gold_spans = _gold_spans(docs)
     gold_entities = _gold_entities(docs) if entity_types else None
     results = []
     for t in thresholds:
@@ -224,7 +242,9 @@ def threshold_sweep(
         m = compute_metrics(gold_spans, predicted)
         m["threshold"] = t
         if entity_types:
-            m["per_type"] = compute_metrics_per_type(gold_entities, predicted, entity_types)
+            m["per_type"] = compute_metrics_per_type(
+                gold_entities, predicted, entity_types
+            )
         results.append(m)
     return results
 
@@ -270,7 +290,7 @@ def find_threshold_for_recall(
         mid = (lo + hi) / 2.0
 
     predicted = _predicted_spans(docs, best_threshold)
-    metrics   = compute_metrics(gold_spans, predicted)
+    metrics = compute_metrics(gold_spans, predicted)
     metrics["threshold"] = best_threshold
     return best_threshold, metrics
 
@@ -278,6 +298,7 @@ def find_threshold_for_recall(
 # ---------------------------------------------------------------------------
 # Top-K selection (original paper approach)
 # ---------------------------------------------------------------------------
+
 
 def _sent_length(sent_preds: List) -> int:
     """Infer sentence length from the maximum token index in predicted spans + 1."""
@@ -326,18 +347,24 @@ def compute_metrics_topk(
     entity_types: Optional[List[str]] = None,
 ) -> Dict:
     """Compute metrics using the top-K selection strategy."""
-    gold_spans     = _gold_spans(docs)
+    gold_spans = _gold_spans(docs)
     all_candidates = _all_candidate_spans(docs)
-    predicted      = _predicted_spans_topk(docs, topk_ratio, min_mentions_num, max_mentions_num)
-    metrics        = compute_metrics(gold_spans, predicted, all_candidate_spans=all_candidates)
-    metrics.update({
-        "topk_ratio":       topk_ratio,
-        "min_mentions_num": min_mentions_num,
-        "max_mentions_num": max_mentions_num,
-    })
+    predicted = _predicted_spans_topk(
+        docs, topk_ratio, min_mentions_num, max_mentions_num
+    )
+    metrics = compute_metrics(gold_spans, predicted, all_candidate_spans=all_candidates)
+    metrics.update(
+        {
+            "topk_ratio": topk_ratio,
+            "min_mentions_num": min_mentions_num,
+            "max_mentions_num": max_mentions_num,
+        }
+    )
     if entity_types:
         gold_entities = _gold_entities(docs)
-        metrics["per_type"] = compute_metrics_per_type(gold_entities, predicted, entity_types)
+        metrics["per_type"] = compute_metrics_per_type(
+            gold_entities, predicted, entity_types
+        )
     return metrics
 
 
@@ -372,22 +399,24 @@ def optimize_topk_params(
                   sorted by false_positive_share ascending (feasible first)
     """
     if topk_ratio_values is None:
-        topk_ratio_values = [round(v * 0.1, 1) for v in range(1, 11)]   # 0.1 … 1.0
+        topk_ratio_values = [round(v * 0.1, 1) for v in range(1, 11)]  # 0.1 … 1.0
     if min_mentions_num_values is None:
         min_mentions_num_values = [1, 2, 3, 4, 5]
     if max_mentions_num_values is None:
         max_mentions_num_values = [10, 15, 20, 25, 30]
 
     all_results = []
-    for lam, lmin, lmax in product(topk_ratio_values, min_mentions_num_values, max_mentions_num_values):
+    for lam, lmin, lmax in product(
+        topk_ratio_values, min_mentions_num_values, max_mentions_num_values
+    ):
         if lmin > lmax:
             continue
         m = compute_metrics_topk(docs, lam, lmin, lmax, entity_types=entity_types)
         all_results.append(m)
 
     # Sort: feasible configs (recall >= target) first by fp_share, then infeasible by recall desc
-    feasible   = [r for r in all_results if r["recall"] >= target_recall]
-    infeasible = [r for r in all_results if r["recall"] <  target_recall]
+    feasible = [r for r in all_results if r["recall"] >= target_recall]
+    infeasible = [r for r in all_results if r["recall"] < target_recall]
 
     feasible.sort(key=lambda r: r["false_positive_share"])
     infeasible.sort(key=lambda r: r["recall"], reverse=True)

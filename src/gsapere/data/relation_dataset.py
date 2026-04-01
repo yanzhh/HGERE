@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+from collections import Counter
 from typing import Any
 
 import numpy as np
@@ -73,6 +74,7 @@ class RelationDataset(DocumentDataset):
         self.data: list[RelationSentence] = []
         self.sizes: list[int] = []
         self.ner_golden_labels: set[tuple[Any, ...]] = set()
+        self.ner_golden_span_types: dict[tuple, set[str]] = {}
         self.golden_labels: set[tuple[Any, ...]] = set()
         self.golden_labels_with_ner: set[tuple[Any, ...]] = set()
         # Maps (doc_idx, sent_idx) → candidate NER spans fed into HGERE.
@@ -186,13 +188,21 @@ class RelationDataset(DocumentDataset):
 
                 self.ner_tot_recall += len(ner_sent_gold)
 
-                entity_labels_gold, ner_golden_new = self._collect_gold_entity_labels(
-                    ner_sent_gold=ner_sent_gold,
-                    ner_label_map=ner_label_map,
-                    doc_idx=doc_idx,
-                    sentence_idx=sentence_idx,
+                entity_labels_gold, gold_span_multi_types, ner_golden_new = (
+                    self._collect_gold_entity_labels(
+                        ner_sent_gold=ner_sent_gold,
+                        ner_label_map=ner_label_map,
+                        doc_idx=doc_idx,
+                        sentence_idx=sentence_idx,
+                        logger=self.logger,
+                    )
                 )
                 self.ner_golden_labels.update(ner_golden_new)
+
+                # Store multi-type lookup for evaluation
+                for span, labels in gold_span_multi_types.items():
+                    key = (doc_idx, sentence_idx) + span
+                    self.ner_golden_span_types[key] = labels
 
                 self.global_predicted_ners[(doc_idx, sentence_idx)] = list(
                     ner_candidates_sent
@@ -216,13 +226,20 @@ class RelationDataset(DocumentDataset):
                     + [self.tokenizer.sep_token]
                 )
 
+                candidate_span_set = {
+                    (start, end) for start, end, _ in ner_candidates_sent
+                }
+
                 pos2label, golden_new, golden_with_ner_new = self._build_pos2label(
                     sentence_relations=sentence_relations,
                     label_map=label_map,
                     sym_labels=self.sym_labels,
                     entity_labels_gold=entity_labels_gold,
+                    gold_span_multi_types=gold_span_multi_types,
                     doc_idx=doc_idx,
                     sentence_idx=sentence_idx,
+                    candidate_span_set=candidate_span_set,
+                    logger=self.logger,
                 )
                 self.golden_labels.update(golden_new)
                 self.golden_labels_with_ner.update(golden_with_ner_new)
@@ -360,24 +377,61 @@ class RelationDataset(DocumentDataset):
         ner_label_map: dict[str, int],
         doc_idx: int,
         sentence_idx: int,
-    ) -> tuple[dict[tuple[int, int], str], set[tuple[Any, ...]]]:
-        """Build a (token_begin, token_end) → label map for gold entities in one sentence.
+        logger: Any,
+    ) -> tuple[
+        dict[tuple[int, int], str],
+        dict[tuple[int, int], set[str]],
+        set[tuple[Any, ...]],
+    ]:
+        """Build gold entity label maps for one sentence.
 
-        Returns a tuple of:
-        - entity_labels_gold: span → label dict for non-NIL gold entities.
-        - ner_golden_additions: set entries to merge into self.ner_golden_labels
-          for final NER evaluation.
+        For spans with multiple annotations (different labels at the same position),
+        picks the alphabetically-first label for training supervision (deterministic
+        tiebreaker; all labels share the same relation connectivity since relations
+        are span-position-based, so connectivity cannot distinguish between them).
 
-        Labels not in the NER label set are mapped to NIL and excluded from the dict.
+        Returns:
+        - entity_labels_gold: span → single training label (non-NIL).
+        - gold_span_multi_types: span → set of all valid gold labels.
+        - ner_golden_additions: set entries for ner_golden_labels (all annotations).
+
+        Logs a WARNING listing dropped label counts for any span with >1 annotation.
         """
-        entity_labels_gold: dict[tuple[int, int], str] = {}
+        gold_span_multi_types: dict[tuple[int, int], set[str]] = {}
         ner_golden_additions: set[tuple[Any, ...]] = set()
+
         for start, end, label in ner_sent_gold:
             label = "NIL" if label not in ner_label_map else label
-            if label != "NIL":
-                entity_labels_gold[(start, end)] = label
-                ner_golden_additions.add(((doc_idx, sentence_idx), (start, end), label))
-        return entity_labels_gold, ner_golden_additions
+            if label == "NIL":
+                continue
+            span = (start, end)
+            gold_span_multi_types.setdefault(span, set()).add(label)
+            ner_golden_additions.add(((doc_idx, sentence_idx), span, label))
+
+        entity_labels_gold: dict[tuple[int, int], str] = {}
+        dropped_by_label: Counter[str] = Counter()
+        for span, labels in gold_span_multi_types.items():
+            chosen = min(labels)  # alphabetically first for determinism
+            entity_labels_gold[span] = chosen
+            if len(labels) > 1:
+                for dropped in labels - {chosen}:
+                    dropped_by_label[dropped] += 1
+
+        if dropped_by_label:
+            summary = ", ".join(
+                f"{lbl}:{cnt}" for lbl, cnt in sorted(dropped_by_label.items())
+            )
+            logger.warning(
+                "doc=%d sent=%d: %d span(s) with multiple NER labels "
+                "— training uses alphabetically-first label; "
+                "dropped label counts: %s",
+                doc_idx,
+                sentence_idx,
+                len(dropped_by_label),
+                summary,
+            )
+
+        return entity_labels_gold, gold_span_multi_types, ner_golden_additions
 
     @staticmethod
     def _build_pos2label(
@@ -385,8 +439,11 @@ class RelationDataset(DocumentDataset):
         label_map: dict[str, int],
         sym_labels: list[str],
         entity_labels_gold: dict[tuple[int, int], str],
+        gold_span_multi_types: dict[tuple[int, int], set[str]],
         doc_idx: int,
         sentence_idx: int,
+        candidate_span_set: set[tuple[int, int]],
+        logger: Any,
     ) -> tuple[
         dict[tuple[int, int, int, int], int],
         set[tuple[Any, ...]],
@@ -397,16 +454,22 @@ class RelationDataset(DocumentDataset):
         Returns a tuple of:
         - pos2label: span-pair → label index dict used during candidate construction.
         - golden_additions: set entries to merge into self.golden_labels.
-        - golden_with_ner_additions: set entries to merge into self.golden_labels_with_ner.
+        - golden_with_ner_additions: set entries for golden_labels_with_ner (RE+).
 
-        For symmetric relations, adds the reverse direction with the same label.
-        For asymmetric relations, the reverse direction is added with an index
-        offset so the model can score (A→B) and (B→A) independently:
-            reverse_idx = original_idx + n_labels - n_sym_labels
+        For RE+ evaluation, golden_with_ner_additions is expanded to include ALL
+        valid (s_type, o_type) combinations from gold_span_multi_types so that the
+        model is credited for predicting any valid entity type for a doubly-annotated
+        span.
+
+        Self-relations (subj_span == obj_span) are dropped and logged as WARNING.
+        Relations where one or both spans are absent from candidate_span_set are
+        still added to the gold sets for evaluation but are logged as WARNING grouped
+        by (subj_label, rel_label, obj_label) since the model cannot train on them.
         """
         pos2label: dict[tuple[int, int, int, int], int] = {}
         golden_additions: set[tuple[Any, ...]] = set()
         golden_with_ner_additions: set[tuple[Any, ...]] = set()
+        dropped_sig_counter: Counter[tuple[str, str, str]] = Counter()
 
         for (
             subj_begin,
@@ -418,6 +481,30 @@ class RelationDataset(DocumentDataset):
             relation_label = (
                 "NIL" if relation_label not in label_map else relation_label
             )
+
+            # Self-relation: same span as both subject and object
+            if subj_begin == obj_begin and subj_end == obj_end:
+                subj_types = gold_span_multi_types.get((subj_begin, subj_end), {"NIL"})
+                logger.warning(
+                    "doc=%d sent=%d: self-relation at span (%d,%d) "
+                    "labels=%s rel=%s — dropped (model cannot predict self-relations)",
+                    doc_idx,
+                    sentence_idx,
+                    subj_begin,
+                    subj_end,
+                    "/".join(sorted(subj_types)),
+                    relation_label,
+                )
+                continue
+
+            # Track relations whose spans are absent from the candidate set
+            subj_in = (subj_begin, subj_end) in candidate_span_set
+            obj_in = (obj_begin, obj_end) in candidate_span_set
+            if not subj_in or not obj_in:
+                subj_label = entity_labels_gold.get((subj_begin, subj_end), "NIL")
+                obj_label = entity_labels_gold.get((obj_begin, obj_end), "NIL")
+                dropped_sig_counter[(subj_label, relation_label, obj_label)] += 1
+
             pos2label[(subj_begin, subj_end, obj_begin, obj_end)] = label_map[
                 relation_label
             ]
@@ -429,22 +516,27 @@ class RelationDataset(DocumentDataset):
                     relation_label,
                 )
             )
-            golden_with_ner_additions.add(
-                (
-                    (doc_idx, sentence_idx),
-                    (
-                        subj_begin,
-                        subj_end,
-                        entity_labels_gold.get((subj_begin, subj_end), "NIL"),
-                    ),
-                    (
-                        obj_begin,
-                        obj_end,
-                        entity_labels_gold.get((obj_begin, obj_end), "NIL"),
-                    ),
-                    relation_label,
-                )
+
+            # Expand RE+ gold to all valid (s_type, o_type) combos
+            s_types = gold_span_multi_types.get(
+                (subj_begin, subj_end),
+                {entity_labels_gold.get((subj_begin, subj_end), "NIL")},
             )
+            o_types = gold_span_multi_types.get(
+                (obj_begin, obj_end),
+                {entity_labels_gold.get((obj_begin, obj_end), "NIL")},
+            )
+            for s_type in s_types:
+                for o_type in o_types:
+                    golden_with_ner_additions.add(
+                        (
+                            (doc_idx, sentence_idx),
+                            (subj_begin, subj_end, s_type),
+                            (obj_begin, obj_end, o_type),
+                            relation_label,
+                        )
+                    )
+
             if relation_label in sym_labels[1:]:
                 # Symmetric: reverse direction carries the same label.
                 golden_additions.add(
@@ -456,8 +548,21 @@ class RelationDataset(DocumentDataset):
                     )
                 )
 
-        # Add reverse directions to pos2label for all relations so the model
-        # receives a training signal for both (A→B) and (B→A).
+        if dropped_sig_counter:
+            sig_summary = "; ".join(
+                f"({s},{r},{o}):{c}"
+                for (s, r, o), c in sorted(dropped_sig_counter.items())
+            )
+            logger.warning(
+                "doc=%d sent=%d: %d relation(s) not in candidate set "
+                "(model cannot train on them); signatures (subj,rel,obj):count — %s",
+                doc_idx,
+                sentence_idx,
+                sum(dropped_sig_counter.values()),
+                sig_summary,
+            )
+
+        # Add reverse directions to pos2label for all (non-self) relations
         for (
             subj_begin,
             subj_end,
@@ -465,6 +570,8 @@ class RelationDataset(DocumentDataset):
             obj_end,
             relation_label,
         ) in sentence_relations:
+            if subj_begin == obj_begin and subj_end == obj_end:
+                continue
             relation_label = (
                 "NIL" if relation_label not in label_map else relation_label
             )

@@ -10,18 +10,24 @@ The test writes to a temporary directory so it never touches the golden file.
 
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-GOLDEN_REPORT = ROOT / "reports" / "pruner" / "scier" / "scier_preds" / "threshold_analysis_report.md"
-SCRIPT        = ROOT / "src" / "gsapere" / "evaluation" / "threshold_analysis.py"
-DEV_PRED      = ROOT / "saves" / "scier" / "pruner" / "tamborin" / "ent_pred_dev.json"
-TRAIN_PRED    = ROOT / "saves" / "scier" / "pruner" / "tamborin" / "ent_pred_train.json"
-TEST_PRED     = ROOT / "saves" / "scier" / "pruner" / "tamborin" / "ent_pred_test.json"
+GOLDEN_REPORT = (
+    ROOT
+    / "reports"
+    / "pruner"
+    / "scier"
+    / "scier_preds"
+    / "threshold_analysis_report.md"
+)
+SCRIPT = ROOT / "src" / "gsapere" / "evaluation" / "threshold_analysis.py"
+DEV_PRED = ROOT / "saves" / "scier" / "pruner" / "tamborin" / "ent_pred_dev.json"
+TRAIN_PRED = ROOT / "saves" / "scier" / "pruner" / "tamborin" / "ent_pred_train.json"
+TEST_PRED = ROOT / "saves" / "scier" / "pruner" / "tamborin" / "ent_pred_test.json"
 
 
 def _skip_if_missing(*paths: Path):
@@ -35,12 +41,18 @@ def test_report_matches_golden(tmp_path):
 
     result = subprocess.run(
         [
-            sys.executable, str(SCRIPT),
-            "--pred",       str(DEV_PRED.relative_to(ROOT)),
-            "--train-pred", str(TRAIN_PRED.relative_to(ROOT)),
-            "--test-pred",  str(TEST_PRED.relative_to(ROOT)),
-            "--dataset",    "scier",
-            "--out-dir",    str(tmp_path),
+            sys.executable,
+            str(SCRIPT),
+            "--pred",
+            str(DEV_PRED.relative_to(ROOT)),
+            "--train-pred",
+            str(TRAIN_PRED.relative_to(ROOT)),
+            "--test-pred",
+            str(TEST_PRED.relative_to(ROOT)),
+            "--dataset",
+            "scier",
+            "--out-dir",
+            str(tmp_path),
         ],
         capture_output=True,
         text=True,
@@ -54,7 +66,7 @@ def test_report_matches_golden(tmp_path):
     )
 
     generated = (tmp_path / "threshold_analysis_report.md").read_text()
-    golden    = GOLDEN_REPORT.read_text()
+    golden = GOLDEN_REPORT.read_text()
 
     assert generated == golden, (
         "Generated report does not match the golden reference.\n\n"

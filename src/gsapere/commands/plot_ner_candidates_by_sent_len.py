@@ -10,15 +10,15 @@ Usage:
         --out documentation/ner_candidates_by_sent_len_t0.1.png \
         --title "SciERC · focal-prefilter-2e-5 · dev set"
 """
+
 import argparse
 import json
-import math
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import numpy as np
 
 # ── sentence-length bins ──────────────────────────────────────────────────────
@@ -33,10 +33,11 @@ def sent_bin(n_tokens):
     for lo, hi in BINS:
         if lo <= n_tokens <= hi:
             return (lo, hi)
-    return None   # outside range — excluded
+    return None  # outside range — excluded
 
 
 # ── filtering strategies ──────────────────────────────────────────────────────
+
 
 def candidates_threshold(sent_preds, threshold):
     """Return spans with prob >= threshold."""
@@ -51,6 +52,7 @@ def candidates_topk(sent_preds, sent_len, factor, kmin, kmax):
 
 
 # ── per-sentence data extraction ──────────────────────────────────────────────
+
 
 def extract(docs, threshold, topk_factor, topk_min, topk_max):
     """
@@ -83,7 +85,9 @@ def extract(docs, threshold, topk_factor, topk_min, topk_max):
                 pred_thresh_set.add((uid, start, end))
 
             # top-k
-            cands_k = candidates_topk(sent_preds, n_tokens, topk_factor, topk_min, topk_max)
+            cands_k = candidates_topk(
+                sent_preds, n_tokens, topk_factor, topk_min, topk_max
+            )
             if b is not None:
                 topk_rows.append((n_tokens, len(cands_k)))
             for start, end, *_ in cands_k:
@@ -100,6 +104,7 @@ def extract(docs, threshold, topk_factor, topk_min, topk_max):
 
 # ── group by bin ──────────────────────────────────────────────────────────────
 
+
 def group_by_bin(rows):
     groups = {b: [] for b in BINS}
     for n_tokens, n_cands in rows:
@@ -111,29 +116,33 @@ def group_by_bin(rows):
 
 # ── metrics helper ────────────────────────────────────────────────────────────
 
+
 def metrics(tp, fp, fn, n_pred):
     prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    rec  = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1   = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+    rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
     return prec, rec, f1
 
 
 # ── plotting ──────────────────────────────────────────────────────────────────
-COLOR_THRESH = "#5b8ec4"   # blue
-COLOR_TOPK   = "#e8a87c"   # orange
+COLOR_THRESH = "#5b8ec4"  # blue
+COLOR_TOPK = "#e8a87c"  # orange
+
 
 def violin_panel(ax, groups, color, title, ylim=(0, 20)):
     labels = [bin_label(*b) for b in BINS]
-    data   = [groups[b] for b in BINS]
-    ns     = [len(d) for d in data]
+    data = [groups[b] for b in BINS]
+    ns = [len(d) for d in data]
 
     # Only plot bins with data
     positions = [i + 1 for i, d in enumerate(data) if d]
-    active_data   = [d for d in data if d]
-    active_labels = [l for l, d in zip(labels, data) if d]
-    active_ns     = [n for n, d in zip(ns, data) if d]
+    active_data = [d for d in data if d]
+    active_labels = [label for label, d in zip(labels, data) if d]
+    active_ns = [n for n, d in zip(ns, data) if d]
 
-    parts = ax.violinplot(active_data, positions=positions, showextrema=False, widths=0.7)
+    parts = ax.violinplot(
+        active_data, positions=positions, showextrema=False, widths=0.7
+    )
     for pc in parts["bodies"]:
         pc.set_facecolor(color)
         pc.set_alpha(0.6)
@@ -145,13 +154,21 @@ def violin_panel(ax, groups, color, title, ylim=(0, 20)):
         m = arr.mean()
         p25, p75 = np.percentile(arr, 25), np.percentile(arr, 75)
         ax.vlines(pos, p25, p75, color="black", linewidth=1.5, zorder=3)
-        ax.plot(pos, m, "o", color="white", markeredgecolor="black",
-                markersize=6, zorder=4)
+        ax.plot(
+            pos, m, "o", color="white", markeredgecolor="black", markersize=6, zorder=4
+        )
 
     # n= annotations
     for pos, n in zip(positions, active_ns):
-        ax.text(pos, ylim[1] - 0.4, f"n={n}", ha="center", va="top",
-                fontsize=7.5, color="gray")
+        ax.text(
+            pos,
+            ylim[1] - 0.4,
+            f"n={n}",
+            ha="center",
+            va="top",
+            fontsize=7.5,
+            color="gray",
+        )
 
     ax.set_title(title, fontsize=9)
     ax.set_xticks(positions)
@@ -160,12 +177,21 @@ def violin_panel(ax, groups, color, title, ylim=(0, 20)):
     ax.set_ylabel("# NER candidates", fontsize=8)
     ax.set_ylim(*ylim)
 
-    mean_patch = mpatches.Patch(facecolor="none", edgecolor="none", label="")
     ax.legend(
-        handles=[plt.Line2D([0], [0], marker="o", color="w",
-                            markerfacecolor="white", markeredgecolor="black",
-                            markersize=7, label="mean")],
-        loc="lower right", fontsize=8
+        handles=[
+            plt.Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                markerfacecolor="white",
+                markeredgecolor="black",
+                markersize=7,
+                label="mean",
+            )
+        ],
+        loc="lower right",
+        fontsize=8,
     )
 
 
@@ -174,11 +200,18 @@ def make_table(fig, rows, y_pos=0.01):
     col_labels = ["", "Precision", "Recall", "F1", "Predictions", "TP", "FP", "FN"]
     table_data = []
     for label, prec, rec, f1, n_pred, tp, fp, fn, color in rows:
-        table_data.append([
-            label,
-            f"{prec:.4f}", f"{rec:.4f}", f"{f1:.4f}",
-            str(n_pred), str(tp), str(fp), str(fn)
-        ])
+        table_data.append(
+            [
+                label,
+                f"{prec:.4f}",
+                f"{rec:.4f}",
+                f"{f1:.4f}",
+                str(n_pred),
+                str(tp),
+                str(fp),
+                str(fn),
+            ]
+        )
 
     ax_table = fig.add_axes([0.05, 0.0, 0.92, 0.18])
     ax_table.axis("off")
@@ -206,9 +239,13 @@ def make_table(fig, rows, y_pos=0.01):
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pred_file", default="pruner_predictions/scierc/focal-prefilter-2e-5/ent_pred_de.json")
+    parser.add_argument(
+        "--pred_file",
+        default="pruner_predictions/scierc/focal-prefilter-2e-5/ent_pred_de.json",
+    )
     parser.add_argument("--threshold", type=float, default=0.1)
     parser.add_argument("--topk_factor", type=float, default=0.5)
     parser.add_argument("--topk_min", type=int, default=1)
@@ -219,20 +256,24 @@ def main():
 
     print(f"Loading {args.pred_file} ...")
     with open(args.pred_file) as f:
-        docs = [json.loads(l) for l in f if l.strip()]
+        docs = [json.loads(line) for line in f if line.strip()]
 
-    thresh_rows, topk_rows, (tp_t, fp_t, fn_t, npred_t), (tp_k, fp_k, fn_k, npred_k) = extract(
-        docs, args.threshold, args.topk_factor, args.topk_min, args.topk_max
+    thresh_rows, topk_rows, (tp_t, fp_t, fn_t, npred_t), (tp_k, fp_k, fn_k, npred_k) = (
+        extract(docs, args.threshold, args.topk_factor, args.topk_min, args.topk_max)
     )
 
     prec_t, rec_t, f1_t = metrics(tp_t, fp_t, fn_t, npred_t)
     prec_k, rec_k, f1_k = metrics(tp_k, fp_k, fn_k, npred_k)
 
-    print(f"Threshold {args.threshold:.4f}: P={prec_t:.4f}  R={rec_t:.4f}  F1={f1_t:.4f}  "
-          f"pred={npred_t}  TP={tp_t}  FP={fp_t}  FN={fn_t}")
-    print(f"Top-k (factor={args.topk_factor}, min={args.topk_min}, max={args.topk_max}): "
-          f"P={prec_k:.4f}  R={rec_k:.4f}  F1={f1_k:.4f}  "
-          f"pred={npred_k}  TP={tp_k}  FP={fp_k}  FN={fn_k}")
+    print(
+        f"Threshold {args.threshold:.4f}: P={prec_t:.4f}  R={rec_t:.4f}  F1={f1_t:.4f}  "
+        f"pred={npred_t}  TP={tp_t}  FP={fp_t}  FN={fn_t}"
+    )
+    print(
+        f"Top-k (factor={args.topk_factor}, min={args.topk_min}, max={args.topk_max}): "
+        f"P={prec_k:.4f}  R={rec_k:.4f}  F1={f1_k:.4f}  "
+        f"pred={npred_k}  TP={tp_k}  FP={fp_k}  FN={fn_k}"
+    )
 
     groups_t = group_by_bin(thresh_rows)
     groups_k = group_by_bin(topk_rows)
@@ -243,20 +284,39 @@ def main():
     ax1 = fig.add_subplot(1, 2, 1)
     ax2 = fig.add_subplot(1, 2, 2)
 
-    thresh_title = (f"Threshold {args.threshold:.4f}"
-                    f"  (min=1, max={args.topk_max})")
-    topk_title   = (f"Top-k (factor={args.topk_factor},"
-                    f" min={args.topk_min}, max={args.topk_max})")
+    thresh_title = f"Threshold {args.threshold:.4f}  (min=1, max={args.topk_max})"
+    topk_title = (
+        f"Top-k (factor={args.topk_factor}, min={args.topk_min}, max={args.topk_max})"
+    )
 
     violin_panel(ax1, groups_t, COLOR_THRESH, thresh_title)
-    violin_panel(ax2, groups_k, COLOR_TOPK,   topk_title)
+    violin_panel(ax2, groups_k, COLOR_TOPK, topk_title)
 
     fig.suptitle(f"NER candidates per sentence  ·  {args.title}", fontsize=11, y=0.97)
 
     table_rows = [
-        (f"Threshold {args.threshold:.4f}", prec_t, rec_t, f1_t, npred_t, tp_t, fp_t, fn_t, "#dce9f5"),
-        (f"Top-k (factor={args.topk_factor}, min={args.topk_min}, m",
-         prec_k, rec_k, f1_k, npred_k, tp_k, fp_k, fn_k, "#f5e8dc"),
+        (
+            f"Threshold {args.threshold:.4f}",
+            prec_t,
+            rec_t,
+            f1_t,
+            npred_t,
+            tp_t,
+            fp_t,
+            fn_t,
+            "#dce9f5",
+        ),
+        (
+            f"Top-k (factor={args.topk_factor}, min={args.topk_min}, m",
+            prec_k,
+            rec_k,
+            f1_k,
+            npred_k,
+            tp_k,
+            fp_k,
+            fn_k,
+            "#f5e8dc",
+        ),
     ]
     make_table(fig, table_rows)
 

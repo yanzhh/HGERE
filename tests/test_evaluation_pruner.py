@@ -5,8 +5,8 @@ The pruner is a binary entity/non-entity classifier.
 - Threshold is applied to prob only; predicted spans have no type.
 - Matching is span-level: (doc_id, sent_idx, start, end).
 """
+
 import json
-from pathlib import Path
 
 import pytest
 
@@ -32,6 +32,7 @@ from gsapere.evaluation.pruner import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _make_doc(doc_id, gold, predicted):
     """Build a minimal prediction document.
 
@@ -51,18 +52,18 @@ DOC_A = _make_doc(
     doc_id="A",
     gold=[
         [[0, 1, "Method"], [5, 6, "Dataset"]],  # sentence 0
-        [[2, 3, "Task"]],                        # sentence 1
+        [[2, 3, "Task"]],  # sentence 1
     ],
     predicted=[
         [
-            [0, 1, 0.95, "Method"],   # TP  high confidence
+            [0, 1, 0.95, "Method"],  # TP  high confidence
             [5, 6, 0.60, "Dataset"],  # TP  medium confidence
-            [3, 4, 0.80, "NIL"],      # FP  gold is NIL, but prob > threshold
-            [7, 8, 0.20, "NIL"],      # below threshold → excluded
+            [3, 4, 0.80, "NIL"],  # FP  gold is NIL, but prob > threshold
+            [7, 8, 0.20, "NIL"],  # below threshold → excluded
         ],
         [
-            [2, 3, 0.40, "Task"],     # TP  (below 0.5 → excluded at that threshold)
-            [9, 9, 0.70, "NIL"],      # FP  gold is NIL, prob > 0.5
+            [2, 3, 0.40, "Task"],  # TP  (below 0.5 → excluded at that threshold)
+            [9, 9, 0.70, "NIL"],  # FP  gold is NIL, prob > 0.5
         ],
     ],
 )
@@ -71,10 +72,12 @@ DOC_A = _make_doc(
 DOC_B = _make_doc(
     doc_id="B",
     gold=[[[1, 2, "Method"]]],
-    predicted=[[
-        [1, 2, 0.30, "Method"],  # FN at threshold 0.5 (prob too low)
-        [3, 4, 0.90, "NIL"],     # FP (gold NIL but high prob)
-    ]],
+    predicted=[
+        [
+            [1, 2, 0.30, "Method"],  # FN at threshold 0.5 (prob too low)
+            [3, 4, 0.90, "NIL"],  # FP (gold NIL but high prob)
+        ]
+    ],
 )
 
 DOCS = [DOC_A, DOC_B]
@@ -83,6 +86,7 @@ DOCS = [DOC_A, DOC_B]
 # ---------------------------------------------------------------------------
 # _gold_spans / _gold_entities
 # ---------------------------------------------------------------------------
+
 
 class TestGoldSpans:
     def test_extracts_all_gold_spans(self):
@@ -121,6 +125,7 @@ class TestGoldEntities:
 # _predicted_spans
 # ---------------------------------------------------------------------------
 
+
 class TestPredictedSpans:
     def test_threshold_filters_low_confidence(self):
         # At 0.5: [2,3] (prob=0.40) excluded, [7,8] (prob=0.20) excluded
@@ -131,8 +136,8 @@ class TestPredictedSpans:
     def test_nil_gold_included_if_above_threshold(self):
         # Gold NIL spans with high prob MUST be included — pruner doesn't use gold labels
         spans = _predicted_spans([DOC_A], threshold=0.5)
-        assert ("A", 0, 3, 4) in spans   # prob=0.80, gold=NIL → FP candidate
-        assert ("A", 1, 9, 9) in spans   # prob=0.70, gold=NIL → FP candidate
+        assert ("A", 0, 3, 4) in spans  # prob=0.80, gold=NIL → FP candidate
+        assert ("A", 1, 9, 9) in spans  # prob=0.70, gold=NIL → FP candidate
 
     def test_threshold_zero_includes_all(self):
         # All 6 entries in DOC_A pass threshold 0
@@ -144,7 +149,7 @@ class TestPredictedSpans:
 
     def test_exact_boundary_included(self):
         spans = _predicted_spans([DOC_A], threshold=0.60)
-        assert ("A", 0, 5, 6) in spans   # prob == 0.60
+        assert ("A", 0, 5, 6) in spans  # prob == 0.60
 
     def test_no_type_in_returned_tuples(self):
         spans = _predicted_spans([DOC_A], threshold=0.0)
@@ -154,6 +159,7 @@ class TestPredictedSpans:
 # ---------------------------------------------------------------------------
 # _compute_counts / _metrics_from_counts / compute_metrics
 # ---------------------------------------------------------------------------
+
 
 class TestComputeCounts:
     def test_perfect_match(self):
@@ -186,8 +192,8 @@ class TestMetricsFromCounts:
         counts = {"tp": 2, "fp": 1, "fn": 1, "n_gold": 3, "n_pred": 3}
         m = _metrics_from_counts(counts)
         assert m["precision"] == pytest.approx(2 / 3)
-        assert m["recall"]    == pytest.approx(2 / 3)
-        assert m["f1"]        == pytest.approx(2 / 3)
+        assert m["recall"] == pytest.approx(2 / 3)
+        assert m["f1"] == pytest.approx(2 / 3)
 
     def test_false_positive_share(self):
         counts = {"tp": 2, "fp": 2, "fn": 0, "n_gold": 2, "n_pred": 4}
@@ -209,8 +215,8 @@ class TestMetricsFromCounts:
 class TestComputeMetrics:
     def test_fp_nonzero_at_threshold_0_5(self):
         # At 0.5: TP=[0,1],[5,6] FP=[3,4],[9,9] FN=[2,3]
-        gold   = _gold_spans([DOC_A])
-        pred   = _predicted_spans([DOC_A], 0.5)
+        gold = _gold_spans([DOC_A])
+        pred = _predicted_spans([DOC_A], 0.5)
         m = compute_metrics(gold, pred)
         assert m["tp"] == 2
         assert m["fp"] == 2
@@ -220,23 +226,26 @@ class TestComputeMetrics:
         gold = _gold_spans([DOC_A])
         pred = _predicted_spans([DOC_A], 0.0)
         m = compute_metrics(gold, pred)
-        assert m["recall"] == pytest.approx(1.0)   # all gold spans covered
+        assert m["recall"] == pytest.approx(1.0)  # all gold spans covered
 
 
 # ---------------------------------------------------------------------------
 # compute_metrics_per_type
 # ---------------------------------------------------------------------------
 
+
 class TestComputeMetricsPerType:
     def setup_method(self):
         self.gold_ents = _gold_entities([DOC_A])
-        self.pred      = _predicted_spans([DOC_A], 0.5)
+        self.pred = _predicted_spans([DOC_A], 0.5)
         # At 0.5: pred = [0,1],[5,6],[3,4],[9,9]  (4 spans)
         # gold spans: [0,1],[5,6],[2,3]
         # TP=2, FP=2, FN=1
 
     def test_known_types_present(self):
-        r = compute_metrics_per_type(self.gold_ents, self.pred, ["Method", "Dataset", "Task"])
+        r = compute_metrics_per_type(
+            self.gold_ents, self.pred, ["Method", "Dataset", "Task"]
+        )
         assert set(r.keys()) == {"Method", "Dataset", "Task"}
 
     def test_method_recall(self):
@@ -259,13 +268,16 @@ class TestComputeMetricsPerType:
         assert "false_positive_share" not in r
 
     def test_absent_type_zero_recall(self):
-        r = compute_metrics_per_type(self.gold_ents, self.pred, ["NonExistent"])["NonExistent"]
+        r = compute_metrics_per_type(self.gold_ents, self.pred, ["NonExistent"])[
+            "NonExistent"
+        ]
         assert r["tp"] == 0 and r["fn"] == 0 and r["recall"] == 0.0
 
 
 # ---------------------------------------------------------------------------
 # compute_metrics_at_threshold
 # ---------------------------------------------------------------------------
+
 
 class TestComputeMetricsAtThreshold:
     def test_threshold_stored(self):
@@ -285,7 +297,7 @@ class TestComputeMetricsAtThreshold:
         assert "per_type" not in m
 
     def test_higher_threshold_lowers_recall(self):
-        m_low  = compute_metrics_at_threshold([DOC_A], 0.0)
+        m_low = compute_metrics_at_threshold([DOC_A], 0.0)
         m_high = compute_metrics_at_threshold([DOC_A], 0.9)
         assert m_high["recall"] <= m_low["recall"]
 
@@ -293,6 +305,7 @@ class TestComputeMetricsAtThreshold:
 # ---------------------------------------------------------------------------
 # threshold_sweep
 # ---------------------------------------------------------------------------
+
 
 class TestThresholdSweep:
     def test_one_result_per_threshold(self):
@@ -319,6 +332,7 @@ class TestThresholdSweep:
 # find_threshold_for_recall
 # ---------------------------------------------------------------------------
 
+
 class TestFindThresholdForRecall:
     def test_achieves_target(self):
         _, metrics = find_threshold_for_recall([DOC_A], target_recall=0.98)
@@ -331,11 +345,14 @@ class TestFindThresholdForRecall:
     def test_impossible_recall_falls_back(self):
         # Gold span [9,9] is not present in predicted_ner_proba at all →
         # recall can never reach 1.0 regardless of threshold
-        doc = _make_doc("X",
+        doc = _make_doc(
+            "X",
             gold=[[[9, 9, "Method"]]],
-            predicted=[[
-                [1, 2, 0.99, "NIL"],   # high-prob FP, but not the gold span
-            ]],
+            predicted=[
+                [
+                    [1, 2, 0.99, "NIL"],  # high-prob FP, but not the gold span
+                ]
+            ],
         )
         threshold, metrics = find_threshold_for_recall([doc], target_recall=1.0)
         assert threshold == pytest.approx(0.0, abs=1e-4)
@@ -349,6 +366,7 @@ class TestFindThresholdForRecall:
 # ---------------------------------------------------------------------------
 # load_predictions
 # ---------------------------------------------------------------------------
+
 
 class TestLoadPredictions:
     def test_loads_jsonl(self, tmp_path):
@@ -371,13 +389,15 @@ class TestLoadPredictions:
 DOC_TOPK = {
     "doc_id": "T",
     "ner": [[[0, 1, "Method"], [5, 6, "Dataset"]]],
-    "predicted_ner_proba": [[
-        [0, 1, 0.95, "Method"],
-        [3, 4, 0.80, "NIL"],
-        [5, 6, 0.60, "Dataset"],
-        [2, 3, 0.40, "NIL"],
-        [7, 8, 0.20, "NIL"],
-    ]],
+    "predicted_ner_proba": [
+        [
+            [0, 1, 0.95, "Method"],
+            [3, 4, 0.80, "NIL"],
+            [5, 6, 0.60, "Dataset"],
+            [2, 3, 0.40, "NIL"],
+            [7, 8, 0.20, "NIL"],
+        ]
+    ],
 }
 
 
@@ -393,33 +413,43 @@ class TestSentLength:
 class TestPredictedSpansTopk:
     def test_takes_top_k_by_prob(self):
         # K = max(3, min(0.5*9, 18)) = max(3, 4) = 4 → top-4 spans
-        spans = _predicted_spans_topk([DOC_TOPK], topk_ratio=0.5, min_mentions_num=3, max_mentions_num=18)
+        spans = _predicted_spans_topk(
+            [DOC_TOPK], topk_ratio=0.5, min_mentions_num=3, max_mentions_num=18
+        )
         assert len(spans) == 4
-        assert ("T", 0, 0, 1) in spans   # prob=0.95
-        assert ("T", 0, 3, 4) in spans   # prob=0.80
-        assert ("T", 0, 5, 6) in spans   # prob=0.60
-        assert ("T", 0, 2, 3) in spans   # prob=0.40
+        assert ("T", 0, 0, 1) in spans  # prob=0.95
+        assert ("T", 0, 3, 4) in spans  # prob=0.80
+        assert ("T", 0, 5, 6) in spans  # prob=0.60
+        assert ("T", 0, 2, 3) in spans  # prob=0.40
         assert ("T", 0, 7, 8) not in spans  # prob=0.20 (rank 5, excluded)
 
     def test_lmin_floor(self):
         # K = max(5, min(0.1*9, 18)) = max(5, 0) = 5 → all 5 spans
-        spans = _predicted_spans_topk([DOC_TOPK], topk_ratio=0.1, min_mentions_num=5, max_mentions_num=18)
+        spans = _predicted_spans_topk(
+            [DOC_TOPK], topk_ratio=0.1, min_mentions_num=5, max_mentions_num=18
+        )
         assert len(spans) == 5
 
     def test_lmax_ceiling(self):
         # K = max(1, min(10*9, 2)) = max(1, 2) = 2 → top-2 spans only
-        spans = _predicted_spans_topk([DOC_TOPK], topk_ratio=10.0, min_mentions_num=1, max_mentions_num=2)
+        spans = _predicted_spans_topk(
+            [DOC_TOPK], topk_ratio=10.0, min_mentions_num=1, max_mentions_num=2
+        )
         assert len(spans) == 2
-        assert ("T", 0, 0, 1) in spans   # prob=0.95 (rank 1)
-        assert ("T", 0, 3, 4) in spans   # prob=0.80 (rank 2)
+        assert ("T", 0, 0, 1) in spans  # prob=0.95 (rank 1)
+        assert ("T", 0, 3, 4) in spans  # prob=0.80 (rank 2)
 
     def test_no_type_in_tuples(self):
-        spans = _predicted_spans_topk([DOC_TOPK], topk_ratio=0.5, min_mentions_num=1, max_mentions_num=18)
+        spans = _predicted_spans_topk(
+            [DOC_TOPK], topk_ratio=0.5, min_mentions_num=1, max_mentions_num=18
+        )
         assert all(len(s) == 4 for s in spans)
 
     def test_empty_sentence_skipped(self):
         doc = {"doc_id": "E", "ner": [[]], "predicted_ner_proba": [[]]}
-        spans = _predicted_spans_topk([doc], topk_ratio=0.5, min_mentions_num=3, max_mentions_num=18)
+        spans = _predicted_spans_topk(
+            [doc], topk_ratio=0.5, min_mentions_num=3, max_mentions_num=18
+        )
         assert spans == []
 
 
@@ -427,38 +457,51 @@ class TestPredictedSpansTopk:
 # compute_metrics_topk
 # ---------------------------------------------------------------------------
 
+
 class TestComputeMetricsTopk:
     def test_params_stored(self):
-        m = compute_metrics_topk([DOC_TOPK], topk_ratio=0.5, min_mentions_num=3, max_mentions_num=18)
+        m = compute_metrics_topk(
+            [DOC_TOPK], topk_ratio=0.5, min_mentions_num=3, max_mentions_num=18
+        )
         assert m["topk_ratio"] == 0.5
         assert m["min_mentions_num"] == 3
         assert m["max_mentions_num"] == 18
 
     def test_perfect_recall_when_k_large(self):
         # With very high lmin all spans are included → both gold spans covered
-        m = compute_metrics_topk([DOC_TOPK], topk_ratio=0.5, min_mentions_num=10, max_mentions_num=20)
+        m = compute_metrics_topk(
+            [DOC_TOPK], topk_ratio=0.5, min_mentions_num=10, max_mentions_num=20
+        )
         assert m["recall"] == pytest.approx(1.0)
 
     def test_low_k_misses_gold(self):
         # K=1 (lmax=1): only [0,1] selected → [5,6] missed → recall < 1
-        m = compute_metrics_topk([DOC_TOPK], topk_ratio=0.5, min_mentions_num=1, max_mentions_num=1)
+        m = compute_metrics_topk(
+            [DOC_TOPK], topk_ratio=0.5, min_mentions_num=1, max_mentions_num=1
+        )
         assert m["recall"] < 1.0
 
     def test_per_type_included_when_requested(self):
         m = compute_metrics_topk(
-            [DOC_TOPK], topk_ratio=0.5, min_mentions_num=3, max_mentions_num=18,
+            [DOC_TOPK],
+            topk_ratio=0.5,
+            min_mentions_num=3,
+            max_mentions_num=18,
             entity_types=["Method", "Dataset"],
         )
         assert "per_type" in m and "Method" in m["per_type"]
 
     def test_per_type_absent_without_arg(self):
-        m = compute_metrics_topk([DOC_TOPK], topk_ratio=0.5, min_mentions_num=3, max_mentions_num=18)
+        m = compute_metrics_topk(
+            [DOC_TOPK], topk_ratio=0.5, min_mentions_num=3, max_mentions_num=18
+        )
         assert "per_type" not in m
 
 
 # ---------------------------------------------------------------------------
 # optimize_topk_params
 # ---------------------------------------------------------------------------
+
 
 class TestOptimizeTopkParams:
     def test_returns_best_and_all_results(self):
@@ -492,7 +535,9 @@ class TestOptimizeTopkParams:
             max_mentions_num_values=[5, 10],
         )
         feasible = [r for r in all_results if r["recall"] >= 0.5]
-        assert best["false_positive_share"] == min(r["false_positive_share"] for r in feasible)
+        assert best["false_positive_share"] == min(
+            r["false_positive_share"] for r in feasible
+        )
 
     def test_infeasible_returns_none_as_best(self):
         # target_recall=1.0 but only K=1 available → gold span [5,6] never selected
@@ -524,8 +569,8 @@ class TestOptimizeTopkParams:
             min_mentions_num_values=[1, 3],
             max_mentions_num_values=[5, 10],
         )
-        feasible   = [r for r in all_results if r["recall"] >= 0.5]
-        infeasible = [r for r in all_results if r["recall"] <  0.5]
+        feasible = [r for r in all_results if r["recall"] >= 0.5]
+        infeasible = [r for r in all_results if r["recall"] < 0.5]
         # all_results has feasible first, then infeasible
-        assert all_results[:len(feasible)] == feasible
-        assert all_results[len(feasible):] == infeasible
+        assert all_results[: len(feasible)] == feasible
+        assert all_results[len(feasible) :] == infeasible

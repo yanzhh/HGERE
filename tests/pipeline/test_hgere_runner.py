@@ -155,7 +155,14 @@ class TestHGERERunner:
         created_paths: list[str] = []
 
         def _mock_infer_hgere(
-            model, eval_dataset, args, logger, source_file_path, output_path, gold_only, **kwargs
+            model,
+            eval_dataset,
+            args,
+            logger,
+            source_file_path,
+            output_path,
+            gold_only,
+            **kwargs,
         ) -> None:
             created_paths.append(str(output_path))
             # Write minimal output

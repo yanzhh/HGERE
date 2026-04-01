@@ -134,7 +134,9 @@ def _patch_main(fake_setup: Any) -> Any:
         patch("gsapere.commands.train_hgere.get_logger", return_value=MagicMock())
     )
     stack.enter_context(
-        patch("gsapere.commands.train_hgere.get_last_checkpoint", return_value=(None, 0))
+        patch(
+            "gsapere.commands.train_hgere.get_last_checkpoint", return_value=(None, 0)
+        )
     )
     return stack
 

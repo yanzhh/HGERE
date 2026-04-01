@@ -268,7 +268,8 @@ def evaluate(
     )
 
     ner_p = n_tp_ner / n_pred_ner if n_pred_ner > 0 else 0
-    ner_r = n_tp_ner / len(gold_ners) if gold_ners else 0.0
+    n_gold_unique_ner = len({(sent_id, span) for sent_id, span, _ in gold_ners})
+    ner_r = n_tp_ner / n_gold_unique_ner if n_gold_unique_ner > 0 else 0.0
     ner_f1 = 2 * (ner_p * ner_r) / (ner_p + ner_r) if n_tp_ner > 0 else 0.0
 
     p = n_tp_rel / n_pred_rel if n_pred_rel > 0 else 0
@@ -286,16 +287,41 @@ def evaluate(
         else 0.0
     )
 
+    # NER structural upper recall bound from candidate coverage
+    gold_ner_span_positions = {(sent_id, span) for sent_id, span, _ in gold_ners}
+    candidate_span_positions = {
+        (sent_id, (start, end))
+        for sent_id, cands in global_predicted_ners.items()
+        for start, end, _ in cands
+    }
+    n_gold_ner_in_cands = len(gold_ner_span_positions & candidate_span_positions)
+    ner_upper_recall = (
+        n_gold_ner_in_cands / n_gold_unique_ner if n_gold_unique_ner > 0 else 1.0
+    )
+
+    # RE+ structural upper recall bound from candidate coverage
+    n_re_plus_achievable = sum(
+        1
+        for sent_id, subj_span, obj_span, _label in gold_rels
+        if (sent_id, subj_span) in candidate_span_positions
+        and (sent_id, obj_span) in candidate_span_positions
+    )
+    re_plus_upper_recall = n_re_plus_achievable / tot_recall if tot_recall > 0 else 1.0
+
     results = {
         "ner_precision": ner_p,
         "ner_recall": ner_r,
         "ner_f1": ner_f1,
+        "ner_n_gold_unique_spans": n_gold_unique_ner,
+        "ner_n_gold_annotations": len(gold_ners),
+        "ner_upper_recall": ner_upper_recall,
         "re_precision": p,
         "re_recall": r,
         "re_f1": f1,
         "re+_precision": p_with_ner,
         "re+_recall": r_with_ner,
         "re+_f1": f1_with_ner,
+        "re+_upper_recall": re_plus_upper_recall,
     }
 
     logger.info(f"Result: {json.dumps(results, indent=4)}")

@@ -146,11 +146,41 @@ def relation_jsonl_path(tmp_path: Path) -> Path:
             ["The", "model", "trains", "fast"],
             ["Results", "show", "accuracy"],
         ],
-        "ner": [[[1, 1, "Method"]], [[2, 2, "Task"]]],
-        "predicted_ner": [[[1, 1, "Method"]], [[2, 2, "Task"]]],
-        "relations": [[[1, 1, 1, 1, "Used-for"]], []],
+        "ner": [[[1, 1, "Method"], [2, 2, "Dataset"]], [[2, 2, "Task"]]],
+        "predicted_ner": [[[1, 1, "Method"], [2, 2, "Dataset"]], [[2, 2, "Task"]]],
+        "relations": [[[1, 1, 2, 2, "Used-for"]], []],
     }
     path = tmp_path / "relation.jsonl"
+    path.write_text(json.dumps(doc) + "\n")
+    return path
+
+
+@pytest.fixture
+def relation_jsonl_double_ann(tmp_path: Path) -> Path:
+    """JSONL with a doubly-annotated span: span (1,1) has both 'Method' and 'Task'."""
+    doc = {
+        "doc_key": "doc_double_ann",
+        "sentences": [["The", "model", "trains", "fast"]],
+        "ner": [[[1, 1, "Method"], [1, 1, "Task"], [2, 2, "Dataset"]]],
+        "predicted_ner": [[[1, 1, "Method"], [2, 2, "Dataset"]]],
+        "relations": [[[1, 1, 2, 2, "Used-for"]]],
+    }
+    path = tmp_path / "relation_double_ann.jsonl"
+    path.write_text(json.dumps(doc) + "\n")
+    return path
+
+
+@pytest.fixture
+def relation_jsonl_self_rel(tmp_path: Path) -> Path:
+    """JSONL with an explicit self-relation for testing the warning."""
+    doc = {
+        "doc_key": "doc_self_rel",
+        "sentences": [["The", "model", "trains", "fast"]],
+        "ner": [[[1, 1, "Method"], [2, 2, "Dataset"]]],
+        "predicted_ner": [[[1, 1, "Method"], [2, 2, "Dataset"]]],
+        "relations": [[[1, 1, 1, 1, "Used-for"]]],
+    }
+    path = tmp_path / "relation_self_rel.jsonl"
     path.write_text(json.dumps(doc) + "\n")
     return path
 

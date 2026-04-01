@@ -70,9 +70,7 @@ class TestTrainSpanClassifier:
     def test_positional_config_loads(self, tmp_path: Path) -> None:
         """Positional YAML arg loads config and calls run_train_pruner."""
         config_path = self._write_config(tmp_path)
-        with patch(
-            "gsapere.commands.train_pruner.run_train_pruner"
-        ) as mock_run:
+        with patch("gsapere.commands.train_pruner.run_train_pruner") as mock_run:
             train_pruner_main([str(config_path)])
         mock_run.assert_called_once()
 
@@ -109,7 +107,8 @@ class TestTrainHgere:
             patch("gsapere.commands.train_hgere.setup_training") as mock_setup,
             patch("gsapere.commands.train_hgere.get_logger", return_value=MagicMock()),
             patch(
-                "gsapere.commands.train_hgere.get_last_checkpoint", return_value=(None, 0)
+                "gsapere.commands.train_hgere.get_last_checkpoint",
+                return_value=(None, 0),
             ),
         ):
             train_hgere_main([str(config_path)])

@@ -358,3 +358,123 @@ class TestCandidateStatsOnDataset:
         )
         assert ds.candidate_stats is not None
         assert mock_logger.info.called
+
+
+# ---------------------------------------------------------------------------
+# Tests for double-annotation handling
+# ---------------------------------------------------------------------------
+
+
+class TestDoubleAnnotationHandling:
+    def test_ner_golden_labels_has_both_types(
+        self,
+        relation_jsonl_double_ann: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        """Both annotations for a doubly-annotated span appear in ner_golden_labels."""
+        ds = _make_dataset(
+            relation_jsonl_double_ann, mock_tokenizer, mock_labels, relation_params
+        )
+        # span (1,1) should appear with both "Method" and "Task"
+        sent_id = (0, 0)
+        gold_for_span = {
+            label
+            for (s, span, label) in ds.ner_golden_labels
+            if s == sent_id and span == (1, 1)
+        }
+        assert "Method" in gold_for_span
+        assert "Task" in gold_for_span
+
+    def test_ner_golden_span_types_populated(
+        self,
+        relation_jsonl_double_ann: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        ds = _make_dataset(
+            relation_jsonl_double_ann, mock_tokenizer, mock_labels, relation_params
+        )
+        key = (0, 0, 1, 1)  # doc=0, sent=0, start=1, end=1
+        assert key in ds.ner_golden_span_types
+        assert ds.ner_golden_span_types[key] == {"Method", "Task"}
+
+    def test_golden_labels_with_ner_expanded_for_double_ann(
+        self,
+        relation_jsonl_double_ann: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        """golden_labels_with_ner should contain all valid (s_type, o_type) combos."""
+        ds = _make_dataset(
+            relation_jsonl_double_ann, mock_tokenizer, mock_labels, relation_params
+        )
+        # relation: (1,1) → (2,2) "Used-for"
+        # span (1,1) has {Method, Task}, span (2,2) has {Dataset}
+        # Expected entries: (Method,Dataset) and (Task,Dataset)
+        sent_id = (0, 0)
+        rel_entries = {
+            (subj, obj, label)
+            for (s, subj, obj, label) in ds.golden_labels_with_ner
+            if s == sent_id
+        }
+        assert ((1, 1, "Method"), (2, 2, "Dataset"), "Used-for") in rel_entries
+        assert ((1, 1, "Task"), (2, 2, "Dataset"), "Used-for") in rel_entries
+
+    def test_warning_logged_for_dropped_label(
+        self,
+        relation_jsonl_double_ann: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        mock_logger = MagicMock()
+        RelationDataset(
+            logger=mock_logger,
+            tokenizer=mock_tokenizer,
+            labels=mock_labels,
+            file_path=str(relation_jsonl_double_ann),
+            params=relation_params,
+        )
+        # warning should have been called for the dropped NER label
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any(
+            "dropped label" in w.lower() or "multiple ner" in w.lower()
+            for w in warning_calls
+        )
+
+
+class TestSelfRelationWarning:
+    def test_warning_logged_for_self_relation(
+        self,
+        relation_jsonl_self_rel: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        mock_logger = MagicMock()
+        RelationDataset(
+            logger=mock_logger,
+            tokenizer=mock_tokenizer,
+            labels=mock_labels,
+            file_path=str(relation_jsonl_self_rel),
+            params=relation_params,
+        )
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("self-relation" in w.lower() for w in warning_calls)
+
+    def test_self_relation_not_in_golden_labels(
+        self,
+        relation_jsonl_self_rel: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        ds = _make_dataset(
+            relation_jsonl_self_rel, mock_tokenizer, mock_labels, relation_params
+        )
+        # Self-relation is dropped; golden_labels should be empty
+        assert len(ds.golden_labels) == 0
