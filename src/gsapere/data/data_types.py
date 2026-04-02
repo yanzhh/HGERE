@@ -14,13 +14,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 # ── 1. Pydantic models (I/O boundary) ─────────────────────────────────────
 
 
 class NerSpanModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     start: int
     end: int
     label: str
@@ -37,6 +39,8 @@ class NerSpanModel(BaseModel):
 
 
 class RelationModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     subj_start: int
     subj_end: int
     obj_start: int
@@ -67,6 +71,8 @@ class RelationModel(BaseModel):
 
 
 class SentenceModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     tokens: list[str]
     ner: list[NerSpanModel] = []
     relations: list[RelationModel] = []
@@ -80,6 +86,8 @@ class SentenceModel(BaseModel):
 
 
 class DocumentModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     doc_key: str
     sentences: list[SentenceModel]
 
@@ -92,6 +100,8 @@ class DocumentModel(BaseModel):
 
 class DocumentPredictionModel(BaseModel):
     """Service output — validated and JSON-serializable."""
+
+    model_config = ConfigDict(extra="forbid")
 
     doc_key: str
     ner_candidates: list[tuple[int, int, float]]
