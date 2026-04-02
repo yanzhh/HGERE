@@ -1,0 +1,57 @@
+label_set: gsap
+model_dir: /data_ssds/disk01/ottowg_gsap/model-hgere/gsap-best-pruner
+base_model_name_or_path: allenai/scibert_scivocab_uncased
+output_dir: output
+
+do_lower_case: true
+model_type: bertspanmarkerpruner
+per_gpu_eval_batch_size: 32
+max_seq_length: 256
+max_pair_length: 64
+max_mention_ori_length: 12
+
+train_params:
+    # Data
+    run_name: pruner-inference
+    data_dir: input
+    train_file: "<no_train_file_needed>"
+    dev_file: docs.jsonl
+    test_file: "<no_test_file_needed>"
+    # Rule-based pre-filter (produced by eval-rulebased-pruner)
+    rulebased_pruner_file: /data_ssds/disk01/ottowg_gsap/model-hgere/gsap-best-rules.json
+    prune_config: /data_ssds/disk01/ottowg_gsap/model-hgere/gsap-best-pruner/best_config.json
+    do_train: false
+    eval_dev: true
+    eval_test: false
+    # Optimisation
+    seed: 44
+    learning_rate: 1e-6
+    num_train_epochs: 8
+    eval_epochs: 1
+    per_gpu_train_batch_size: 16
+    gradient_accumulation_steps: 2
+    save_steps: 1000
+    fp16: true
+    local_rank: -1
+    # Loss
+    pruner_loss: focal
+    # Span candidate filtering (used during eval inside training)
+    topk_ratio: 8
+    min_mentions_num: 1
+    max_mentions_num: 60
+    # Model flags
+    onedropout: true
+    lminit: true
+    nocross: true
+    biaf_span: true
+    biaf_mode: 2
+    biaf_factorize: true
+    span_hidden_size: 768
+    rank: 768
+    span_size: 256
+    # Evaluation
+    evaluate_during_training: false
+    eval_all_checkpoints: false
+    overwrite_model_dir: true
+    # W&B
+    project_name: gsap-pruner
