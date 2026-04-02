@@ -128,7 +128,7 @@ def evaluate(
     persist_predictions: bool = False,
 ) -> dict:
 
-    eval_output_dir = args.model_dir
+    eval_output_dir = getattr(args, "output_dir", None) or args.model_dir
     if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
         os.makedirs(eval_output_dir)
 
@@ -334,7 +334,9 @@ def evaluate(
 
     if persist_predictions and getattr(args, "save_results", True):
         target_fn = os.path.split(eval_dataset.file_path)[-1]
-        out_path = os.path.join(args.model_dir, target_fn)
+        out_path = os.path.join(
+            getattr(args, "output_dir", None) or args.model_dir, target_fn
+        )
         with open(out_path, "w") as output_w:
             for doc in docs:
                 output_w.write(json.dumps(doc) + "\n")

@@ -184,6 +184,15 @@ class HGERETrainParams(BaseModel):
         default=False, description="Preload dataset into memory."
     )
 
+    # ── Output ────────────────────────────────────────────────────────────────
+    output_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Directory where evaluation results and predictions are written. "
+            "Defaults to model_dir when not set."
+        ),
+    )
+
     # ── Inference modes ───────────────────────────────────────────────────────
     no_test: bool = Field(default=False, description="Skip test set evaluation.")
     save_results: bool = Field(

@@ -143,7 +143,8 @@ def setup_training(args, logger):
                 )
 
             output_test_file = os.path.join(
-                args.model_dir, f"results_{global_step}.json"
+                getattr(args, "output_dir", None) or args.model_dir,
+                f"results_{global_step}.json",
             )
             with open(output_test_file, "w") as f:
                 json.dump(report, f, indent=4)

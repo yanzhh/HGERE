@@ -56,6 +56,8 @@ def _config_to_namespace(config: HGERETrainConfig) -> argparse.Namespace:
     flat: dict[str, Any] = config.model_dump(exclude={"schema_version", "train_params"})
     flat.update(config.train_params.model_dump())
     flat.setdefault("config_name", "")
+    if not flat.get("output_dir"):
+        flat["output_dir"] = flat["model_dir"]
     return argparse.Namespace(**flat)
 
 
