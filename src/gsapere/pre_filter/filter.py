@@ -6,7 +6,7 @@ matches a pattern in the prune set.
 
 import json
 from pathlib import Path
-from typing import FrozenSet, List, Set, Tuple
+from typing import FrozenSet, List, Optional, Set, Tuple
 
 from .statistics import (
     AFTER,
@@ -29,10 +29,17 @@ class RuleBasedPruner:
     Parameters
     ----------
     prune_patterns : set of n-gram tuples that always indicate NIL spans.
+    max_span_len   : if set, spans longer than this many word tokens are pruned
+                     unconditionally (purely a speed optimisation).
     """
 
-    def __init__(self, prune_patterns: Set[Tuple[str, ...]]):
+    def __init__(
+        self,
+        prune_patterns: Set[Tuple[str, ...]],
+        max_span_len: Optional[int] = None,
+    ):
         self.prune_patterns: FrozenSet[Tuple[str, ...]] = frozenset(prune_patterns)
+        self.max_span_len: Optional[int] = max_span_len
         # Computed lazily on first call to should_prune (skipped during sweep)
         self._max_before: int = None
         self._max_after: int = None
@@ -51,6 +58,8 @@ class RuleBasedPruner:
         context_before : sentence tokens immediately before the span (sentence-bounded)
         context_after  : sentence tokens immediately after the span (sentence-bounded)
         """
+        if self.max_span_len is not None and len(words) > self.max_span_len:
+            return True
         marked = [START] + words + [END]
         for ngram in _iter_ngrams(marked, len(marked)):
             if ngram in self.prune_patterns:
@@ -86,13 +95,24 @@ class RuleBasedPruner:
         return False
 
     def save(self, path: str) -> None:
+        data = {
+            "patterns": [list(p) for p in self.prune_patterns],
+            "max_span_len": self.max_span_len,
+        }
         with open(Path(path), "w") as f:
-            json.dump([list(p) for p in self.prune_patterns], f)
+            json.dump(data, f)
 
     @classmethod
     def load(cls, path: str) -> "RuleBasedPruner":
         with open(Path(path), "r") as f:
-            return cls({tuple(p) for p in json.load(f)})
+            raw = json.load(f)
+        # Backward-compatible: old format is a plain list of patterns.
+        if isinstance(raw, list):
+            return cls({tuple(p) for p in raw})
+        return cls(
+            {tuple(p) for p in raw["patterns"]},
+            max_span_len=raw.get("max_span_len"),
+        )
 
     def __len__(self) -> int:
         return len(self.prune_patterns)

@@ -57,7 +57,11 @@ class Pipeline:
         return results[0]
 
     def process_documents(
-        self, docs: list[dict[str, Any]], show_progress: bool = False
+        self,
+        docs: list[dict[str, Any]],
+        show_progress: bool = False,
+        debug_break_on_first_rel: bool = False,
+        debug_log_rel_probs: bool = False,
     ) -> list[dict[str, Any]]:
         """Process a batch of documents.
 
@@ -65,6 +69,8 @@ class Pipeline:
             docs: List of document dicts.
             show_progress: Show tqdm progress bars over inference batches inside
                 the pruner and HGERE stages.
+            debug_break_on_first_rel: If True, raise after the first predicted
+                relation — for diagnosing zero-relation issues.
 
         Returns:
             List of enriched documents in the same order.
@@ -72,4 +78,9 @@ class Pipeline:
         if not docs:
             return []
         docs_with_candidates = self._pruner.run(docs, show_progress=show_progress)
-        return self._hgere.run(docs_with_candidates, show_progress=show_progress)
+        return self._hgere.run(
+            docs_with_candidates,
+            show_progress=show_progress,
+            debug_break_on_first_rel=debug_break_on_first_rel,
+            debug_log_rel_probs=debug_log_rel_probs,
+        )

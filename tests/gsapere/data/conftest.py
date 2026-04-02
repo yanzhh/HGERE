@@ -171,6 +171,43 @@ def relation_jsonl_double_ann(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def relation_jsonl_double_ann_connectivity(tmp_path: Path) -> Path:
+    """JSONL where connectivity breaks the tiebreak for a doubly-annotated span.
+
+    Span (1,1): labels {Method, Task} — doubly annotated.
+    Span (2,2): singly annotated as "Task".
+    Span (3,3): singly annotated as "Dataset".
+
+    Relations:
+      (2,2) → (3,3) "Used-for"   — contributes +1 to "Task" connectivity
+      (1,1) → (3,3) "Result"     — (1,1) is multi-annotated so excluded from count
+
+    Connectivity from single-label spans:
+      "Task": 1  (via span (2,2))
+      "Method": 0
+
+    Expected chosen label for (1,1): "Task"  (higher connectivity than "Method")
+    """
+    doc = {
+        "doc_key": "doc_connectivity",
+        "sentences": [["The", "model", "trains", "fast", "well"]],
+        "ner": [
+            [
+                [1, 1, "Method"],
+                [1, 1, "Task"],
+                [2, 2, "Task"],
+                [3, 3, "Dataset"],
+            ]
+        ],
+        "predicted_ner": [[[1, 1, "Method"], [2, 2, "Task"], [3, 3, "Dataset"]]],
+        "relations": [[[2, 2, 3, 3, "Used-for"], [1, 1, 3, 3, "Result"]]],
+    }
+    path = tmp_path / "relation_double_ann_connectivity.jsonl"
+    path.write_text(json.dumps(doc) + "\n")
+    return path
+
+
+@pytest.fixture
 def relation_jsonl_self_rel(tmp_path: Path) -> Path:
     """JSONL with an explicit self-relation for testing the warning."""
     doc = {

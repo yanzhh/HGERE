@@ -7,7 +7,7 @@ Replaces the loose ``args`` namespace that was previously threaded through
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -55,6 +55,17 @@ class RelationDatasetParams(BaseModel):
         default=-1,
         description=(
             "Local rank for distributed training (-1 = single GPU or non-distributed)."
+        ),
+    )
+
+    # ── Dataset split ───────────────────────────────────────────────────────
+    split: Literal["train", "dev", "test", "inference"] = Field(
+        default="train",
+        description=(
+            "Dataset split role.  Training-specific warnings (dropped NER labels, "
+            "self-relations, relations absent from candidate set) are only emitted "
+            "for 'train'.  Use 'inference' for pipeline runs where no gold labels "
+            "are required."
         ),
     )
 

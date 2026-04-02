@@ -171,6 +171,7 @@ def load_dataset(
         no_sym=args.no_sym,
         nocross=args.nocross,
         local_rank=args.local_rank,
+        split=split,
         preload=args.preload_dataset,
         pre_filter_params=getattr(args, "pre_filter_params", None),
     )

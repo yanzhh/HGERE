@@ -840,8 +840,11 @@ def cli():
 
     # 8. Optionally save pruner
     if args.save:
+        pruner.max_span_len = args.max_span_length
         pruner.save(args.save)
-        logger.info("Pruner saved to %s", args.save)
+        logger.info(
+            "Pruner saved to %s (max_span_len=%d)", args.save, args.max_span_length
+        )
 
 
 if __name__ == "__main__":

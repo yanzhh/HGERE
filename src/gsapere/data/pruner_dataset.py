@@ -62,6 +62,8 @@ class PrunerDataset(DocumentDataset):
             self.rulebased_pruner: RuleBasedPruner | None = RuleBasedPruner.load(
                 rulebased_pruner_file
             )
+            if self.rulebased_pruner.max_span_len is not None:
+                self.max_mention_ori_length = self.rulebased_pruner.max_span_len
         else:
             self.rulebased_pruner = None
 

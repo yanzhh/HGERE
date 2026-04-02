@@ -64,6 +64,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Number of documents per batch (0 = all at once).",
     )
+    p.add_argument(
+        "--debug_break_on_first_rel",
+        action="store_true",
+        help="Debug: log and raise after the first predicted relation.",
+    )
+    p.add_argument(
+        "--debug_log_rel_probs",
+        action="store_true",
+        help="Debug: log top-5 relation probabilities for every span pair.",
+    )
     return p
 
 
@@ -128,6 +138,8 @@ def _process_file(
     output_file: Path,
     batch_size: int,
     logger: logging.Logger,
+    debug_break_on_first_rel: bool = False,
+    debug_log_rel_probs: bool = False,
 ) -> None:
     docs = _load_docs(input_file, logger)
     if not docs:
@@ -149,7 +161,12 @@ def _process_file(
             total_sents = sum(len(d.get("sentences", [])) for d in batch)
             show_progress = total_sents > 100
             all_results.extend(
-                pipeline.process_documents(batch, show_progress=show_progress)
+                pipeline.process_documents(
+                    batch,
+                    show_progress=show_progress,
+                    debug_break_on_first_rel=debug_break_on_first_rel,
+                    debug_log_rel_probs=debug_log_rel_probs,
+                )
             )
             if doc_bar is not None:
                 doc_bar.update(len(batch))
@@ -203,4 +220,12 @@ def cli() -> None:
         else:
             output_file = output_path
 
-        _process_file(pipeline, input_file, output_file, args.batch_size, logger)
+        _process_file(
+            pipeline,
+            input_file,
+            output_file,
+            args.batch_size,
+            logger,
+            debug_break_on_first_rel=args.debug_break_on_first_rel,
+            debug_log_rel_probs=args.debug_log_rel_probs,
+        )

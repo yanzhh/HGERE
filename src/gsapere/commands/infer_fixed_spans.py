@@ -278,6 +278,7 @@ def cli():
             no_sym=args.no_sym,
             nocross=args.nocross,
             local_rank=args.local_rank,
+            split="inference",
         )
         dataset = RelationDataset(
             logger=logger,

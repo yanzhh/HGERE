@@ -15,6 +15,12 @@ Controlled by ``candidates_from`` in :func:`prepare_input_file`:
     Merge ``predicted_ner`` with gold ``ner`` spans so every gold span is
     seen by HGERE.  Useful for upper-bound / oracle experiments.
 
+Output format for ``predicted_ner_proba``
+-----------------------------------------
+Each entry is ``[start, end, score, label]`` where ``score`` is
+P(label | non-NIL classes) — the same format expected by the pre-filter
+threshold in :func:`gsapere.data.relation_dataset.RelationDataset`.
+
 NER decoding modes
 ------------------
 Controlled by ``force_non_nil`` in :func:`infer_hgere`:
@@ -63,6 +69,8 @@ def infer_hgere(
     gold_only: bool = False,
     disable_progress: bool = False,
     force_non_nil: bool = False,
+    debug_break_on_first_rel: bool = False,
+    debug_log_rel_probs: bool = False,
 ):
     """Run HGERE inference over candidate spans already loaded in eval_dataset.
 
@@ -105,7 +113,7 @@ def infer_hgere(
     with torch.no_grad():
         for batch in tqdm(
             eval_dataset.loader,
-            desc="Fixed-span inference",
+            desc="ERE inference",
             total=len(eval_dataset.loader),
             disable=disable_progress,
         ):
@@ -138,16 +146,11 @@ def infer_hgere(
                 n_spans = len(sample_obj_mentions)
                 sample_ner_preds = ner_preds[sample_idx][:n_spans]
 
-                sample_logits_full = ner_logits[sample_idx][:n_spans]
-                softmax_full = torch.nn.functional.softmax(sample_logits_full, dim=-1)
-
-                # prob_nil: P(NIL) over all classes (useful as a confidence signal)
-                probs_nil = softmax_full[..., nil_index].cpu().numpy()
-
                 # prob_no_nil: P(predicted label) renormalized over non-NIL classes
                 softmax_no_nil = torch.nn.functional.softmax(
                     ner_logits_masked[sample_idx][:n_spans], dim=-1
                 )
+                # @todo Why no_nil here? could we leave that out?
                 probs_no_nil = (
                     softmax_no_nil.gather(-1, sample_ner_preds.unsqueeze(-1))
                     .squeeze(-1)
@@ -159,9 +162,9 @@ def infer_hgere(
                     eval_dataset.ner_label_list[idx] for idx in sample_ner_preds
                 ]
                 ner_predictions[sent_id] = {
-                    tuple(span): (label, float(p_nil), float(p_no_nil))
-                    for span, label, p_nil, p_no_nil in zip(
-                        sample_obj_mentions, sample_labels, probs_nil, probs_no_nil
+                    tuple(span): (label, float(p_no_nil))
+                    for span, label, p_no_nil in zip(
+                        sample_obj_mentions, sample_labels, probs_no_nil
                     )
                 }
 
@@ -187,17 +190,47 @@ def infer_hgere(
                     best_idx = torch.argmax(probs)
                     score = probs[best_idx].cpu().item()
 
+                    if debug_log_rel_probs:
+                        probs_cpu = probs.cpu().tolist()
+                        all_labels = rel_label_list + rel_label_list[n_syms:]
+                        top = sorted(zip(all_labels, probs_cpu), key=lambda x: -x[1])[
+                            :5
+                        ]
+                        logger.info(
+                            "[DEBUG REL] sent=%s subj=%s obj=%s  top5=%s",
+                            sent_id,
+                            subj_span,
+                            obj_span,
+                            [(lbl, f"{p:.4f}") for lbl, p in top],
+                        )
+
                     if best_idx >= n_rel_label:
                         best_idx = best_idx - n_unsyms
                         subj_span, obj_span = obj_span, subj_span
 
                     label = rel_label_list[best_idx]
                     if label != "NIL":
-                        subj_label, *_ = ner_predictions[sent_id][subj_span]
-                        obj_label, *_ = ner_predictions[sent_id][obj_span]
+                        subj_label = ner_predictions[sent_id][subj_span][0]
+                        obj_label = ner_predictions[sent_id][obj_span][0]
                         rel_predictions[sent_id].append(
                             (subj_span, subj_label, obj_span, obj_label, label, score)
                         )
+                        if debug_break_on_first_rel:
+                            logger.info(
+                                "[DEBUG] First relation predicted: sent_id=%s  "
+                                "subj=%s(%s) -> obj=%s(%s)  label=%s  score=%.4f",
+                                sent_id,
+                                subj_span,
+                                subj_label,
+                                obj_span,
+                                obj_label,
+                                label,
+                                score,
+                            )
+                            raise RuntimeError(
+                                f"[DEBUG] First relation found — "
+                                f"sent_id={sent_id} label={label!r} score={score:.4f}"
+                            )
 
     # --- Collect per-sentence predictions ---
     tot_ner: dict = {}
@@ -217,19 +250,17 @@ def infer_hgere(
                 (span, info) for span, info in sent_ents.items() if info[0] != "NIL"
             ]
 
-        pred_ner = sorted(span + (label,) for span, (label, _, __) in ents_to_output)
-        # predicted_ner_proba entries: [start, end, label, p_nil, p_no_nil]
-        # p_nil    = P(NIL | all classes) — low means model is confident it's an entity
-        # p_no_nil = P(label | non-NIL classes only)
+        pred_ner = sorted(span + (label,) for span, (label, _) in ents_to_output)
+        # predicted_ner_proba entries: [start, end, score, label]
+        # score = P(label | non-NIL classes) — used by the pre-filter threshold
         pred_ner_proba = sorted(
-            span + (label, p_nil, p_no_nil)
-            for span, (label, p_nil, p_no_nil) in ents_to_output
+            span + (p_no_nil, label) for span, (label, p_no_nil) in ents_to_output
         )
 
         if not force_non_nil:
             # Only keep relations where both endpoints have a non-NIL NER label.
             non_nil_spans = {
-                span for span, (label, _, __) in sent_ents.items() if label != "NIL"
+                span for span, (label, _) in sent_ents.items() if label != "NIL"
             }
             sent_rels = [
                 r for r in sent_rels if r[0] in non_nil_spans and r[2] in non_nil_spans

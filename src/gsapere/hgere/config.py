@@ -390,6 +390,7 @@ class HGERETrainConfig(BaseModel):
 
     def to_relation_dataset_params(
         self,
+        split: str = "train",
         doc_limit: Optional[int] = None,
         preload: bool = False,
     ) -> "RelationDatasetParams":  # noqa: F821
@@ -397,6 +398,8 @@ class HGERETrainConfig(BaseModel):
 
         Parameters
         ----------
+        split:
+            Dataset split: "train", "dev", "test", or "inference".
         doc_limit:
             Override the number of documents to load (default: all).
         preload:
@@ -412,6 +415,7 @@ class HGERETrainConfig(BaseModel):
             no_sym=self.no_sym,
             nocross=self.nocross,
             local_rank=self.train_params.local_rank,
+            split=split,
             doc_limit=doc_limit,
             preload=preload,
         )

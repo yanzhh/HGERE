@@ -446,6 +446,70 @@ class TestDoubleAnnotationHandling:
             for w in warning_calls
         )
 
+    def test_connectivity_breaks_alphabetical_tiebreak(
+        self,
+        relation_jsonl_double_ann_connectivity: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        """Label with higher relation connectivity wins over alphabetical order.
+
+        Span (1,1) has {Method, Task}.  A singly-annotated Task span (2,2) is
+        in a relation, giving "Task" connectivity=1 and "Method" connectivity=0.
+        Expected training label for (1,1): "Task" (not "Method" as alphabetical
+        would give).
+        """
+        ds = _make_dataset(
+            relation_jsonl_double_ann_connectivity,
+            mock_tokenizer,
+            mock_labels,
+            relation_params,
+        )
+        # entity_labels_gold is not directly exposed, but the chosen label is
+        # reflected in ner_golden_labels: the dropped label counter will show
+        # "Method" dropped (not "Task").  We verify via golden_labels_with_ner:
+        # the relation (1,1)→(3,3) "Result" should be expanded with "Task" as
+        # the subject type (the chosen label), not "Method".
+        sent_id = (0, 0)
+        rel_subj_types = {
+            subj[-1]
+            for (s, subj, obj, label) in ds.golden_labels_with_ner
+            if s == sent_id and label == "Result" and subj[:2] == (1, 1)
+        }
+        assert "Task" in rel_subj_types
+
+    def test_alphabetical_fallback_when_no_connectivity(
+        self,
+        relation_jsonl_double_ann: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        """When no single-label span provides connectivity signal, fall back to alphabetical.
+
+        In relation_jsonl_double_ann, the only relation endpoint that is single-label
+        is (2,2)="Dataset". Neither "Method" nor "Task" gets connectivity from it.
+        Alphabetical → "Method" is chosen.
+        """
+        # We can observe the chosen label indirectly via the dropped-label warning:
+        # if "Method" is chosen, "Task" should appear in the dropped-label summary.
+        from unittest.mock import MagicMock as MM
+
+        mock_logger = MM()
+        from gsapere.data.relation_dataset import RelationDataset
+
+        RelationDataset(
+            logger=mock_logger,
+            tokenizer=mock_tokenizer,
+            labels=mock_labels,
+            file_path=str(relation_jsonl_double_ann),
+            params=relation_params,
+        )
+        warning_text = " ".join(str(c) for c in mock_logger.warning.call_args_list)
+        # "Task" should be in the dropped label summary (Method chosen, Task dropped)
+        assert "Task" in warning_text
+
 
 class TestSelfRelationWarning:
     def test_warning_logged_for_self_relation(

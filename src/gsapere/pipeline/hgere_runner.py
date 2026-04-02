@@ -130,7 +130,11 @@ class HGERERunner:
         )
 
     def _run_inference(
-        self, docs: list[dict[str, Any]], show_progress: bool = False
+        self,
+        docs: list[dict[str, Any]],
+        show_progress: bool = False,
+        debug_break_on_first_rel: bool = False,
+        debug_log_rel_probs: bool = False,
     ) -> list[dict[str, Any]]:
         """Write docs to tempfiles, run HGERE, read results back."""
         n_gpu = torch.cuda.device_count()
@@ -161,6 +165,7 @@ class HGERERunner:
                 no_sym=cfg.no_sym,
                 nocross=cfg.nocross,
                 local_rank=cfg.local_rank,
+                split="inference",
                 pre_filter_params=(
                     cfg.pre_filter_params.model_dump()
                     if cfg.pre_filter_params
@@ -192,6 +197,8 @@ class HGERERunner:
                 gold_only=False,
                 disable_progress=not show_progress,
                 force_non_nil=self._config.force_non_nil,
+                debug_break_on_first_rel=debug_break_on_first_rel,
+                debug_log_rel_probs=debug_log_rel_probs,
             )
 
             result = []
@@ -206,13 +213,19 @@ class HGERERunner:
                     os.unlink(p)
 
     def run(
-        self, docs: list[dict[str, Any]], show_progress: bool = False
+        self,
+        docs: list[dict[str, Any]],
+        show_progress: bool = False,
+        debug_break_on_first_rel: bool = False,
+        debug_log_rel_probs: bool = False,
     ) -> list[dict[str, Any]]:
         """Run HGERE on docs that already have ``predicted_ner`` candidates.
 
         Args:
             docs: Documents with ``predicted_ner`` populated by PrunerRunner.
             show_progress: Show a tqdm progress bar over inference batches.
+            debug_break_on_first_rel: If True, log and raise on the first
+                predicted relation — for diagnosing zero-relation issues.
 
         Returns:
             Same docs enriched with ``predicted_ner``, ``predicted_ner_proba``,
@@ -220,4 +233,9 @@ class HGERERunner:
         """
         if not docs:
             return []
-        return self._run_inference(docs, show_progress=show_progress)
+        return self._run_inference(
+            docs,
+            show_progress=show_progress,
+            debug_break_on_first_rel=debug_break_on_first_rel,
+            debug_log_rel_probs=debug_log_rel_probs,
+        )
