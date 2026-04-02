@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
 
 from ..config import load_yaml_strict
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 if TYPE_CHECKING:
     pass
@@ -43,6 +43,8 @@ SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0"})
 
 class PrunerTrainParams(BaseModel):
     """Parameters used only during training — not needed at inference time."""
+
+    model_config = ConfigDict(extra="forbid")
 
     # ── Data ────────────────────────────────────────────────────────────────
     data_dir: str = Field(
@@ -259,6 +261,8 @@ class PrunerTrainConfig(BaseModel):
     section), use :py:meth:`from_yaml` — it hoists ``label_set`` and
     ``schema_version`` from the top level automatically.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     # ── Versioning ────────────────────────────────────────────────────────────
     schema_version: str = Field(

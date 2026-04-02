@@ -21,22 +21,14 @@ Each entry is ``[start, end, score, label]`` where ``score`` is
 P(label | non-NIL classes) — the same format expected by the pre-filter
 threshold in :func:`gsapere.data.relation_dataset.RelationDataset`.
 
-NER decoding modes
-------------------
-Controlled by ``force_non_nil`` in :func:`infer_hgere`:
+NER decoding
+------------
+Standard softmax argmax over all NER classes, including NIL.
+Only spans whose predicted label is *not* NIL appear in ``predicted_ner``
+and ``predicted_ner_proba``.  Relations are only predicted between pairs
+where *both* endpoints received a non-NIL label.
 
-``force_non_nil=False`` (default — pipeline mode)
-    Standard softmax argmax over all NER classes, including NIL.
-    Only spans whose predicted label is *not* NIL appear in ``predicted_ner``
-    and ``predicted_ner_proba``.  Relations are only predicted between pairs
-    where *both* endpoints received a non-NIL label.
-
-``force_non_nil=True`` (gold-span / cross-dataset mode)
-    NIL is masked out of the NER logits before argmax, so every candidate
-    span is forced to receive the highest-probability *non-NIL* label.
-
-Relations are always predicted with the standard HGERE decoding logic
-(NIL relations are filtered out).
+NIL relations are filtered out.
 """
 
 import json
@@ -68,12 +60,12 @@ def _decode_ner_batch(
     sent_indices,
     obj_mentions,
     ner_preds,
-    ner_logits_masked,
+    ner_logits,
     ner_label_list: list,
 ) -> dict:
     """Decode NER predictions for one batch.
 
-    Returns a dict mapping sent_id → {span_tuple: (label, prob_no_nil)}.
+    Returns a dict mapping sent_id → {span_tuple: (label, prob)}.
     """
     result = {}
     for sample_idx, sent_id in enumerate(sent_indices):
@@ -82,11 +74,11 @@ def _decode_ner_batch(
         n_spans = len(sample_obj_mentions)
         sample_ner_preds = ner_preds[sample_idx][:n_spans]
 
-        softmax_no_nil = torch.nn.functional.softmax(
-            ner_logits_masked[sample_idx][:n_spans], dim=-1
+        softmax = torch.nn.functional.softmax(
+            ner_logits[sample_idx][:n_spans], dim=-1
         )
-        probs_no_nil = (
-            softmax_no_nil.gather(-1, sample_ner_preds.unsqueeze(-1))
+        probs = (
+            softmax.gather(-1, sample_ner_preds.unsqueeze(-1))
             .squeeze(-1)
             .cpu()
             .numpy()
@@ -94,7 +86,7 @@ def _decode_ner_batch(
         sample_labels = [ner_label_list[idx] for idx in sample_ner_preds]
         result[sent_id] = {
             tuple(span): (label, float(p))
-            for span, label, p in zip(sample_obj_mentions, sample_labels, probs_no_nil)
+            for span, label, p in zip(sample_obj_mentions, sample_labels, probs)
         }
     return result
 
@@ -185,7 +177,6 @@ def _decode_relation_batch(
 def _collect_per_sentence_output(
     ner_predictions: dict,
     rel_predictions: dict,
-    force_non_nil: bool,
 ) -> tuple:
     """Assemble per-sentence NER and relation output dicts.
 
@@ -199,25 +190,14 @@ def _collect_per_sentence_output(
     for sent_id, sent_ents in ner_predictions.items():
         sent_rels = sorted(rel_predictions[sent_id], key=lambda x: -x[-1])
 
-        if force_non_nil:
-            ents_to_output = sent_ents.items()
-        else:
-            ents_to_output = [
-                (span, info) for span, info in sent_ents.items() if info[0] != "NIL"
-            ]
+        ents_to_output = [
+            (span, info) for span, info in sent_ents.items() if info[0] != "NIL"
+        ]
 
         pred_ner = sorted(span + (label,) for span, (label, _) in ents_to_output)
         pred_ner_proba = sorted(
-            span + (p_no_nil, label) for span, (label, p_no_nil) in ents_to_output
+            span + (p, label) for span, (label, p) in ents_to_output
         )
-
-        if not force_non_nil:
-            non_nil_spans = {
-                span for span, (label, _) in sent_ents.items() if label != "NIL"
-            }
-            sent_rels = [
-                r for r in sent_rels if r[0] in non_nil_spans and r[2] in non_nil_spans
-            ]
 
         tot_ner[sent_id] = pred_ner
         tot_ner_proba[sent_id] = pred_ner_proba
@@ -296,7 +276,6 @@ def infer_hgere(
     output_path,
     gold_only: bool = False,
     disable_progress: bool = False,
-    force_non_nil: bool = False,
     debug_break_on_first_rel: bool = False,
     debug_log_rel_probs: bool = False,
 ):
@@ -318,11 +297,6 @@ def infer_hgere(
         gold_only: if True, filter the output ``predicted_ner`` /
             ``predicted_rel`` to only spans/relations whose endpoints appear
             in the gold ``ner`` of the source file.
-        force_non_nil: if True, mask NIL from NER logits before argmax so
-            every candidate span is forced to receive a non-NIL label.
-            Use this only for gold-span / cross-dataset evaluation.
-            Default False (pipeline mode): standard argmax including NIL;
-            only non-NIL spans appear in output.
     """
     model.eval()
     start_time = timeit.default_timer()
@@ -332,7 +306,6 @@ def infer_hgere(
     sym_labels = list(eval_dataset.sym_labels)
     n_syms = len(sym_labels)
     n_unsyms = n_rel_label - n_syms
-    nil_index = eval_dataset.ner_label_list.index("NIL")
 
     ner_predictions: dict = {}
     rel_predictions: dict = defaultdict(list)
@@ -353,19 +326,15 @@ def infer_hgere(
 
             rel_logits = torch.nn.functional.log_softmax(outputs[0], dim=-1)
             ner_logits = outputs[1]
-            ner_logits_masked = ner_logits.clone()
-            ner_logits_masked[..., nil_index] = float("-inf")
 
-            ner_preds = torch.argmax(
-                ner_logits_masked if force_non_nil else ner_logits, dim=-1
-            )
+            ner_preds = torch.argmax(ner_logits, dim=-1)
 
             ner_predictions.update(
                 _decode_ner_batch(
                     sent_indices,
                     obj_mentions,
                     ner_preds,
-                    ner_logits_masked,
+                    ner_logits,
                     eval_dataset.ner_label_list,
                 )
             )
@@ -387,7 +356,7 @@ def infer_hgere(
                 rel_predictions[sent_id].extend(rels)
 
     tot_ner, tot_ner_proba, tot_rel, tot_rel_proba = _collect_per_sentence_output(
-        ner_predictions, rel_predictions, force_non_nil
+        ner_predictions, rel_predictions
     )
     _write_predictions(
         source_file_path,

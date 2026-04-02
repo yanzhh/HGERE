@@ -1,5 +1,5 @@
 label_set: gsap
-model_dir: saves/gsap/HGERE/vogelvieh
+model_dir: /home/ottowg/gsap-best-hgere
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 model_type: hyper
 do_lower_case: true
@@ -20,23 +20,27 @@ attn_self: true
 
 # Data
 ## Pruner predictions used as NER candidates input to HGERE
-ner_prediction_dir: saves/gsap/pruner/pelikan
+ner_prediction_dir: /home/ottowg/gsap-best-pruner
 #data_dir: datasets/gsap-ere
 
 # Optimisation
 train_params:
     project_name: gsap-rel-hgere
-    run_name: vogelvieh
+    run_name: no_name
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
-    save_results: true
-    eval_train: true
+    do_train: false
+    eval_train: false
+    eval_dev: false
     eval_test: true
-    seed: 45
+    save_results: true
+    seed: 43
+    pre_filter_params:
+        method: threshold
+        value: 0.0125
     shuffle: true # not tested yet
     preload_dataset: false # not tested yet
-    do_train: true
     learning_rate: 1e-5
     learning_rate_cls: 1e-5
     num_train_epochs: 8
@@ -48,8 +52,8 @@ train_params:
     local_rank: -1
     # Loss
     loss_re_weight_alpha: 0.9 # (1 - alpha) * loss_ner + alpha * loss_re
-    ner_focal_loss: true
-    re_focal_loss: true
+    ner_focal_loss: false
+    re_focal_loss: false
     # Evaluation
     evaluate_during_training: true
     eval_all_checkpoints: true

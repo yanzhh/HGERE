@@ -196,7 +196,6 @@ class HGERERunner:
                 output_path=tmp_output,
                 gold_only=False,
                 disable_progress=not show_progress,
-                force_non_nil=self._config.force_non_nil,
                 debug_break_on_first_rel=debug_break_on_first_rel,
                 debug_log_rel_probs=debug_log_rel_probs,
             )

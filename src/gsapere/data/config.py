@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RelationDatasetParams(BaseModel):
@@ -18,6 +18,8 @@ class RelationDatasetParams(BaseModel):
     All fields have sensible defaults so callers only need to set what
     differs from those defaults.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     # ── Sequence lengths ────────────────────────────────────────────────────
     max_seq_length: int = Field(

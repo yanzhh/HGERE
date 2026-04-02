@@ -13,7 +13,7 @@ from typing import Generator, Literal, Optional
 import transformers
 
 from ..config import load_yaml_strict
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from ..pre_filter.config import PreFilterParams
 
@@ -40,6 +40,8 @@ class FinalPruningConfig(BaseModel):
                         K = clamp(topk_ratio * sent_len, min, max).
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     method: Literal["topk", "threshold"] = "threshold"
     topk_ratio: float = 0.5
     min_mentions_by_sentence: int = 3
@@ -55,6 +57,8 @@ class FinalPruningConfig(BaseModel):
 
 class PrunerConfig(BaseModel):
     """Configuration for the pruner stage."""
+
+    model_config = ConfigDict(extra="forbid")
 
     model_dir: str
     base_model_name_or_path: str
@@ -82,6 +86,8 @@ class PrunerConfig(BaseModel):
 class HGEREConfig(BaseModel):
     """Configuration for the HGERE stage."""
 
+    model_config = ConfigDict(extra="forbid")
+
     model_dir: str
     base_model_name_or_path: str
     model_type: str = "hyper"
@@ -106,18 +112,16 @@ class HGEREConfig(BaseModel):
     use_typemarker: bool = False
     no_sym: bool = True
     nocross: bool = False
+    shuffle: bool = False
     local_rank: int = -1
-    # NER decoding: if False (default), standard argmax — NIL predictions are
-    # dropped and only high-confidence non-NIL entities appear in output.
-    # Set to True only for gold-span / cross-dataset evaluation where every
-    # candidate must receive a non-NIL label.
-    force_non_nil: bool = False
     pre_filter_params: Optional[PreFilterParams] = None
     n_workers: int = 4
 
 
 class PipelineConfig(BaseModel):
     """Top-level pipeline configuration."""
+
+    model_config = ConfigDict(extra="forbid")
 
     label_set: str
     pruner: PrunerConfig

@@ -72,6 +72,7 @@ hgere:
     n_iter: 3
     layernorm: true
     layernorm_1st: true
+    attn_self: true
 
     train_params:
         # Data
@@ -96,8 +97,6 @@ hgere:
         loss_re_weight_alpha: 0.9 # (1 - alpha) * loss_ner + alpha * loss_re
         ner_focal_loss: true
         re_focal_loss: true
-        # Model flags
-        attn_self: true
         # Evaluation
         evaluate_during_training: true
         eval_all_checkpoints: true

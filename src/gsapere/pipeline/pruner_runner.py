@@ -245,6 +245,7 @@ class PrunerRunner:
                 "Pruner: training_args.bin not found at %s, using defaults",
                 model_path,
             )
+        self._model_args = model_args
         with suppress_transformers_warnings():
             self._model = model_class.from_pretrained(
                 str(model_path), config=bert_config, args=model_args
@@ -268,7 +269,7 @@ class PrunerRunner:
             per_gpu_eval_batch_size=cfg.per_gpu_eval_batch_size,
             n_gpu=n_gpu,
             device=self._device,
-            nocross=False,
+            nocross=getattr(self._model_args, "nocross", False),
             rulebased_pruner_file=self._config.rulebased_pruner_file,
         )
 

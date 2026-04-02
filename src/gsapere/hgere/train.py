@@ -497,11 +497,8 @@ def _save_model(
     train_status_name = os.path.join(output_dir, "train_states.bin")
     torch.save(train_states_checkpoint, train_status_name)
 
-    # torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+    torch.save(args, os.path.join(output_dir, "training_args.bin"))
     logger.info("Saving model checkpoint to %s", output_dir)
-    args_file = os.path.join(output_dir, "training_args.txt")
-    with open(args_file, "w") as f:
-        f.write(str(vars(args)))
     args_yaml_file = os.path.join(output_dir, "training_args.yaml")
     with open(args_yaml_file, "w") as f:
         yaml.dump(vars(args), f, default_flow_style=False)

@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Optional
 
 
 from ..config import load_yaml_strict
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..pre_filter.config import PreFilterParams
 
@@ -47,6 +47,8 @@ SUPPORTED_SCHEMA_VERSIONS: frozenset[str] = frozenset({"1.0"})
 
 class HGERETrainParams(BaseModel):
     """Parameters used only during training — not needed at inference time."""
+
+    model_config = ConfigDict(extra="forbid")
 
     # ── Data ────────────────────────────────────────────────────────────────
     train_file: str = Field(
@@ -240,6 +242,8 @@ class HGERETrainConfig(BaseModel):
     section), use :py:meth:`from_yaml` — it hoists ``label_set`` and
     ``schema_version`` from the top level automatically.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     # ── Versioning ────────────────────────────────────────────────────────────
     schema_version: str = Field(

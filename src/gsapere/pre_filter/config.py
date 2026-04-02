@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Annotated
 
 # ---------------------------------------------------------------------------
@@ -17,11 +17,15 @@ from typing_extensions import Annotated
 
 
 class ThresholdPreFilterParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     method: Literal["threshold"]
     value: float = Field(ge=0.0, le=1.0)
 
 
 class TopKPreFilterParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     method: Literal["topk"]
     ratio: float = Field(ge=0.0, le=1.0)
     min: int = Field(ge=0)

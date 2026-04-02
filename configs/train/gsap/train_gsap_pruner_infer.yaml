@@ -1,0 +1,56 @@
+label_set: gsap
+model_dir: /home/ottowg/gsap-best-pruner
+base_model_name_or_path: allenai/scibert_scivocab_uncased
+do_lower_case: true
+model_type: bertspanmarkerpruner
+per_gpu_eval_batch_size: 32
+max_seq_length: 256
+max_pair_length: 64
+max_mention_ori_length: 12
+
+train_params:
+    # W&B
+    project_name: gsap-pruner
+    run_name: friedrich
+    # Data
+    data_dir: datasets/gsap-ere/2025-05-15
+    train_file: train.jsonl
+    dev_file: dev.jsonl
+    test_file: test.jsonl
+    do_train: false
+    eval_test: true
+    eval_train: false
+    eval_dev: false
+    save_predictions: true
+    # Rule-based pre-filter (produced by eval-rulebased-pruner)
+    rulebased_pruner_file: /home/ottowg/gsap-best-rules.json
+    # Optimisation
+    seed: 44
+    learning_rate: 1e-6
+    num_train_epochs: 8
+    eval_epochs: 1
+    per_gpu_train_batch_size: 32
+    gradient_accumulation_steps: 1
+    save_steps: 1000
+    fp16: true
+    local_rank: -1
+    # Loss
+    pruner_loss: focal
+    # Span candidate filtering (used during eval inside training)
+    topk_ratio: 8
+    min_mentions_num: 1
+    max_mentions_num: 60
+    # Model flags
+    onedropout: true
+    lminit: true
+    nocross: true
+    biaf_span: true
+    biaf_mode: 2
+    biaf_factorize: true
+    span_hidden_size: 768
+    rank: 768
+    span_size: 256
+    # Evaluation
+    evaluate_during_training: true
+    eval_all_checkpoints: true
+    overwrite_model_dir: true
