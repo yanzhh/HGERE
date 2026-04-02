@@ -16,6 +16,12 @@ from typing import Any
 import torch
 from tqdm import tqdm
 
+from gsapere.evaluation.hgere import (
+    compute_ner_metrics,
+    compute_rel_metrics,
+    compute_rel_metrics_with_ner,
+)
+
 WEIGHTS_NAME = "pytorch_model.bin"
 SAFETENSORS_NAME = "model.safetensors"
 
@@ -34,6 +40,83 @@ def get_gold_ner_with_nolabel(ner_golden_labels: set) -> set:
         ner_nolabel = (ner[0], ner[1])
         ner_golden_nolabels.add(ner_nolabel)
     return ner_golden_nolabels
+
+
+def _build_eval_docs_from_file(
+    ner_predictions: dict,
+    rel_predictions: dict,
+    file_path: str,
+) -> list:
+    """Merge in-memory model predictions with gold data from the original JSONL file.
+
+    Reading gold data from the original file (not from the dataset's filtered
+    in-memory structures) ensures the recall denominator is correct (all gold
+    relations, not only those whose spans were included as candidates).
+
+    Each doc in the returned list contains all original fields plus:
+    ``doc_id``, ``predicted_ner``, ``predicted_ner_proba``,
+    ``predicted_rel``, ``predicted_rel_proba``.
+    """
+    docs = []
+    with open(file_path) as f:
+        for doc_idx, line in enumerate(f):
+            raw = json.loads(line)
+            n_sents = len(raw["sentences"])
+            pred_ner: list = []
+            pred_ner_proba: list = []
+            pred_rel: list = []
+            pred_rel_proba: list = []
+            for si in range(n_sents):
+                sent_id = (doc_idx, si)
+                sent_ents = ner_predictions.get(sent_id, {})
+                sent_rels = sorted(
+                    rel_predictions.get(sent_id, []), key=lambda x: -x[-1]
+                )
+                pred_ner.append(
+                    sorted(
+                        [
+                            list(span) + [label]
+                            for span, (label, _score) in sent_ents.items()
+                            if label != "NIL"
+                        ]
+                    )
+                )
+                pred_ner_proba.append(
+                    sorted(
+                        [
+                            list(span) + [label, score]
+                            for span, (label, score) in sent_ents.items()
+                            if label != "NIL"
+                        ]
+                    )
+                )
+                pred_rel.append(
+                    sorted(
+                        [
+                            list(subj_span) + list(obj_span) + [label]
+                            for subj_span, _sl, obj_span, _ol, label, _sc in sent_rels
+                        ]
+                    )
+                )
+                pred_rel_proba.append(
+                    sorted(
+                        [
+                            list(subj_span) + list(obj_span) + [label, score]
+                            for subj_span, _sl, obj_span, _ol, label, score in sent_rels
+                        ]
+                    )
+                )
+            docs.append(
+                {
+                    **raw,
+                    "doc_id": raw.get("doc_id", doc_idx),
+                    "predicted_ner": pred_ner,
+                    "predicted_ner_proba": pred_ner_proba,
+                    "predicted_rel": pred_rel,
+                    "predicted_rel_proba": pred_rel_proba,
+                }
+            )
+    return docs
 
 
 def evaluate(
@@ -63,7 +146,6 @@ def evaluate(
     rel_label_list = list(eval_dataset.label_list)
     n_rel_label = len(rel_label_list)
     sym_labels = list(eval_dataset.sym_labels)
-    sym_label_set = frozenset(sym_labels[1:])
     n_syms = len(sym_labels)
     n_unsyms = n_rel_label - n_syms
 
@@ -197,111 +279,30 @@ def evaluate(
                         )
 
     # ---------------------------------------------------
-    # decode
-    global_predicted_ners = eval_dataset.global_predicted_ners
-    gold_rels = set(eval_dataset.golden_labels)
-    gold_rels_with_ner = set(eval_dataset.golden_labels_with_ner)
-    gold_ners = eval_dataset.ner_golden_labels
+    # Build evaluation docs and compute metrics
+    docs = _build_eval_docs_from_file(
+        ner_predictions, rel_predictions, eval_dataset.file_path
+    )
+    sym_labels_tuple = tuple(sym_labels[1:])  # exclude NIL prefix
 
-    tot_recall = eval_dataset.tot_recall
-    n_pred_ner = 0
-    n_tp_ner = 0
-    n_pred_rel = 0
-    n_tp_rel = 0
-    n_tp_rel_with_ner = 0
-
-    tot_predicted_relations = {}
-    tot_predicted_ners = {}
-    tot_predicted_relations_proba = {}
-    tot_predicted_ners_proba = {}
-
-    for sent_id, sent_ents_pred in ner_predictions.items():
-        sent_relations = rel_predictions[sent_id]
-        # sort by prob
-        sent_relations = sorted(sent_relations, key=lambda x: -x[-1])
-
-        sent_relation_keys = set()
-        sent_relation_keys_with_ner = set()
-        sent_ent_keys = set()
-        output_pred_rels = []
-        output_pred_rels_proba = []
-        output_pred_ner = []
-        output_pred_ner_proba = []
-        for subj_span, subj_label, obj_span, obj_label, label, score in sent_relations:
-            # Normalise symmetric relations to canonical direction for TP matching
-            if label in sym_label_set and obj_span < subj_span:
-                match_subj, match_obj = obj_span, subj_span
-                match_subj_lbl, match_obj_lbl = obj_label, subj_label
-            else:
-                match_subj, match_obj = subj_span, obj_span
-                match_subj_lbl, match_obj_lbl = subj_label, obj_label
-            sent_relation_keys.add((sent_id, match_subj, match_obj, label))
-            sent_relation_keys_with_ner.add(
-                (
-                    sent_id,
-                    match_subj + (match_subj_lbl,),
-                    match_obj + (match_obj_lbl,),
-                    label,
-                )
-            )
-            # Preserve original model-predicted direction in output
-            output_pred_rels.append(subj_span + obj_span + (label,))
-            output_pred_rels_proba.append(subj_span + obj_span + (label, score))
-        for ent_span, (label, score) in sent_ents_pred.items():
-            if label == "NIL":
-                continue
-            sent_ent_keys.add((sent_id, ent_span, label))
-            output_pred_ner.append(ent_span + (label,))
-            output_pred_ner_proba.append(ent_span + (label, score))
-
-        sent_tp_rel = sent_relation_keys & gold_rels
-        sent_tp_rel_with_ner = sent_relation_keys_with_ner & gold_rels_with_ner
-        sent_tp_ner = sent_ent_keys & gold_ners
-
-        n_pred_rel += len(sent_relation_keys)
-        n_tp_rel += len(sent_tp_rel)
-        n_tp_rel_with_ner += len(sent_tp_rel_with_ner)
-
-        n_pred_ner += len(sent_ent_keys)
-        n_tp_ner += len(sent_tp_ner)
-
-        # pdb.set_trace()
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-        # TODO add tot_predicted by doc_id and sent_nr to save
-        # @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-        tot_predicted_relations[sent_id] = output_pred_rels
-        tot_predicted_relations_proba[sent_id] = output_pred_rels_proba
-        tot_predicted_ners[sent_id] = output_pred_ner
-        tot_predicted_ners_proba[sent_id] = output_pred_ner_proba
+    ner_metrics = compute_ner_metrics(docs)
+    re_metrics = compute_rel_metrics(docs, sym_labels=sym_labels_tuple)
+    re_plus_metrics = compute_rel_metrics_with_ner(docs, sym_labels=sym_labels_tuple)
 
     evalTime = timeit.default_timer() - start_time
+    global_predicted_ners = eval_dataset.global_predicted_ners
     logger.info(
         "  Evaluation done in total %f secs (%f example per second)",
         evalTime,
         len(global_predicted_ners) / evalTime,
     )
 
-    ner_p = n_tp_ner / n_pred_ner if n_pred_ner > 0 else 0
-    n_gold_unique_ner = len({(sent_id, span) for sent_id, span, _ in gold_ners})
-    ner_r = n_tp_ner / n_gold_unique_ner if n_gold_unique_ner > 0 else 0.0
-    ner_f1 = 2 * (ner_p * ner_r) / (ner_p + ner_r) if n_tp_ner > 0 else 0.0
+    # Upper recall bounds from candidate span coverage
+    gold_ners = eval_dataset.ner_golden_labels
+    gold_rels = set(eval_dataset.golden_labels)
+    n_gold_unique_ner = ner_metrics["ner_n_gold"]
+    tot_recall = eval_dataset.tot_recall
 
-    p = n_tp_rel / n_pred_rel if n_pred_rel > 0 else 0
-    r = n_tp_rel / tot_recall if tot_recall > 0.0 else 0.0
-    f1 = 2 * (p * r) / (p + r) if n_tp_rel > 0 else 0.0
-
-    # assert(tot_recall==len(golden_labels))
-
-    p_with_ner = n_tp_rel_with_ner / n_pred_rel if n_pred_rel > 0 else 0
-    r_with_ner = n_tp_rel_with_ner / tot_recall if tot_recall else 0.0
-    # assert(tot_recall==len(golden_labels_with_ner))
-    f1_with_ner = (
-        2 * (p_with_ner * r_with_ner) / (p_with_ner + r_with_ner)
-        if n_tp_rel_with_ner > 0
-        else 0.0
-    )
-
-    # NER structural upper recall bound from candidate coverage
     gold_ner_span_positions = {(sent_id, span) for sent_id, span, _ in gold_ners}
     candidate_span_positions = {
         (sent_id, (start, end))
@@ -313,7 +314,6 @@ def evaluate(
         n_gold_ner_in_cands / n_gold_unique_ner if n_gold_unique_ner > 0 else 1.0
     )
 
-    # RE+ structural upper recall bound from candidate coverage
     n_re_plus_achievable = sum(
         1
         for sent_id, subj_span, obj_span, _label in gold_rels
@@ -323,55 +323,21 @@ def evaluate(
     re_plus_upper_recall = n_re_plus_achievable / tot_recall if tot_recall > 0 else 1.0
 
     results = {
-        "ner_precision": ner_p,
-        "ner_recall": ner_r,
-        "ner_f1": ner_f1,
-        "ner_n_gold_unique_spans": n_gold_unique_ner,
-        "ner_n_gold_annotations": len(gold_ners),
+        **ner_metrics,
+        **re_metrics,
+        **re_plus_metrics,
         "ner_upper_recall": ner_upper_recall,
-        "re_precision": p,
-        "re_recall": r,
-        "re_f1": f1,
-        "re+_precision": p_with_ner,
-        "re+_recall": r_with_ner,
-        "re+_f1": f1_with_ner,
         "re+_upper_recall": re_plus_upper_recall,
     }
 
     logger.info(f"Result: {json.dumps(results, indent=4)}")
-    # dump predictions
+
     if persist_predictions and getattr(args, "save_results", True):
         target_fn = os.path.split(eval_dataset.file_path)[-1]
         out_path = os.path.join(args.model_dir, target_fn)
-        with (
-            open(eval_dataset.file_path) as file_raw_data,
-            open(out_path, "w") as output_w,
-        ):
-            for l_idx, line in enumerate(file_raw_data):
-                data = json.loads(line)
-                num_sents = len(data["sentences"])
-                predicted_ner = []
-                predicted_ner_proba = []
-                predicted_rel = []
-                predicted_rel_proba = []
-                for n in range(num_sents):
-                    ner_item = tot_predicted_ners.get((l_idx, n), [])
-                    ner_item.sort()
-                    predicted_ner.append(ner_item)
-                    ner_item = tot_predicted_ners_proba.get((l_idx, n), [])
-                    ner_item.sort()
-                    predicted_ner_proba.append(ner_item)
-                    rel_item = tot_predicted_relations.get((l_idx, n), [])
-                    rel_item.sort()
-                    predicted_rel.append(rel_item)
-                    rel_item = tot_predicted_relations_proba.get((l_idx, n), [])
-                    rel_item.sort()
-                    predicted_rel_proba.append(rel_item)
-                data["predicted_ner"] = predicted_ner
-                data["predicted_rel"] = predicted_rel
-                data["predicted_ner_proba"] = predicted_ner_proba
-                data["predicted_rel_proba"] = predicted_rel_proba
-                output_w.write(json.dumps(data) + "\n")
+        with open(out_path, "w") as output_w:
+            for doc in docs:
+                output_w.write(json.dumps(doc) + "\n")
         logger.info("Predictions written to %s", out_path)
 
     return results

@@ -30,6 +30,7 @@ from transformers import (
 
 from ..data.collators import PrunerCollator
 from ..data.pruner_dataset import PrunerDataset
+from ..data.tokenizer_utils import adjust_tokenizer
 from ..models.span_classifier import (
     BertForSpanMarkerNerPruner,
     ModernBertForSpanMarkerNerPruner,
@@ -400,60 +401,15 @@ def get_span_optimizer(model_named_parameters, args):
     return optimizer
 
 
-def run_train_pruner(args=None):
-    if args is None:
-        from gsapere.commands.train_pruner import parse_arguments
-
-        args = parse_arguments()
-    exp_path = Path(args.model_dir)
-    if args.do_train:
-        model_dir = Path(args.model_dir)
-        if (
-            not args.overwrite_model_dir
-            and model_dir.exists()
-            and args.do_train
-            and list(model_dir.iterdir())
-        ):
-            raise ValueError(
-                f"Model directory ({model_dir}) already exists and is not empty. Use --overwrite_model_dir to overcome."
-            )
-
-        # if args.do_train and args.local_rank in [-1, 0]:
-        exp_path = create_exp_dir(
-            args.output_dir,
-            scripts_to_save=[],
-        )
-    elif not exp_path.exists():
-        raise Exception(
-            f"model path given by --model_dir not valid ('{exp_path}'). Are your sure you trained the model?"
-        )
-
-    logger = get_logger(args, exp_path, args.do_test)
-
-    if args.do_train:
-        args_file = model_dir / "training_args.txt"
-        with args_file.open("w") as json_file:
-            json.dump(vars(args), json_file, indent=4)
-
-    # Setup distant debugging if needed
-    if args.server_ip and args.server_port:
-        # Distant debugging - see https://code.visualstudio.com/docs/python/debugging#_attach-to-a-local-script
-        import ptvsd
-
-        print("Waiting for debugger attach")
-        ptvsd.enable_attach(
-            address=(args.server_ip, args.server_port), redirect_output=True
-        )
-        ptvsd.wait_for_attach()
-
-    # Setup CUDA, GPU & distributed training
+def _setup_device(args) -> None:
+    """Configure CUDA device and distributed training on args in-place."""
     if args.local_rank == -1 or args.no_cuda:
         device_name = (
             "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
         )
         device = torch.device(device_name)
         args.n_gpu = torch.cuda.device_count()
-    else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
+    else:
         device_name = "cuda"
         torch.cuda.set_device(args.local_rank)
         device = torch.device(device_name, args.local_rank)
@@ -462,42 +418,32 @@ def run_train_pruner(args=None):
     args.device = device
     args.device_name = device_name
 
-    logger.info("Experiment dir: %s", exp_path)
-    logger.info(
-        "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
-        args.local_rank,
-        device,
-        args.n_gpu,
-        bool(args.local_rank != -1),
-        args.fp16,
-    )
 
-    # Set seed
-    set_seed(args)
+def _get_num_labels(label_set: str) -> int:
+    """Return the number of NER labels for a given label set name."""
+    label_counts = {
+        "ace": 8,
+        "scierc": 7,
+        "ontonotes": 19,
+        "gsap": 11,
+        "somd": 14,
+        "scinlp": 5,
+        "scier": 5,
+    }
+    if label_set not in label_counts:
+        raise ValueError(f"No valid --label_set parameter given: '{label_set}'")
+    return label_counts[label_set]
 
-    if args.label_set == "ace":
-        num_labels = 8
-    elif args.label_set == "scierc":
-        num_labels = 7
-    elif args.label_set == "ontonotes":
-        num_labels = 19
-    elif args.label_set == "gsap":
-        num_labels = 11
-    elif args.label_set == "somd":
-        num_labels = 14
-    elif args.label_set == "scinlp":
-        num_labels = 5
-    elif args.label_set == "scier":
-        num_labels = 5
-    else:
-        assert False  # No valid --label_set parameter given (e.g., gsap)
 
-    # Load pretrained model and tokenizer
+def _load_model_and_tokenizer(args, num_labels: int, logger):
+    """Load pretrained config, tokenizer, and model; add special tokens.
+
+    Returns (model, config, tokenizer, model_class).
+    """
     if args.local_rank not in [-1, 0]:
-        torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
+        torch.distributed.barrier()
 
     args.model_type = args.model_type.lower()
-
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
 
     config = config_class.from_pretrained(
@@ -507,7 +453,6 @@ def run_train_pruner(args=None):
     tokenizer = tokenizer_class.from_pretrained(
         args.base_model_name_or_path, do_lower_case=args.do_lower_case
     )
-
     config.max_seq_length = args.max_seq_length
     config.alpha = args.alpha
     config.onedropout = args.onedropout
@@ -524,16 +469,197 @@ def run_train_pruner(args=None):
     )
     _transformers_logger.setLevel(_prev_level)
 
-    # Re-initialize BiSpanRepr's biaffine weight and bias after loading.
     if hasattr(model, "span_encoder"):
         model.span_encoder.reset_parameters()
 
-    add_special_tokens(model, args, tokenizer, logger)
+    adjust_tokenizer(
+        tokenizer=tokenizer,
+        model=model,
+        model_type=args.model_type,
+        n_special_tokens=2,
+        lminit=args.do_train and args.lminit,
+        init_tokens=["entity"],
+        logger=logger,
+    )
 
     if args.local_rank == 0:
-        # Make sure only the first process in distributed training will download model & vocab
         torch.distributed.barrier()
 
+    return model, config, tokenizer, model_class
+
+
+def _save_checkpoint_after_training(
+    args, model, tokenizer, global_step: int, best_result: float, logger
+) -> None:
+    """Evaluate on dev (if requested) and save model checkpoint."""
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    model_dir = Path(args.model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    update = True
+    if args.evaluate_during_training:
+        dev_file = Path(args.data_dir) / args.dev_file
+        results, _ = evaluate(logger, args, model, tokenizer, file_path=dev_file)
+        tn_rate = max(
+            results.get("pruner/thresh/tn_rate", 0.0),
+            results.get("pruner/topk/tn_rate", 0.0),
+        )
+        if tn_rate >= best_result:
+            logger.info(f"Best TN/(FP+TN):{tn_rate:.4f}")
+        else:
+            update = False
+
+    if update:
+        checkpoint_prefix = "checkpoint"
+        model_dir_checkpoint = model_dir / f"{checkpoint_prefix}-{global_step}"
+        model_dir_checkpoint.mkdir(parents=True, exist_ok=True)
+        model_to_save = model.module if hasattr(model, "module") else model
+        model_to_save.save_pretrained(model_dir_checkpoint)
+        torch.save(args, model_dir_checkpoint / "training_args.bin")
+        logger.info(f"Saving model checkpoint to {model_dir_checkpoint}")
+        _rotate_checkpoints(logger, args, checkpoint_prefix)
+
+    tokenizer.save_pretrained(args.model_dir)
+    torch.save(args, model_dir / "training_args.bin")
+
+
+def _run_test_splits(args, model_class, config, tokenizer, logger) -> None:
+    """Load each checkpoint and evaluate on train/dev/test splits."""
+    checkpoints = sorted(
+        {
+            os.path.dirname(c)
+            for pattern in ("pytorch_model.bin", "model.safetensors")
+            for c in glob.glob(f"{args.model_dir}/**/{pattern}", recursive=True)
+        }
+    )
+    if not args.eval_all_checkpoints:
+        checkpoints = checkpoints[-1:]
+    logger.info("Evaluate the following checkpoints: %s", checkpoints)
+
+    prune_config_override = None
+    if args.prune_config:
+        prune_config_override = json.loads(Path(args.prune_config).read_text())
+        logger.info(
+            f"Using prune config from {args.prune_config}: {prune_config_override}"
+        )
+
+    for checkpoint in checkpoints:
+        global_step = checkpoint.split("-")[-1]
+        output_test_file = Path(args.model_dir) / "test_results.txt"
+
+        model = model_class.from_pretrained(checkpoint, config=config, args=args)
+        model.to(args.device)
+        args.output_results = True
+
+        prune_config = prune_config_override
+        if prune_config is None:
+            dev_file = Path(args.data_dir) / args.dev_file
+            if dev_file.exists():
+                logger.info("Running dev inference to determine best pruning config …")
+                _, prune_config = evaluate(
+                    logger,
+                    args,
+                    model,
+                    tokenizer,
+                    file_path=dev_file,
+                    prefix=global_step,
+                    do_test=True,
+                )
+                config_path = Path(args.output_dir) / "best_config.json"
+                config_path.write_text(json.dumps(prune_config, indent=2) + "\n")
+                logger.info(
+                    f"Best prune config: {prune_config}  (saved to {config_path})"
+                )
+
+        splits = []
+        if getattr(args, "eval_train", True):
+            splits.append(args.train_file)
+        if getattr(args, "eval_dev", True):
+            splits.append(args.dev_file)
+        if getattr(args, "eval_test", True):
+            splits.append(args.test_file)
+
+        results = {}
+        for file_name in splits:
+            test_file = Path(args.data_dir) / file_name
+            if test_file.exists():
+                logger.info(f"Evaluate on {test_file.name}")
+                result, _ = evaluate(
+                    logger,
+                    args,
+                    model,
+                    tokenizer,
+                    file_path=test_file,
+                    prefix=global_step,
+                    do_test=True,
+                    prune_config=prune_config,
+                )
+                results[test_file.name] = result
+            else:
+                logger.info(f"{test_file} does not exist!")
+
+        with open(output_test_file, "w") as f:
+            json.dump(results, f, indent=4)
+
+
+def run_train_pruner(args=None):
+    if args is None:
+        from gsapere.commands.train_pruner import parse_arguments
+
+        args = parse_arguments()
+
+    exp_path = Path(args.model_dir)
+    if args.do_train:
+        model_dir = Path(args.model_dir)
+        if (
+            not args.overwrite_model_dir
+            and model_dir.exists()
+            and list(model_dir.iterdir())
+        ):
+            raise ValueError(
+                f"Model directory ({model_dir}) already exists and is not empty. "
+                "Use --overwrite_model_dir to overcome."
+            )
+        exp_path = create_exp_dir(args.output_dir, scripts_to_save=[])
+    elif not exp_path.exists():
+        raise Exception(
+            f"model path given by --model_dir not valid ('{exp_path}'). "
+            "Are your sure you trained the model?"
+        )
+
+    logger = get_logger(args, exp_path, args.do_test)
+
+    if args.do_train:
+        args_file = Path(args.model_dir) / "training_args.txt"
+        with args_file.open("w") as json_file:
+            json.dump(vars(args), json_file, indent=4)
+
+    # Setup distant debugging if needed
+    if args.server_ip and args.server_port:
+        import ptvsd
+
+        print("Waiting for debugger attach")
+        ptvsd.enable_attach(
+            address=(args.server_ip, args.server_port), redirect_output=True
+        )
+        ptvsd.wait_for_attach()
+
+    _setup_device(args)
+    logger.info("Experiment dir: %s", exp_path)
+    logger.info(
+        "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
+        args.local_rank,
+        args.device,
+        args.n_gpu,
+        bool(args.local_rank != -1),
+        args.fp16,
+    )
+    set_seed(args)
+
+    num_labels = _get_num_labels(args.label_set)
+    model, config, tokenizer, model_class = _load_model_and_tokenizer(
+        args, num_labels, logger
+    )
     model.to(args.device)
 
     if getattr(args, "debug_overflow", False):
@@ -545,199 +671,17 @@ def run_train_pruner(args=None):
         )
 
     best_result = 0
-    # Training
     if args.do_train:
         global_step, tr_loss, best_result = train(logger, args, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
     if args.do_train and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        # Create output directory if needed
-        output_dir = Path(args.output_dir)
-        if not output_dir.exists() and args.local_rank in [-1, 0]:
-            output_dir.mkdir(parents=True)
-        model_dir = Path(args.model_dir)
-        if not model_dir.exists() and args.local_rank in [-1, 0]:
-            model_dir.mkdir(parents=True)
-
-        update = True
-        if args.evaluate_during_training:
-            dev_file = Path(args.data_dir) / args.dev_file
-            results, _ = evaluate(logger, args, model, tokenizer, file_path=dev_file)
-            # logger.info(f"Epoch: {epoch_num}, F1: {results['f1']}, recall: {results['recall']}")
-            # logger.info(f"Epoch: {epoch_num}, ent_recall: {results['recall_score']}, R_overlap: {results['r_overlap']}")
-            tn_rate = max(
-                results.get("pruner/thresh/tn_rate", 0.0),
-                results.get("pruner/topk/tn_rate", 0.0),
-            )
-            if tn_rate >= best_result:
-                best_result = tn_rate
-                logger.info(f"Best TN/(FP+TN):{best_result:.4f}")
-            else:
-                update = False
-
-        if update:
-            checkpoint_prefix = "checkpoint"
-            model_dir_checkpoint = model_dir / f"{checkpoint_prefix}-{global_step}"
-            model_dir_checkpoint.mkdir(parents=True, exist_ok=True)
-            model_to_save = (
-                model.module if hasattr(model, "module") else model
-            )  # Take care of distributed/parallel training
-
-            model_to_save.save_pretrained(model_dir_checkpoint)
-
-            torch.save(args, model_dir_checkpoint / "training_args.bin")
-            logger.info(f"Saving model checkpoint to {model_dir_checkpoint}")
-            _rotate_checkpoints(logger, args, checkpoint_prefix)
-
-        tokenizer.save_pretrained(args.model_dir)
-
-        torch.save(args, model_dir / "training_args.bin")
-
-    # -------------------------------------------------------------
-    # test all files
-    if args.do_test and args.local_rank in [-1, 0]:
-        checkpoints = list(
-            {
-                os.path.dirname(c)
-                for pattern in ("pytorch_model.bin", "model.safetensors")
-                for c in glob.glob(f"{args.model_dir}/**/{pattern}", recursive=True)
-            }
+        _save_checkpoint_after_training(
+            args, model, tokenizer, global_step, best_result, logger
         )
-        checkpoints = sorted(checkpoints)
-        if not args.eval_all_checkpoints:
-            print(checkpoints)
-            checkpoints = checkpoints[-1:]
 
-        logger.info("Evaluate the following checkpoints: %s", checkpoints)
-
-        # Determine pruning config:
-        #   --prune-config PATH  → load from JSON file (skip dev tuning)
-        #   (default)            → estimate best config from dev set
-        prune_config_override = None
-        if args.prune_config:
-            prune_config_override = json.loads(Path(args.prune_config).read_text())
-            logger.info(
-                f"Using prune config from {args.prune_config}: {prune_config_override}"
-            )
-
-        for checkpoint in checkpoints:
-            global_step = checkpoint.split("-")[-1]
-            output_test_file = Path(args.model_dir) / "test_results.txt"
-
-            model = model_class.from_pretrained(checkpoint, config=config, args=args)
-            model.to(args.device)
-
-            # Always write output files during do_test
-            args.output_results = True
-
-            prune_config = prune_config_override
-            if prune_config is None:
-                # Run dev to find the best pruning config
-                dev_file = Path(args.data_dir) / args.dev_file
-                if dev_file.exists():
-                    logger.info(
-                        "Running dev inference to determine best pruning config …"
-                    )
-                    _, prune_config = evaluate(
-                        logger,
-                        args,
-                        model,
-                        tokenizer,
-                        file_path=dev_file,
-                        prefix=global_step,
-                        do_test=True,
-                    )
-                    config_path = Path(args.output_dir) / "best_config.json"
-                    config_path.write_text(json.dumps(prune_config, indent=2) + "\n")
-                    logger.info(
-                        f"Best prune config: {prune_config}  (saved to {config_path})"
-                    )
-
-            splits = []
-            if getattr(args, "eval_train", True):
-                splits.append(args.train_file)
-            if getattr(args, "eval_dev", True):
-                splits.append(args.dev_file)
-            if getattr(args, "eval_test", True):
-                splits.append(args.test_file)
-            results = {}
-            for file_name in splits:
-                test_file = Path(args.data_dir) / file_name
-                split_name = test_file.name
-                if test_file.exists():
-                    logger.info(f"Evaluate on {split_name}")
-                    result, _ = evaluate(
-                        logger,
-                        args,
-                        model,
-                        tokenizer,
-                        file_path=test_file,
-                        prefix=global_step,
-                        do_test=True,
-                        prune_config=prune_config,
-                    )
-                    results[split_name] = result
-                else:
-                    logger.info(f"{test_file} does not exist!")
-            with open(output_test_file, "w") as f:
-                json.dump(results, f, indent=4)
-
-
-def add_special_tokens(model, args, tokenizer, logger):
-    # Add special tokens to tokenizer
-    if args.model_type.startswith("albert"):
-        special_tokens_dict = {
-            "additional_special_tokens": [f"[unused{x}]" for x in range(4)]
-        }
-        tokenizer.add_special_tokens(special_tokens_dict)
-        model.albert.resize_token_embeddings(len(tokenizer))
-    elif args.model_type.startswith("modernbert"):
-        # ModernBERT (BPE tokenizer) has no [unused*] slots — add them explicitly.
-        special_tokens_dict = {"additional_special_tokens": ["[unused0]", "[unused1]"]}
-        tokenizer.add_special_tokens(special_tokens_dict)
-        model.bert.resize_token_embeddings(len(tokenizer))
-
-    if args.do_train and args.lminit:
-        mask_id = tokenizer.encode("[MASK]", add_special_tokens=False)
-        assert len(mask_id) == 1
-        mask_id = mask_id[0]
-
-        if args.model_type.startswith("modernbert"):
-            # BPE tokenizer: "entity" may be multi-token; fall back to [MASK] if so.
-            entity_ids = tokenizer.encode("entity", add_special_tokens=False)
-            entity_id = entity_ids[0] if len(entity_ids) == 1 else mask_id
-            logger.info("mask_id: %d, entity_id: %d", mask_id, entity_id)
-            word_embeddings = model.bert.embeddings.tok_embeddings.weight.data
-            unused0_id = tokenizer.convert_tokens_to_ids("[unused0]")
-            unused1_id = tokenizer.convert_tokens_to_ids("[unused1]")
-            word_embeddings[unused0_id].copy_(word_embeddings[mask_id])
-            word_embeddings[unused1_id].copy_(word_embeddings[entity_id])
-            return
-
-        # not roberta: BERT or AlBERT (or SciBERT)
-        if args.model_type.find("roberta") == -1:
-            entity_id = tokenizer.encode("entity", add_special_tokens=False)
-            assert len(entity_id) == 1
-            entity_id = entity_id[0]
-        else:  # Roberta: Hard Coded
-            entity_id = 10014
-            mask_id = 50264
-
-        logger.info("entity_id: %d", entity_id)
-        logger.info("mask_id: %d", mask_id)
-
-        if args.model_type.startswith("albert"):
-            word_embeddings = model.albert.embeddings.word_embeddings.weight.data
-            word_embeddings[30000].copy_(word_embeddings[mask_id])
-            word_embeddings[30001].copy_(word_embeddings[entity_id])
-        elif args.model_type.startswith("roberta"):
-            word_embeddings = model.roberta.embeddings.word_embeddings.weight.data
-            word_embeddings[50261].copy_(word_embeddings[mask_id])  # entity
-            word_embeddings[50262].data.copy_(word_embeddings[entity_id])
-        else:
-            word_embeddings = model.bert.embeddings.word_embeddings.weight.data
-            word_embeddings[1].copy_(word_embeddings[mask_id])
-            word_embeddings[2].copy_(word_embeddings[entity_id])  # entity
+    if args.do_test and args.local_rank in [-1, 0]:
+        _run_test_splits(args, model_class, config, tokenizer, logger)
 
 
 def _rotate_checkpoints(logger, args, checkpoint_prefix, use_mtime=False):

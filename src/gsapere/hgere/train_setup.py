@@ -11,6 +11,7 @@ import torch
 
 from ..data.config import RelationDatasetParams
 from ..data.relation_dataset import RelationDataset
+from ..data.tokenizer_utils import adjust_tokenizer as _adjust_tokenizer
 from ..hgere.evaluate import evaluate, get_checkpoints
 from ..hgere.train import log_candidate_stats_to_wandb, train
 from ..labels import LABELS
@@ -43,7 +44,16 @@ def setup_training(args, logger):
     )
     _transformers_logger.setLevel(_prev_level)
 
-    adjust_tokenizer(tokenizer, model, args.num_ner_labels, args, logger)
+    n_special_tokens = args.num_ner_labels * 4 + 2 if args.use_typemarker else 4
+    _adjust_tokenizer(
+        tokenizer=tokenizer,
+        model=model,
+        model_type=args.model_type,
+        n_special_tokens=n_special_tokens,
+        lminit=args.do_train and args.lminit,
+        init_tokens=["subject", "object"],
+        logger=logger,
+    )
 
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
@@ -196,95 +206,6 @@ def load_dataset(
 # ---------------------------------------------------------------------------
 # Tokenizer adjustment
 # ---------------------------------------------------------------------------
-
-
-def adjust_tokenizer(
-    tokenizer: Any,
-    model: Any,
-    num_ner_labels: int,
-    args: Any,
-    logger: logging.Logger,
-) -> None:
-    """Resize the tokenizer and (optionally) initialise marker embeddings."""
-    if args.model_type.startswith("albert"):
-        if args.use_typemarker:
-            special_tokens_dict = {
-                "additional_special_tokens": [
-                    "[unused" + str(x) + "]" for x in range(num_ner_labels * 4 + 2)
-                ]
-            }
-        else:
-            special_tokens_dict = {
-                "additional_special_tokens": [
-                    "[unused" + str(x) + "]" for x in range(4)
-                ]
-            }
-        tokenizer.add_special_tokens(special_tokens_dict)
-        model.albert.resize_token_embeddings(len(tokenizer))
-    elif args.model_type.startswith("modernbert"):
-        # ModernBERT (BPE tokenizer) has no [unused*] slots — add them explicitly.
-        n_markers = num_ner_labels * 4 + 2 if args.use_typemarker else 4
-        special_tokens_dict = {
-            "additional_special_tokens": [f"[unused{x}]" for x in range(n_markers)]
-        }
-        tokenizer.add_special_tokens(special_tokens_dict)
-        model.bert.resize_token_embeddings(len(tokenizer))
-
-    if args.do_train:
-        mask_id = tokenizer.encode("[MASK]", add_special_tokens=False)
-        assert len(mask_id) == 1
-        mask_id = mask_id[0]
-
-        if args.model_type.startswith("modernbert"):
-            # BPE tokenizer: "subject"/"object" may be multi-token; fall back to [MASK].
-            subject_ids = tokenizer.encode("subject", add_special_tokens=False)
-            subject_id = subject_ids[0] if len(subject_ids) == 1 else mask_id
-            object_ids = tokenizer.encode("object", add_special_tokens=False)
-            object_id = object_ids[0] if len(object_ids) == 1 else mask_id
-            logger.info(
-                f" subject_id = {subject_id}, object_id = {object_id}, mask_id = {mask_id}"
-            )
-            if args.lminit:
-                word_embeddings = model.bert.embeddings.tok_embeddings.weight.data
-                subs = tokenizer.convert_tokens_to_ids("[unused0]")
-                sube = tokenizer.convert_tokens_to_ids("[unused1]")
-                objs = tokenizer.convert_tokens_to_ids("[unused2]")
-                obje = tokenizer.convert_tokens_to_ids("[unused3]")
-                word_embeddings[subs].copy_(word_embeddings[mask_id])
-                word_embeddings[sube].copy_(word_embeddings[subject_id])
-                word_embeddings[objs].copy_(word_embeddings[mask_id])
-                word_embeddings[obje].copy_(word_embeddings[object_id])
-            return
-
-        subject_id = tokenizer.encode("subject", add_special_tokens=False)
-        assert len(subject_id) == 1
-        subject_id = subject_id[0]
-        object_id = tokenizer.encode("object", add_special_tokens=False)
-        assert len(object_id) == 1
-        object_id = object_id[0]
-
-        logger.info(
-            f" subject_id = {subject_id}, object_id = {object_id}, mask_id = {mask_id}"
-        )
-
-        if args.lminit:
-            if args.model_type.startswith("albert"):
-                word_embeddings = model.albert.embeddings.word_embeddings.weight.data
-                subs = 30000
-                sube = 30001
-                objs = 30002
-                obje = 30003
-            else:
-                word_embeddings = model.bert.embeddings.word_embeddings.weight.data
-                subs = 1
-                sube = 2
-                objs = 3
-                obje = 4
-
-            word_embeddings[subs].copy_(word_embeddings[mask_id])
-            word_embeddings[sube].copy_(word_embeddings[subject_id])
-            word_embeddings[objs].copy_(word_embeddings[mask_id])
-            word_embeddings[obje].copy_(word_embeddings[object_id])
 
 
 def resolve_checkpoint(model_dir: Path, prefix: str = "checkpoint") -> Path | None:

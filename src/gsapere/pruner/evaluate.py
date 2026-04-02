@@ -1,5 +1,4 @@
 import json
-import pdb
 import timeit
 from collections import defaultdict
 from itertools import product as iproduct
@@ -12,6 +11,101 @@ from tqdm import tqdm
 
 from ..data.collators import PrunerCollator
 from ..data.pruner_dataset import PrunerDataset
+
+
+def _run_pruner_batch_loop(
+    model: object,
+    eval_dataloader: DataLoader,
+    topk_infos: tuple,
+    goldspan2label: dict,
+    args: object,
+    desc: str = "Pruner inference",
+    disable_progress: bool = True,
+) -> dict:
+    """Core inference batch loop shared by run_pruner_inference and evaluate.
+
+    Runs model forward passes over all batches, accumulates span probabilities
+    across sentence boundaries via _extent_tensor, applies top-K decoding, and
+    returns the raw sentences_predictions dict (before non-overlap filtering or
+    metric computation).
+
+    Returns:
+        sentences_predictions: dict mapping (line_idx, sent_idx) to a list of
+            (start, end, prob, gold_label) tuples (possibly overlapping).
+    """
+    sentences_predictions: dict = defaultdict(list)
+    closed_sentences: dict = {"probs": None}
+    open_sentence: dict = {"probs": None}
+
+    for batch in tqdm(
+        eval_dataloader, desc=desc, total=len(eval_dataloader), disable=disable_progress
+    ):
+        indexs = batch[-2]
+        batch_m2s = batch[-1]
+        sent_lens = batch[6]
+
+        split_ranges, sent_lens_simple, indexs_simple, batch_m2s_simple = (
+            _exact_boundaries(indexs, sent_lens, batch_m2s)
+        )
+
+        batch = tuple(t.to(args.device) for t in batch[:6])
+
+        with torch.no_grad():
+            inputs = {
+                "input_ids": batch[0],
+                "attention_mask": batch[1],
+                "position_ids": batch[2],
+                "labels": batch[3],
+            }
+            if args.model_type.find("span") != -1:
+                inputs["mention_pos"] = batch[4]
+            if (
+                args.model_type.startswith("modernbert")
+                and args.model_type.find("span") != -1
+            ):
+                inputs["sent_subword_length"] = batch[5]
+
+            outputs = model(**inputs)
+            ent_masks = (inputs["labels"] > -1).bool()
+            ner_logits = outputs[1].squeeze(-1)
+            ner_probs = ner_logits.sigmoid()
+            ner_probs = ner_probs.masked_fill(~ent_masks, 0)
+            gold_labels = (inputs["labels"] > 0).int()
+
+            split_probs = torch.split(ner_probs, split_ranges, dim=0)
+            split_mask = torch.split(ent_masks, split_ranges, dim=0)
+            split_gold_labels = torch.split(gold_labels, split_ranges, dim=0)
+
+            current_sentences = dict(
+                probs=[s.reshape(-1) for s in split_probs],
+                indexs=indexs_simple,
+                sent_lens=sent_lens_simple,
+                ent_masks=[s.reshape(-1) for s in split_mask],
+                gold_labels=[s.reshape(-1) for s in split_gold_labels],
+                mentions=batch_m2s_simple,
+            )
+
+            closed_sentences, open_sentence = _extent_tensor(
+                open_sentence, current_sentences
+            )
+            if closed_sentences["probs"] is not None:
+                pruned_ent_spans, _, __ = _decode_pruner_topk(
+                    topk_infos, closed_sentences
+                )
+                _update_sentences_predictions(
+                    sentences_predictions,
+                    closed_sentences,
+                    pruned_ent_spans,
+                    goldspan2label,
+                )
+
+    if open_sentence["probs"] is not None:
+        pruned_ent_spans, _, __ = _decode_pruner_topk(topk_infos, open_sentence)
+        _update_sentences_predictions(
+            sentences_predictions, open_sentence, pruned_ent_spans, goldspan2label
+        )
+
+    return sentences_predictions
 
 
 def run_pruner_inference(
@@ -70,86 +164,15 @@ def run_pruner_inference(
         args.max_mentions_num,
     )
 
-    sentences_predictions: dict = defaultdict(list)
     model.eval()
-
-    closed_sentences: dict = {"probs": None}
-    open_sentence: dict = {"probs": None}
-
-    for batch in tqdm(
+    sentences_predictions = _run_pruner_batch_loop(
+        model,
         eval_dataloader,
-        desc="Pruner inference",
-        total=len(eval_dataloader),
-        disable=disable_progress,
-    ):
-        indexs = batch[-2]
-        batch_m2s = batch[-1]
-        sent_lens = batch[6]
-
-        split_ranges, sent_lens_simple, indexs_simple, batch_m2s_simple = (
-            _exact_boundaries(indexs, sent_lens, batch_m2s)
-        )
-
-        batch = tuple(t.to(args.device) for t in batch[:6])
-
-        with torch.no_grad():
-            inputs = {
-                "input_ids": batch[0],
-                "attention_mask": batch[1],
-                "position_ids": batch[2],
-                "labels": batch[3],
-            }
-            if args.model_type.find("span") != -1:
-                inputs["mention_pos"] = batch[4]
-            if (
-                args.model_type.startswith("modernbert")
-                and args.model_type.find("span") != -1
-            ):
-                inputs["sent_subword_length"] = batch[5]
-
-            outputs = model(**inputs)
-            ent_masks = (inputs["labels"] > -1).bool()
-            ner_logits = outputs[1].squeeze(-1)
-            ner_probs = ner_logits.sigmoid()
-            ner_probs = ner_probs.masked_fill(~ent_masks, 0)
-
-            split_probs = torch.split(ner_probs, split_ranges, dim=0)
-            split_mask = torch.split(ent_masks, split_ranges, dim=0)
-            gold_labels = (inputs["labels"] > 0).int()
-            split_gold_labels = torch.split(gold_labels, split_ranges, dim=0)
-
-            split_probs_cat = [s.reshape(-1) for s in split_probs]
-            split_mask_cat = [s.reshape(-1) for s in split_mask]
-            split_gold_labels_cat = [s.reshape(-1) for s in split_gold_labels]
-
-            current_sentences = dict(
-                probs=split_probs_cat,
-                indexs=indexs_simple,
-                sent_lens=sent_lens_simple,
-                ent_masks=split_mask_cat,
-                gold_labels=split_gold_labels_cat,
-                mentions=batch_m2s_simple,
-            )
-
-            closed_sentences, open_sentence = _extent_tensor(
-                open_sentence, current_sentences
-            )
-            if closed_sentences["probs"] is not None:
-                pruned_ent_spans, _, __ = _decode_pruner_topk(
-                    topk_infos, closed_sentences
-                )
-                _update_sentences_predictions(
-                    sentences_predictions,
-                    closed_sentences,
-                    pruned_ent_spans,
-                    goldspan2label,
-                )
-
-    if open_sentence["probs"] is not None:
-        pruned_ent_spans, _, __ = _decode_pruner_topk(topk_infos, open_sentence)
-        _update_sentences_predictions(
-            sentences_predictions, open_sentence, pruned_ent_spans, goldspan2label
-        )
+        topk_infos,
+        goldspan2label,
+        args,
+        disable_progress=disable_progress,
+    )
 
     # Apply non-overlapping filter (same as postprocess_predictions but without metrics)
     predict_ners: dict = defaultdict(list)
@@ -213,118 +236,25 @@ def evaluate(
         num_workers=1,
     )
 
-    # -- parameter for pruner --
-    topk_ratio = args.topk_ratio
-    max_mentions_num = args.max_mentions_num
-    min_mentions_num = args.min_mentions_num
-    topk_infos = (topk_ratio, min_mentions_num, max_mentions_num)
+    topk_infos = (args.topk_ratio, args.min_mentions_num, args.max_mentions_num)
 
     # Eval!
     logger.info(f"***** Running evaluation {prefix} *****")
     logger.info(f"  Num examples = {len(eval_dataset)}")
     logger.info(f"  Batch size   = {args.eval_batch_size}")
 
-    sentences_predictions = defaultdict(list)
-
-    model.eval()
-
     start_time = timeit.default_timer()
 
-    closed_sentences = {"probs": None}  # from last batch
-    open_sentence = {"probs": None}  # for next batch
-
-    for batch in tqdm(eval_dataloader, desc="Evaluating"):
-        indexs = batch[-2]
-        # example_index, (doc_id, sent_id)
-        batch_m2s = batch[-1]
-        # mentions
-
-        # -------for pruner------------
-        sent_lens = batch[
-            6
-        ]  # word-level sentence lengths (field 6); field 5 = sent_subword_length
-
-        split_ranges, sent_lens_simple, indexs_simple, batch_m2s_simple = (
-            _exact_boundaries(indexs, sent_lens, batch_m2s)
-        )
-        # in this batch
-
-        # batch_mentions = _get_batch_mentions(batch_m2s_simple, args.device)
-
-        batch = tuple(t.to(args.device) for t in batch[:6])
-
-        with torch.no_grad():
-            inputs = {
-                "input_ids": batch[0],
-                "attention_mask": batch[1],
-                "position_ids": batch[2],
-                "labels": batch[3],
-            }
-
-            if args.model_type.find("span") != -1:
-                inputs["mention_pos"] = batch[4]
-            if (
-                args.model_type.startswith("modernbert")
-                and args.model_type.find("span") != -1
-            ):
-                inputs["sent_subword_length"] = batch[5]
-
-            outputs = model(**inputs)
-
-            gold_labels = (
-                inputs["labels"] > 0
-            ).int()  # target: gold label exist (classes: 0, 1)
-            ent_masks = (inputs["labels"] > -1).bool()  # entity mask without -1 labels
-            ner_logits = outputs[1].squeeze(-1)
-            ner_probs = ner_logits.sigmoid()
-            # NEG_INF = NEG_INF if ner_logits.dtype==torch.float32 else -1e4
-            ner_probs = ner_probs.masked_fill(~ent_masks, 0)
-            split_probs = torch.split(ner_probs, split_ranges, dim=0)
-            split_mask = torch.split(ent_masks, split_ranges, dim=0)
-            split_gold_labels = torch.split(gold_labels, split_ranges, dim=0)
-
-            split_probs_cat = []
-            split_mask_cat = []
-            split_gold_labels_cat = []
-
-            for i in range(len(split_ranges)):
-                split_probs_cat.append(split_probs[i].reshape(-1))
-                split_mask_cat.append(split_mask[i].reshape(-1))
-                split_gold_labels_cat.append(split_gold_labels[i].reshape(-1))
-
-            current_sentences = dict(
-                probs=split_probs_cat,
-                indexs=indexs_simple,
-                sent_lens=sent_lens_simple,
-                ent_masks=split_mask_cat,
-                gold_labels=split_gold_labels_cat,
-                mentions=batch_m2s_simple,
-            )
-
-            closed_sentences, open_sentence = _extent_tensor(
-                open_sentence, current_sentences
-            )
-            # process closed_sentences
-            if closed_sentences["probs"] is not None:
-                pruned_ent_spans, pred_entities, gold_entities = _decode_pruner_topk(
-                    topk_infos, closed_sentences
-                )
-
-                _update_sentences_predictions(
-                    sentences_predictions,
-                    closed_sentences,
-                    pruned_ent_spans,
-                    goldspan2label,
-                )
-
-    if open_sentence["probs"] is not None:
-        closed_sentences = open_sentence
-        pruned_ent_spans, pred_entities, gold_entities = _decode_pruner_topk(
-            topk_infos, closed_sentences
-        )
-        _update_sentences_predictions(
-            sentences_predictions, closed_sentences, pruned_ent_spans, goldspan2label
-        )
+    model.eval()
+    sentences_predictions = _run_pruner_batch_loop(
+        model,
+        eval_dataloader,
+        topk_infos,
+        goldspan2label,
+        args,
+        desc="Evaluating",
+        disable_progress=False,
+    )
 
     force_same_label = not is_ontonotes
     ner_support = eval_dataset.tot_recall
@@ -636,7 +566,7 @@ def _exact_boundaries(indexs, sent_lens, batch_m2s):
 
 
 def _pad_tensors(tensor_list, pad=0):
-    assert len(tensor_list) >= 2, pdb.set_trace()
+    assert len(tensor_list) >= 2
     assert len(list(tensor_list[0].shape)) == 1
     max_shape = 0
     for t in tensor_list:

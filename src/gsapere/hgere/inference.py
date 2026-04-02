@@ -59,180 +59,138 @@ _EVAL_KEYS = [
 ]
 
 
-def infer_hgere(
-    model,
-    eval_dataset,
-    args,
-    logger,
-    source_file_path,
-    output_path,
-    gold_only: bool = False,
-    disable_progress: bool = False,
-    force_non_nil: bool = False,
-    debug_break_on_first_rel: bool = False,
-    debug_log_rel_probs: bool = False,
-):
-    """Run HGERE inference over candidate spans already loaded in eval_dataset.
+# ---------------------------------------------------------------------------
+# Decoding helpers
+# ---------------------------------------------------------------------------
 
-    Candidates come from whatever ``predicted_ner`` field was set when the
-    dataset was built.  Use :func:`prepare_input_file` beforehand to control
-    the candidate source (pruner output, gold spans, or augmented).
 
-    Args:
-        model: loaded HGERE model in eval mode.
-        eval_dataset: RelationDataset loaded from a file where ``predicted_ner``
-            has been set to the desired candidate spans.
-        args: inference args (device, etc.).
-        logger: Python logger.
-        source_file_path: path to the *original* data file used for writing
-            output (must contain ``ner`` gold annotations).
-        output_path: where to write the prediction JSONL file.
-        gold_only: if True, filter the output ``predicted_ner`` /
-            ``predicted_rel`` to only spans/relations whose endpoints appear
-            in the gold ``ner`` of the source file.
-        force_non_nil: if True, mask NIL from NER logits before argmax so
-            every candidate span is forced to receive a non-NIL label.
-            Use this only for gold-span / cross-dataset evaluation.
-            Default False (pipeline mode): standard argmax including NIL;
-            only non-NIL spans appear in output.
+def _decode_ner_batch(
+    sent_indices,
+    obj_mentions,
+    ner_preds,
+    ner_logits_masked,
+    ner_label_list: list,
+) -> dict:
+    """Decode NER predictions for one batch.
+
+    Returns a dict mapping sent_id → {span_tuple: (label, prob_no_nil)}.
     """
-    model.eval()
-    start_time = timeit.default_timer()
+    result = {}
+    for sample_idx, sent_id in enumerate(sent_indices):
+        sent_id = tuple(sent_id)
+        sample_obj_mentions = obj_mentions[sample_idx]
+        n_spans = len(sample_obj_mentions)
+        sample_ner_preds = ner_preds[sample_idx][:n_spans]
 
-    ner_predictions: dict = {}
-    rel_predictions: dict = defaultdict(list)
+        softmax_no_nil = torch.nn.functional.softmax(
+            ner_logits_masked[sample_idx][:n_spans], dim=-1
+        )
+        probs_no_nil = (
+            softmax_no_nil.gather(-1, sample_ner_preds.unsqueeze(-1))
+            .squeeze(-1)
+            .cpu()
+            .numpy()
+        )
+        sample_labels = [ner_label_list[idx] for idx in sample_ner_preds]
+        result[sent_id] = {
+            tuple(span): (label, float(p))
+            for span, label, p in zip(sample_obj_mentions, sample_labels, probs_no_nil)
+        }
+    return result
 
-    rel_label_list = list(eval_dataset.label_list)
-    n_rel_label = len(rel_label_list)
-    sym_labels = list(eval_dataset.sym_labels)
-    n_syms = len(sym_labels)
-    n_unsyms = n_rel_label - n_syms
 
-    nil_index = eval_dataset.ner_label_list.index("NIL")
+def _decode_relation_batch(
+    sent_indices,
+    obj_mentions,
+    ent_counts,
+    rel_logits,
+    ner_predictions: dict,
+    rel_label_list: list,
+    n_syms: int,
+    n_rel_label: int,
+    n_unsyms: int,
+    logger,
+    debug_log_rel_probs: bool = False,
+    debug_break_on_first_rel: bool = False,
+) -> dict:
+    """Decode relation predictions for one batch.
 
-    with torch.no_grad():
-        for batch in tqdm(
-            eval_dataset.loader,
-            desc="ERE inference",
-            total=len(eval_dataset.loader),
-            disable=disable_progress,
-        ):
-            sent_indices = batch["indices"]
-            obj_mentions = batch["obj_token_pos"]
-            ent_counts = batch["ent_numbers"]
+    Returns a dict mapping sent_id → list of
+    (subj_span, subj_label, obj_span, obj_label, rel_label, score).
+    """
+    result: dict = defaultdict(list)
+    for sample_idx, sent_id in enumerate(sent_indices):
+        n_ent = ent_counts[sample_idx]
+        sent_id = tuple(sent_id)
+        for subj_idx, obj_idx in combinations(range(n_ent), 2):
+            subj_span = tuple(obj_mentions[sample_idx][subj_idx])
+            obj_span = tuple(obj_mentions[sample_idx][obj_idx])
 
-            inputs = {k: v.to(args.device) for k, v in batch.items() if k in _EVAL_KEYS}
-            outputs = model(**inputs)
-
-            rel_logits = outputs[0]
-            ner_logits = outputs[1]
-
-            rel_logits = torch.nn.functional.log_softmax(rel_logits, dim=-1)
-
-            ner_logits_masked = ner_logits.clone()
-            ner_logits_masked[..., nil_index] = float("-inf")
-
-            if force_non_nil:
-                # Gold-span mode: mask NIL so every span gets a non-NIL label.
-                ner_preds = torch.argmax(ner_logits_masked, dim=-1)
-            else:
-                # Pipeline mode: standard argmax; NIL is a valid prediction.
-                ner_preds = torch.argmax(ner_logits, dim=-1)
-
-            # --- NER predictions ---
-            for sample_idx, sent_id in enumerate(sent_indices):
-                sent_id = tuple(sent_id)
-                sample_obj_mentions = obj_mentions[sample_idx]
-                n_spans = len(sample_obj_mentions)
-                sample_ner_preds = ner_preds[sample_idx][:n_spans]
-
-                # prob_no_nil: P(predicted label) renormalized over non-NIL classes
-                softmax_no_nil = torch.nn.functional.softmax(
-                    ner_logits_masked[sample_idx][:n_spans], dim=-1
-                )
-                # @todo Why no_nil here? could we leave that out?
-                probs_no_nil = (
-                    softmax_no_nil.gather(-1, sample_ner_preds.unsqueeze(-1))
-                    .squeeze(-1)
-                    .cpu()
-                    .numpy()
-                )
-
-                sample_labels = [
-                    eval_dataset.ner_label_list[idx] for idx in sample_ner_preds
+            scores = rel_logits[sample_idx, subj_idx, obj_idx]
+            scores_inv = rel_logits[sample_idx, obj_idx, subj_idx]
+            scores_inv = torch.concat(
+                [
+                    scores_inv[:n_syms],
+                    scores_inv[n_rel_label:],
+                    scores_inv[n_syms:n_rel_label],
                 ]
-                ner_predictions[sent_id] = {
-                    tuple(span): (label, float(p_no_nil))
-                    for span, label, p_no_nil in zip(
-                        sample_obj_mentions, sample_labels, probs_no_nil
+            )
+            combined = torch.add(scores, scores_inv)
+            probs = torch.nn.functional.softmax(combined, dim=-1)
+            best_idx = torch.argmax(probs)
+            score = probs[best_idx].cpu().item()
+
+            if debug_log_rel_probs:
+                probs_cpu = probs.cpu().tolist()
+                all_labels = rel_label_list + rel_label_list[n_syms:]
+                top = sorted(zip(all_labels, probs_cpu), key=lambda x: -x[1])[:5]
+                logger.info(
+                    "[DEBUG REL] sent=%s subj=%s obj=%s  top5=%s",
+                    sent_id,
+                    subj_span,
+                    obj_span,
+                    [(lbl, f"{p:.4f}") for lbl, p in top],
+                )
+
+            if best_idx >= n_rel_label:
+                best_idx = best_idx - n_unsyms
+                subj_span, obj_span = obj_span, subj_span
+
+            label = rel_label_list[best_idx]
+            if label != "NIL":
+                subj_label = ner_predictions[sent_id][subj_span][0]
+                obj_label = ner_predictions[sent_id][obj_span][0]
+                result[sent_id].append(
+                    (subj_span, subj_label, obj_span, obj_label, label, score)
+                )
+                if debug_break_on_first_rel:
+                    logger.info(
+                        "[DEBUG] First relation predicted: sent_id=%s  "
+                        "subj=%s(%s) -> obj=%s(%s)  label=%s  score=%.4f",
+                        sent_id,
+                        subj_span,
+                        subj_label,
+                        obj_span,
+                        obj_label,
+                        label,
+                        score,
                     )
-                }
-
-            # --- Relation predictions ---
-            for sample_idx, sent_id in enumerate(sent_indices):
-                n_ent = ent_counts[sample_idx]
-                sent_id = tuple(sent_id)
-                for subj_idx, obj_idx in combinations(range(n_ent), 2):
-                    subj_span = tuple(obj_mentions[sample_idx][subj_idx])
-                    obj_span = tuple(obj_mentions[sample_idx][obj_idx])
-
-                    scores = rel_logits[sample_idx, subj_idx, obj_idx]
-                    scores_inv = rel_logits[sample_idx, obj_idx, subj_idx]
-                    scores_inv = torch.concat(
-                        [
-                            scores_inv[:n_syms],
-                            scores_inv[n_rel_label:],
-                            scores_inv[n_syms:n_rel_label],
-                        ]
+                    raise RuntimeError(
+                        f"[DEBUG] First relation found — "
+                        f"sent_id={sent_id} label={label!r} score={score:.4f}"
                     )
-                    combined = torch.add(scores, scores_inv)
-                    probs = torch.nn.functional.softmax(combined, dim=-1)
-                    best_idx = torch.argmax(probs)
-                    score = probs[best_idx].cpu().item()
+    return result
 
-                    if debug_log_rel_probs:
-                        probs_cpu = probs.cpu().tolist()
-                        all_labels = rel_label_list + rel_label_list[n_syms:]
-                        top = sorted(zip(all_labels, probs_cpu), key=lambda x: -x[1])[
-                            :5
-                        ]
-                        logger.info(
-                            "[DEBUG REL] sent=%s subj=%s obj=%s  top5=%s",
-                            sent_id,
-                            subj_span,
-                            obj_span,
-                            [(lbl, f"{p:.4f}") for lbl, p in top],
-                        )
 
-                    if best_idx >= n_rel_label:
-                        best_idx = best_idx - n_unsyms
-                        subj_span, obj_span = obj_span, subj_span
+def _collect_per_sentence_output(
+    ner_predictions: dict,
+    rel_predictions: dict,
+    force_non_nil: bool,
+) -> tuple:
+    """Assemble per-sentence NER and relation output dicts.
 
-                    label = rel_label_list[best_idx]
-                    if label != "NIL":
-                        subj_label = ner_predictions[sent_id][subj_span][0]
-                        obj_label = ner_predictions[sent_id][obj_span][0]
-                        rel_predictions[sent_id].append(
-                            (subj_span, subj_label, obj_span, obj_label, label, score)
-                        )
-                        if debug_break_on_first_rel:
-                            logger.info(
-                                "[DEBUG] First relation predicted: sent_id=%s  "
-                                "subj=%s(%s) -> obj=%s(%s)  label=%s  score=%.4f",
-                                sent_id,
-                                subj_span,
-                                subj_label,
-                                obj_span,
-                                obj_label,
-                                label,
-                                score,
-                            )
-                            raise RuntimeError(
-                                f"[DEBUG] First relation found — "
-                                f"sent_id={sent_id} label={label!r} score={score:.4f}"
-                            )
-
-    # --- Collect per-sentence predictions ---
+    Returns (tot_ner, tot_ner_proba, tot_rel, tot_rel_proba).
+    """
     tot_ner: dict = {}
     tot_ner_proba: dict = {}
     tot_rel: dict = {}
@@ -242,38 +200,45 @@ def infer_hgere(
         sent_rels = sorted(rel_predictions[sent_id], key=lambda x: -x[-1])
 
         if force_non_nil:
-            # Include every candidate (all are guaranteed non-NIL).
             ents_to_output = sent_ents.items()
         else:
-            # Pipeline mode: drop spans the model predicted as NIL.
             ents_to_output = [
                 (span, info) for span, info in sent_ents.items() if info[0] != "NIL"
             ]
 
         pred_ner = sorted(span + (label,) for span, (label, _) in ents_to_output)
-        # predicted_ner_proba entries: [start, end, score, label]
-        # score = P(label | non-NIL classes) — used by the pre-filter threshold
         pred_ner_proba = sorted(
             span + (p_no_nil, label) for span, (label, p_no_nil) in ents_to_output
         )
 
         if not force_non_nil:
-            # Only keep relations where both endpoints have a non-NIL NER label.
             non_nil_spans = {
                 span for span, (label, _) in sent_ents.items() if label != "NIL"
             }
             sent_rels = [
                 r for r in sent_rels if r[0] in non_nil_spans and r[2] in non_nil_spans
             ]
-        pred_rel = sorted(s + o + (lbl,) for s, _, o, __, lbl, ___ in sent_rels)
-        pred_rel_proba = sorted(s + o + (lbl, sc) for s, _, o, __, lbl, sc in sent_rels)
 
         tot_ner[sent_id] = pred_ner
         tot_ner_proba[sent_id] = pred_ner_proba
-        tot_rel[sent_id] = pred_rel
-        tot_rel_proba[sent_id] = pred_rel_proba
+        tot_rel[sent_id] = sorted(s + o + (lbl,) for s, _, o, __, lbl, ___ in sent_rels)
+        tot_rel_proba[sent_id] = sorted(
+            s + o + (lbl, sc) for s, _, o, __, lbl, sc in sent_rels
+        )
 
-    # --- Write output ---
+    return tot_ner, tot_ner_proba, tot_rel, tot_rel_proba
+
+
+def _write_predictions(
+    source_file_path: str,
+    output_path: str,
+    tot_ner: dict,
+    tot_ner_proba: dict,
+    tot_rel: dict,
+    tot_rel_proba: dict,
+    gold_only: bool,
+) -> None:
+    """Write prediction JSONL, merging with gold annotations from source_file_path."""
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as out_f, open(source_file_path) as in_f:
         for l_idx, line in enumerate(in_f):
@@ -315,6 +280,124 @@ def infer_hgere(
             data["predicted_rel"] = pred_rel
             data["predicted_rel_proba"] = pred_rel_proba
             out_f.write(json.dumps(data) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Main inference entry point
+# ---------------------------------------------------------------------------
+
+
+def infer_hgere(
+    model,
+    eval_dataset,
+    args,
+    logger,
+    source_file_path,
+    output_path,
+    gold_only: bool = False,
+    disable_progress: bool = False,
+    force_non_nil: bool = False,
+    debug_break_on_first_rel: bool = False,
+    debug_log_rel_probs: bool = False,
+):
+    """Run HGERE inference over candidate spans already loaded in eval_dataset.
+
+    Candidates come from whatever ``predicted_ner`` field was set when the
+    dataset was built.  Use :func:`prepare_input_file` beforehand to control
+    the candidate source (pruner output, gold spans, or augmented).
+
+    Args:
+        model: loaded HGERE model in eval mode.
+        eval_dataset: RelationDataset loaded from a file where ``predicted_ner``
+            has been set to the desired candidate spans.
+        args: inference args (device, etc.).
+        logger: Python logger.
+        source_file_path: path to the *original* data file used for writing
+            output (must contain ``ner`` gold annotations).
+        output_path: where to write the prediction JSONL file.
+        gold_only: if True, filter the output ``predicted_ner`` /
+            ``predicted_rel`` to only spans/relations whose endpoints appear
+            in the gold ``ner`` of the source file.
+        force_non_nil: if True, mask NIL from NER logits before argmax so
+            every candidate span is forced to receive a non-NIL label.
+            Use this only for gold-span / cross-dataset evaluation.
+            Default False (pipeline mode): standard argmax including NIL;
+            only non-NIL spans appear in output.
+    """
+    model.eval()
+    start_time = timeit.default_timer()
+
+    rel_label_list = list(eval_dataset.label_list)
+    n_rel_label = len(rel_label_list)
+    sym_labels = list(eval_dataset.sym_labels)
+    n_syms = len(sym_labels)
+    n_unsyms = n_rel_label - n_syms
+    nil_index = eval_dataset.ner_label_list.index("NIL")
+
+    ner_predictions: dict = {}
+    rel_predictions: dict = defaultdict(list)
+
+    with torch.no_grad():
+        for batch in tqdm(
+            eval_dataset.loader,
+            desc="ERE inference",
+            total=len(eval_dataset.loader),
+            disable=disable_progress,
+        ):
+            sent_indices = batch["indices"]
+            obj_mentions = batch["obj_token_pos"]
+            ent_counts = batch["ent_numbers"]
+
+            inputs = {k: v.to(args.device) for k, v in batch.items() if k in _EVAL_KEYS}
+            outputs = model(**inputs)
+
+            rel_logits = torch.nn.functional.log_softmax(outputs[0], dim=-1)
+            ner_logits = outputs[1]
+            ner_logits_masked = ner_logits.clone()
+            ner_logits_masked[..., nil_index] = float("-inf")
+
+            ner_preds = torch.argmax(
+                ner_logits_masked if force_non_nil else ner_logits, dim=-1
+            )
+
+            ner_predictions.update(
+                _decode_ner_batch(
+                    sent_indices,
+                    obj_mentions,
+                    ner_preds,
+                    ner_logits_masked,
+                    eval_dataset.ner_label_list,
+                )
+            )
+            batch_rels = _decode_relation_batch(
+                sent_indices,
+                obj_mentions,
+                ent_counts,
+                rel_logits,
+                ner_predictions,
+                rel_label_list,
+                n_syms,
+                n_rel_label,
+                n_unsyms,
+                logger,
+                debug_log_rel_probs=debug_log_rel_probs,
+                debug_break_on_first_rel=debug_break_on_first_rel,
+            )
+            for sent_id, rels in batch_rels.items():
+                rel_predictions[sent_id].extend(rels)
+
+    tot_ner, tot_ner_proba, tot_rel, tot_rel_proba = _collect_per_sentence_output(
+        ner_predictions, rel_predictions, force_non_nil
+    )
+    _write_predictions(
+        source_file_path,
+        output_path,
+        tot_ner,
+        tot_ner_proba,
+        tot_rel,
+        tot_rel_proba,
+        gold_only,
+    )
 
     elapsed = timeit.default_timer() - start_time
     logger.info("Fixed-span inference done in %.1f s", elapsed)
