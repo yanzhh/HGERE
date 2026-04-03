@@ -8,17 +8,7 @@
 ## infer based on config
  * for the example config I put docs.jsonl in the foler input
 
-### 1. Prune (Generate candidates for entity mentions)
- * `CUDA_VISIBLE_DEVICES=3 uv run gsapere-train-pruner configs/inference/gsap/gsap-best-pruner.yaml`
-
-
-### 2. ERE
- * `CUDA_VISIBLE_DEVICES=3 uv run gsapere-train-hgere configs/inference/gsap/gsap-best-hgere.yaml`
-
-### Output is in 
- * `output/ent_pred_docs.json`
-
-
-
-# hints
- * folder names and model paths are stored in the named config files. 
+## Apply the pipeline on a file or folder
+ * `CUDA_VISIBLE_DEVICES=3 uv run gsapere-pipeline --config configs/inference/gsap-pipeline-best.yaml --input input --output output` 
+ * All jsonl files in the input folder are processed
+ * If --input is a file, only this file is processed
