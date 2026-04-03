@@ -21,7 +21,7 @@ hgere:
     model_dir: /data_ssds/disk01/ottowg_gsap/model-hgere/gsap-best-hgere
     base_model_name_or_path: allenai/scibert_scivocab_uncased
     model_type: hyper
-    do_lower_case: false
+    do_lower_case: true
     shuffle: true
     no_sym: false
     per_gpu_eval_batch_size: 32

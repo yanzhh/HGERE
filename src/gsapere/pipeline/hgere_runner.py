@@ -26,6 +26,24 @@ from gsapere.pipeline.config import HGEREConfig, suppress_transformers_warnings
 
 logger = logging.getLogger(__name__)
 
+# Architecture parameters that must match the trained model.
+# These are loaded from training_args.bin when available and take precedence
+# over the pipeline YAML config.
+_ARCH_PARAMS: tuple[str, ...] = (
+    "ent_dim",
+    "rel_dim",
+    "mem_dim",
+    "factor_type",
+    "factor_encoder",
+    "ent_repr",
+    "n_iter",
+    "layernorm",
+    "layernorm_1st",
+    "attn_self",
+    "attn_res",
+    "unirel",
+)
+
 
 class HGERERunner:
     """Wraps the HGERE model for on-demand entity and relation extraction.
@@ -50,6 +68,38 @@ class HGERERunner:
                 model_path = resolved
                 logger.info("HGERE: using checkpoint %s", model_path)
 
+        # Load training_args.bin to recover architecture parameters.
+        training_args_path = model_path / "training_args.bin"
+        if training_args_path.exists():
+            model_args = torch.load(
+                training_args_path, map_location="cpu", weights_only=False
+            )
+            logger.info("HGERE: loaded training_args from %s", training_args_path)
+            for param in _ARCH_PARAMS:
+                bin_val = getattr(model_args, param, None)
+                cfg_val = getattr(cfg, param)
+                if bin_val is not None and bin_val != cfg_val:
+                    logger.warning(
+                        "HGERE: training_args.bin overrides %s: config=%r → bin=%r",
+                        param,
+                        cfg_val,
+                        bin_val,
+                    )
+        else:
+            model_args = None
+            logger.info(
+                "HGERE: training_args.bin not found at %s, using pipeline config for arch params",
+                model_path,
+            )
+
+        def _arch(param: str) -> Any:
+            """Return arch param from training_args.bin if present, else config."""
+            if model_args is not None:
+                bin_val = getattr(model_args, param, None)
+                if bin_val is not None:
+                    return bin_val
+            return getattr(cfg, param)
+
         labels = LABELS[self._label_set]
         num_rel_labels = labels.num_rel_labels(cfg.no_sym)
 
@@ -73,18 +123,18 @@ class HGERERunner:
         infer_args = types.SimpleNamespace(
             do_train=False,
             lminit=False,
-            ent_dim=cfg.ent_dim,
-            rel_dim=cfg.rel_dim,
-            mem_dim=cfg.mem_dim,
-            factor_type=cfg.factor_type,
-            factor_encoder=cfg.factor_encoder,
-            ent_repr=cfg.ent_repr,
-            n_iter=cfg.n_iter,
-            layernorm=cfg.layernorm,
-            layernorm_1st=cfg.layernorm_1st,
-            attn_self=cfg.attn_self,
-            attn_res=cfg.attn_res,
-            unirel=cfg.unirel,
+            ent_dim=_arch("ent_dim"),
+            rel_dim=_arch("rel_dim"),
+            mem_dim=_arch("mem_dim"),
+            factor_type=_arch("factor_type"),
+            factor_encoder=_arch("factor_encoder"),
+            ent_repr=_arch("ent_repr"),
+            n_iter=_arch("n_iter"),
+            layernorm=_arch("layernorm"),
+            layernorm_1st=_arch("layernorm_1st"),
+            attn_self=_arch("attn_self"),
+            attn_res=_arch("attn_res"),
+            unirel=_arch("unirel"),
             device=device,
         )
         with suppress_transformers_warnings():
@@ -94,7 +144,6 @@ class HGERERunner:
         self._model.to(device)
         self._model.eval()
         logger.info("HGERE model loaded from %s", model_path)
-        cfg = self._config
         if cfg.pre_filter_params is not None:
             logger.info(
                 "HGERE pre_filter_params: %s", cfg.pre_filter_params.model_dump()
