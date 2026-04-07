@@ -175,6 +175,13 @@ class HGERETrainParams(BaseModel):
     pre_filter_params: Optional[PreFilterParams] = Field(
         default=None, description="Parameters for pre-filtering NER candidates."
     )
+    use_gold_ner: bool = Field(
+        default=False,
+        description=(
+            "Force gold NER annotations as entity candidates, ignoring predicted_ner "
+            "and predicted_ner_proba. Gives an oracle upper bound for the HGERE stage."
+        ),
+    )
     batch_by_size: bool = Field(
         default=False,
         description=(
@@ -279,8 +286,14 @@ class HGERETrainConfig(BaseModel):
     max_seq_length: int = Field(
         default=384, description="Maximum tokenised sequence length."
     )
-    max_pair_length: int = Field(
-        default=64, description="Maximum number of span pairs per sequence."
+    max_ents: int = Field(
+        default=18,
+        description=(
+            "Maximum entity candidates per sentence. Candidates beyond this limit are "
+            "dropped during dataset construction (after pre-filter, in order of appearance). "
+            "Controls memory and batch size: actual sequence length is "
+            "max_seq_length + 2 * max_ents."
+        ),
     )
     alpha: float = Field(default=1.0, description="Loss scale alpha.")
     no_sym: bool = Field(
@@ -310,7 +323,6 @@ class HGERETrainConfig(BaseModel):
         description="Number of HyperGNN iterations. Maps to --iter in run_hgnn.py.",
     )
     factor_encoder: str = Field(default="cat", description="Factor encoder type.")
-    iter1: int = Field(default=1, description="Number of first-order iterations.")
     lminit: bool = Field(
         default=False, description="Initialise span boundary embeddings from LM output."
     )
@@ -319,11 +331,6 @@ class HGERETrainConfig(BaseModel):
     )
 
     # ── Attention ─────────────────────────────────────────────────────────────
-    att_left: bool = Field(default=False, description="Use left attention.")
-    att_right: bool = Field(default=False, description="Use right attention.")
-    use_ner_results: bool = Field(
-        default=False, description="Use NER results during relation extraction."
-    )
     use_typemarker: bool = Field(
         default=False, description="Use type markers in the input."
     )
@@ -332,14 +339,6 @@ class HGERETrainConfig(BaseModel):
         default=False, description="Apply layer normalisation for first-order."
     )
     attn_self: bool = Field(default=False, description="Use self-attention.")
-    aggregate_type: str = Field(
-        default="attn", description="Aggregation type: attn or test."
-    )
-    aggregate_func: str = Field(
-        default="max", description="Aggregation function: max or sum."
-    )
-    agg_with_self: bool = Field(default=False, description="Aggregate with self node.")
-    fix_obj: bool = Field(default=False, description="Fix object representation.")
     edgetype: str = Field(default="sib", description="Edge type for HTNN.")
 
     # ── Attention scorer ──────────────────────────────────────────────────────
@@ -366,20 +365,6 @@ class HGERETrainConfig(BaseModel):
         default=2.0, description="Focusing parameter γ for NER focal loss."
     )
 
-    # ── Evaluation flags ──────────────────────────────────────────────────────
-    uni_ent: bool = Field(
-        default=False,
-        description="Use uniform entity representation (same repr for sub/obj).",
-    )
-    pred_sub: bool = Field(default=False, description="Predict subject.")
-    eval_logits: bool = Field(
-        default=False, description="Decode with non-normalised logits."
-    )
-    eval_logsoftmax: bool = Field(default=False, description="Decode with log-softmax.")
-    eval_softmax: bool = Field(default=False, description="Decode with softmax.")
-    eval_unidirect: bool = Field(
-        default=False, description="Evaluate with unidirectional relations."
-    )
     baseline: str = Field(default="firstorder", description="Baseline method.")
 
     # ── Training parameters ────────────────────────────────────────────────────
@@ -422,7 +407,7 @@ class HGERETrainConfig(BaseModel):
 
         return RelationDatasetParams(
             max_seq_length=self.max_seq_length,
-            max_pair_length=self.max_pair_length,
+            max_ents=self.max_ents,
             model_type=self.model_type,
             use_typemarker=self.use_typemarker,
             no_sym=self.no_sym,
@@ -431,6 +416,7 @@ class HGERETrainConfig(BaseModel):
             split=split,
             doc_limit=doc_limit,
             preload=preload,
+            use_gold_ner=self.train_params.use_gold_ner,
         )
 
     # ── Loaders ───────────────────────────────────────────────────────────────

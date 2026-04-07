@@ -93,7 +93,6 @@ class HGEREConfig(BaseModel):
     model_type: str = "hyper"
     per_gpu_eval_batch_size: int = 32
     max_seq_length: int = 512
-    max_pair_length: int = 18
     factor_type: str = "tersibcop"
     factor_encoder: str = "biaf"
     ent_dim: int = 400
@@ -115,6 +114,7 @@ class HGEREConfig(BaseModel):
     shuffle: bool = False
     local_rank: int = -1
     pre_filter_params: Optional[PreFilterParams] = None
+    use_gold_ner: bool = False
     n_workers: int = 4
 
 

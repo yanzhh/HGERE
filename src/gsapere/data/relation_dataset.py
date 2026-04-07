@@ -19,6 +19,7 @@ from ..data.data_types import (
     RelationSentence,
     SentenceSubjectCandidate,
     SubjectInfo,
+    TruncationStats,
 )
 from ..data.samplers import (
     BucketSampler,
@@ -56,8 +57,6 @@ class RelationDataset(DocumentDataset):
         params: RelationDatasetParams,
     ) -> None:
         self.logger = logger
-        self.max_pair_length = params.max_pair_length
-        self.max_entity_length = params.max_pair_length * 2
         self.max_ents = params.max_ents
 
         self.use_typemarker = params.use_typemarker
@@ -66,6 +65,7 @@ class RelationDataset(DocumentDataset):
         self.nocross = params.nocross
         self.local_rank = params.local_rank
         self.split = params.split
+        self.use_gold_ner = params.use_gold_ner
 
         self.ner_label_list: list[str] = labels.ner
         self.sym_labels: list[str] = labels.rel.symmetric(only_nil=self.no_sym)
@@ -90,6 +90,18 @@ class RelationDataset(DocumentDataset):
         self.candidate_stats: CandidateStats = CandidateStats(
             n_gold=0, n_candidates=0, n_tp=0, n_fp=0, n_fn=0
         )
+        self.truncation_stats: TruncationStats = TruncationStats(
+            n_maxents_sents=0,
+            n_maxents_dropped=0,
+            n_seqlen_subjects=0,
+            n_seqlen_objects=0,
+        )
+        # Mutable accumulators updated during _build_index(); frozen into
+        # truncation_stats at the end of build().
+        self._trunc_maxents_sents: int = 0
+        self._trunc_maxents_dropped: int = 0
+        self._trunc_seqlen_subjects: int = 0
+        self._trunc_seqlen_objects: int = 0
 
         # Populated lazily by _preload() when params.preload is True.
         self._data_tokenized: list[dict[str, Any]] = []
@@ -188,6 +200,10 @@ class RelationDataset(DocumentDataset):
             for sentence_idx, sent in enumerate(doc.sentences):
                 ner_candidates_sent = list(ner_candidates_all[sentence_idx])
                 if self.max_ents is not None:
+                    dropped = max(0, len(ner_candidates_sent) - self.max_ents)
+                    if dropped:
+                        self._trunc_maxents_sents += 1
+                        self._trunc_maxents_dropped += dropped
                     ner_candidates_sent = ner_candidates_sent[: self.max_ents]
                 sentence_relations = relations_all[sentence_idx]
                 ner_sent_gold = ner_gold_all[sentence_idx]
@@ -289,6 +305,7 @@ class RelationDataset(DocumentDataset):
                     subj_end_sent += 2  # account for the two inserted marker tokens
 
                     if subj_end_sent >= self.max_seq_length - 1:
+                        self._trunc_seqlen_subjects += 1
                         continue
 
                     object_candidates, ner_labels = self._build_object_candidates(
@@ -368,6 +385,21 @@ class RelationDataset(DocumentDataset):
 
         self.candidate_stats = self._compute_candidate_stats(
             self.global_predicted_ners, self.ner_golden_labels
+        )
+        self.truncation_stats = TruncationStats(
+            n_maxents_sents=self._trunc_maxents_sents,
+            n_maxents_dropped=self._trunc_maxents_dropped,
+            n_seqlen_subjects=self._trunc_seqlen_subjects,
+            n_seqlen_objects=self._trunc_seqlen_objects,
+        )
+        self.logger.info(
+            "Truncation stats: "
+            "max_ents: %d sents affected, %d candidates dropped | "
+            "seq_len: %d subjects dropped, %d objects dropped",
+            self._trunc_maxents_sents,
+            self._trunc_maxents_dropped,
+            self._trunc_seqlen_subjects,
+            self._trunc_seqlen_objects,
         )
         if self.do_pre_filter:
             self.logger.info(
@@ -706,6 +738,7 @@ class RelationDataset(DocumentDataset):
                     obj_end_sent += 1
 
             if obj_end_sent >= self.max_seq_length - 1:
+                self._trunc_seqlen_objects += 1
                 continue
 
             object_candidates.append(
@@ -735,6 +768,8 @@ class RelationDataset(DocumentDataset):
         3. Gold mode (fallback): use gold ner annotations as candidates, giving
            an oracle upper bound for the HGERE stage.
         """
+        if self.use_gold_ner:
+            return raw_doc.get("ner", [[] for _ in raw_doc.get("sentences", [])])
         if self.do_pre_filter:
             assert "predicted_ner_proba" in raw_doc, (
                 "pre_filter requires 'predicted_ner_proba' in the input file"

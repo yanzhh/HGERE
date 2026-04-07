@@ -52,10 +52,11 @@ class TestLoadLabelSchemeByName:
         assert "Method" in scheme.ner
         assert "MLModel" in scheme.ner
 
-    def test_scier_no_symmetric_relations(self) -> None:
+    def test_scier_symmetric_relations(self) -> None:
         scheme = load_label_scheme("scier")
-        # Only NIL in symmetric when there are no symmetric relations
-        assert scheme.rel.symmetric() == ["NIL"]
+        sym = scheme.rel.symmetric()
+        assert "Synonym-Of" in sym
+        assert "Compare-With" in sym
 
     def test_unknown_name_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match="Unknown label set"):

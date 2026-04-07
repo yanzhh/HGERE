@@ -157,7 +157,6 @@ class HGERERunner:
             model_type=cfg.model_type,
             label_set=self._label_set,
             max_seq_length=cfg.max_seq_length,
-            max_pair_length=cfg.max_pair_length,
             per_gpu_eval_batch_size=cfg.per_gpu_eval_batch_size,
             train_batch_size=cfg.per_gpu_eval_batch_size,
             eval_batch_size=cfg.per_gpu_eval_batch_size * max(1, n_gpu),
@@ -170,7 +169,7 @@ class HGERERunner:
             do_lower_case=cfg.do_lower_case,
             do_train=False,
             lminit=False,
-            shuffle=False,
+            shuffle=cfg.shuffle,
             batch_by_size=False,
             preload_dataset=False,
             pre_filter_params=(
@@ -208,7 +207,6 @@ class HGERERunner:
             cfg = self._config
             dataset_params = RelationDatasetParams(
                 max_seq_length=cfg.max_seq_length,
-                max_pair_length=cfg.max_pair_length,
                 model_type=cfg.model_type,
                 use_typemarker=cfg.use_typemarker,
                 no_sym=cfg.no_sym,
@@ -220,6 +218,7 @@ class HGERERunner:
                     if cfg.pre_filter_params
                     else None
                 ),
+                use_gold_ner=cfg.use_gold_ner,
             )
             dataset = RelationDataset(
                 logger=logger,

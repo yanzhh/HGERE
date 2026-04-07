@@ -73,8 +73,9 @@ def _collate_relation_batch(
     ent_numbers = torch.tensor([sent["n_ent"] for sent in batch])
     n_sent = len(batch)
 
-    if n_sent == 1:
-        # Fast path: single sentence needs no padding, just wrapping in batch dim.
+    if n_sent == 1 and int(ent_numbers[0]) > 0:
+        # Fast path: single sentence with entities needs no padding, just wrapping.
+        # Skipped when n_ent == 0: torch.tensor([]) is 1D and would break BERT.
         item = deepcopy(batch[0])
         item.pop("n_ent")
         item.pop("subtoken_len")

@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-
 import torch
+import wandb
 
 from ..data.config import RelationDatasetParams
 from ..data.relation_dataset import RelationDataset
@@ -17,6 +17,51 @@ from ..hgere.train import log_candidate_stats_to_wandb, train
 from ..labels import LABELS
 from ..models.hgere import MODEL_CLASSES
 from ..utils import set_seed
+
+
+def _log_entity_stats(
+    split: str, dataset: RelationDataset, logger: logging.Logger
+) -> None:
+    """Log min / mean / max entity count per sentence for one dataset split.
+
+    Also reports how many sentences have zero entity candidates, which
+    indicates pruner misses that cannot be recovered by HGERE.
+    """
+    sizes = dataset.sizes
+    n = len(sizes)
+    if n == 0:
+        logger.info("[%s] entity stats: 0 sentences", split)
+        return
+    min_ent = min(sizes)
+    max_ent = max(sizes)
+    mean_ent = sum(sizes) / n
+    zero_ent = sum(1 for s in sizes if s == 0)
+    logger.info(
+        "[%s] entity count per sentence — n=%d  min=%d  mean=%.1f  max=%d"
+        "  zero-entity sentences=%d (%.1f%%)",
+        split,
+        n,
+        min_ent,
+        mean_ent,
+        max_ent,
+        zero_ent,
+        100.0 * zero_ent / n,
+    )
+    if wandb.run is not None:
+        t = dataset.truncation_stats
+        wandb.log(
+            {
+                f"data/{split}/ent_min": min_ent,
+                f"data/{split}/ent_mean": mean_ent,
+                f"data/{split}/ent_max": max_ent,
+                f"data/{split}/zero_ent_pct": 100.0 * zero_ent / n,
+                f"data/{split}/truncation/maxents_sents": t.n_maxents_sents,
+                f"data/{split}/truncation/maxents_dropped": t.n_maxents_dropped,
+                f"data/{split}/truncation/seqlen_subjects": t.n_seqlen_subjects,
+                f"data/{split}/truncation/seqlen_objects": t.n_seqlen_objects,
+            },
+            commit=False,
+        )
 
 
 def setup_training(args, logger):
@@ -67,7 +112,9 @@ def setup_training(args, logger):
         logger.info("TRAINING")
         logger.info("+" * 20)
         train_dataset = load_dataset("train", tokenizer, args, logger)
+        _log_entity_stats("train", train_dataset, logger)
         dev_dataset = load_dataset("dev", tokenizer, args, logger)
+        _log_entity_stats("dev", dev_dataset, logger)
         global_step, tr_loss, best_f1, best_result = train(
             model, train_dataset, dev_dataset, args, logger
         )
@@ -87,6 +134,7 @@ def setup_training(args, logger):
         # Load datasets if needed:
         if args.eval_test:
             test_dataset = load_dataset("test", tokenizer, args, logger)
+            _log_entity_stats("test", test_dataset, logger)
             log_candidate_stats_to_wandb("test", test_dataset.candidate_stats)
         if not args.do_train:
             if args.eval_train:
@@ -112,8 +160,19 @@ def setup_training(args, logger):
                     f"{list(model.ner_cls.parameters())[-1].data.sum():.6f}"
                 )
             # eval train
+            _SPLIT_KEYS = {
+                "ner_precision",
+                "ner_recall",
+                "ner_f1",
+                "re_precision",
+                "re_recall",
+                "re_f1",
+                "re+_precision",
+                "re+_recall",
+                "re+_f1",
+            }
             if args.eval_train:
-                report[args.train_file] = evaluate(
+                train_results = evaluate(
                     model,
                     train_dataset,
                     args,
@@ -121,6 +180,16 @@ def setup_training(args, logger):
                     prefix=global_step,
                     persist_predictions=True,
                 )
+                report[args.train_file] = train_results
+                if wandb.run is not None:
+                    wandb.log(
+                        {
+                            f"train_eval/{k}": v
+                            for k, v in train_results.items()
+                            if k in _SPLIT_KEYS
+                        },
+                        commit=False,
+                    )
             # eval dev
             if args.eval_dev:
                 report[args.dev_file] = evaluate(
@@ -133,7 +202,7 @@ def setup_training(args, logger):
                 )
             # eval test
             if args.eval_test:
-                report[args.test_file] = evaluate(
+                test_results = evaluate(
                     model,
                     test_dataset,
                     args,
@@ -141,6 +210,16 @@ def setup_training(args, logger):
                     prefix=global_step,
                     persist_predictions=True,
                 )
+                report[args.test_file] = test_results
+                if wandb.run is not None:
+                    wandb.log(
+                        {
+                            f"test/{k}": v
+                            for k, v in test_results.items()
+                            if k in _SPLIT_KEYS
+                        },
+                        commit=False,
+                    )
 
             output_test_file = os.path.join(
                 getattr(args, "output_dir", None) or args.model_dir,
@@ -176,7 +255,6 @@ def load_dataset(
     labels = LABELS[label_set]
     params = RelationDatasetParams(
         max_seq_length=args.max_seq_length,
-        max_pair_length=args.max_pair_length,
         model_type=args.model_type,
         use_typemarker=args.use_typemarker,
         no_sym=args.no_sym,
@@ -185,6 +263,8 @@ def load_dataset(
         split=split,
         preload=args.preload_dataset,
         pre_filter_params=getattr(args, "pre_filter_params", None),
+        max_ents=args.max_ents,
+        use_gold_ner=getattr(args, "use_gold_ner", False),
     )
     dataset = RelationDataset(
         logger=logger,

@@ -120,7 +120,6 @@ def full_config_yaml(tmp_path: Path) -> Path:
             "model_type": "hyper",
             "per_gpu_eval_batch_size": 32,
             "max_seq_length": 512,
-            "max_pair_length": 18,
             "factor_type": "tersibcop",
             "factor_encoder": "biaf",
             "ent_dim": 400,

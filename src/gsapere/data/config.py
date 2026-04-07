@@ -25,10 +25,6 @@ class RelationDatasetParams(BaseModel):
     max_seq_length: int = Field(
         default=384, description="Maximum tokenised sequence length."
     )
-    max_pair_length: int = Field(
-        default=64,
-        description="Maximum number of entity pairs (subjects) per sequence.",
-    )
     max_ents: int = Field(
         default=18, description="Maximum entity candidates per sentence."
     )
@@ -86,5 +82,12 @@ class RelationDatasetParams(BaseModel):
             "Pre-filtering parameters for NER candidates (PreFilterParams dict: "
             "{'method': 'topk'|'threshold', ...}). When set, requires "
             "'predicted_ner_proba' in each doc."
+        ),
+    )
+    use_gold_ner: bool = Field(
+        default=False,
+        description=(
+            "Force gold NER annotations as entity candidates, ignoring predicted_ner "
+            "and predicted_ner_proba. Gives an oracle upper bound for the HGERE stage."
         ),
     )

@@ -74,14 +74,9 @@ def _decode_ner_batch(
         n_spans = len(sample_obj_mentions)
         sample_ner_preds = ner_preds[sample_idx][:n_spans]
 
-        softmax = torch.nn.functional.softmax(
-            ner_logits[sample_idx][:n_spans], dim=-1
-        )
+        softmax = torch.nn.functional.softmax(ner_logits[sample_idx][:n_spans], dim=-1)
         probs = (
-            softmax.gather(-1, sample_ner_preds.unsqueeze(-1))
-            .squeeze(-1)
-            .cpu()
-            .numpy()
+            softmax.gather(-1, sample_ner_preds.unsqueeze(-1)).squeeze(-1).cpu().numpy()
         )
         sample_labels = [ner_label_list[idx] for idx in sample_ner_preds]
         result[sent_id] = {
@@ -322,6 +317,11 @@ def infer_hgere(
             ent_counts = batch["ent_numbers"]
 
             inputs = {k: v.to(args.device) for k, v in batch.items() if k in _EVAL_KEYS}
+
+            if inputs["ent_numbers"].sum() == 0:
+                ner_predictions.update({tuple(si): {} for si in sent_indices})
+                continue
+
             outputs = model(**inputs)
 
             rel_logits = torch.nn.functional.log_softmax(outputs[0], dim=-1)

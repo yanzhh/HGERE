@@ -336,6 +336,29 @@ class CandidateStats:
         return self.n_tp / self.n_candidates if self.n_candidates > 0 else 0.0
 
 
+@dataclass(frozen=True)
+class TruncationStats:
+    """Entity-level truncation counts accumulated during RelationDataset._build_index().
+
+    Two independent truncation sources are tracked:
+
+    max_ents truncation (applied first, before tokenisation):
+      n_maxents_sents      — sentences where the candidate list was capped by max_ents.
+      n_maxents_dropped    — total candidates removed by the cap.
+
+    Sequence-length truncation (applied during tokenisation):
+      n_seqlen_subjects    — subject candidates dropped because their subtoken end
+                             position fell outside max_seq_length.
+      n_seqlen_objects     — object candidates dropped for the same reason
+                             (invisible in entity counts, but reduces relation pairs).
+    """
+
+    n_maxents_sents: int
+    n_maxents_dropped: int
+    n_seqlen_subjects: int
+    n_seqlen_objects: int
+
+
 # ── 6. Prediction types (frozen dataclasses) ──────────────────────────────
 
 

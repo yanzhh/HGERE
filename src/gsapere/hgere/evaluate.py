@@ -168,6 +168,11 @@ def evaluate(
                     v = v.to(args.device)
                     inputs[k] = v
 
+            if inputs["ent_numbers"].sum() == 0:
+                for sent_id in sent_indices:
+                    ner_predictions[tuple(sent_id)] = {}
+                continue
+
             outputs = model(**inputs)
 
             rel_logits = outputs[0]

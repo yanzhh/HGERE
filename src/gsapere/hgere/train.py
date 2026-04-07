@@ -243,6 +243,11 @@ def train(
             # for step, batch in enumerate(train_dataloader):
             model.train()
 
+            # Skip batches where every sentence has zero entity candidates.
+            # These contribute no learning signal and the model cannot process them.
+            if batch["ent_numbers"].sum() == 0:
+                continue
+
             inputs = {}
             input_keys = TRAIN_KEYS
 
@@ -373,15 +378,33 @@ def train(
             ):  # Only evaluate when single GPU otherwise metrics may not average well
                 results = evaluate(model, eval_dataset, args, logger)
                 f1_re_plus = results["re+_f1"]
-                f1_re = results["re_f1"]
-                f1_ner = results["ner_f1"]
                 if log_wandb:
-                    metrics_to_log = {f"eval/{k}": v for k, v in results.items()}
-                    # @TODO Delete if not needed anymore:
-                    metrics_to_log |= {  # Old format to keep it the same. for new projects this could be deleted.
-                        "f1/train/re_strict": f1_re_plus,
-                        "f1/train/re": f1_re,
-                        "f1/train/ner": f1_ner,
+                    _EVAL_KEYS = {
+                        "ner_precision",
+                        "ner_recall",
+                        "ner_f1",
+                        "re_precision",
+                        "re_recall",
+                        "re_f1",
+                        "re+_precision",
+                        "re+_recall",
+                        "re+_f1",
+                    }
+                    dstep = global_step - logging_loss_steps
+                    avg_loss_re = logging_reloss / max(dstep, 1)
+                    avg_loss_ner = logging_nerloss / max(dstep, 1)
+                    metrics_to_log = {
+                        f"eval/{k}": v for k, v in results.items() if k in _EVAL_KEYS
+                    }
+                    metrics_to_log["eval/loss_re"] = avg_loss_re
+                    metrics_to_log["eval/loss_ner"] = avg_loss_ner
+                    metrics_to_log["eval/loss"] = (
+                        alpha * avg_loss_re + (1 - alpha) * avg_loss_ner
+                    )
+                    metrics_to_log |= {
+                        f"eval_detail/{k}": v
+                        for k, v in results.items()
+                        if k not in _EVAL_KEYS
                     }
                     wandb.log(metrics_to_log, step=global_step)
 

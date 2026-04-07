@@ -302,5 +302,4 @@ def relation_params() -> RelationDatasetParams:
         model_type="bert",
         no_sym=True,
         nocross=False,
-        max_pair_length=10,
     )

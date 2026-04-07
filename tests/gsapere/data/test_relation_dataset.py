@@ -568,7 +568,6 @@ class TestSymmetricRelationHandling:
             model_type="bert",
             no_sym=False,
             nocross=False,
-            max_pair_length=10,
         )
         ds = _make_dataset(
             relation_jsonl_sym_reverse, mock_tokenizer, mock_labels_with_sym, params_sym
@@ -609,7 +608,6 @@ class TestSymmetricRelationHandling:
             model_type="bert",
             no_sym=False,
             nocross=False,
-            max_pair_length=10,
         )
         ds = _make_dataset(path, mock_tokenizer, mock_labels_with_sym, params_sym)
         sym_gold = [e for e in ds.golden_labels if e[-1] == "Similar"]

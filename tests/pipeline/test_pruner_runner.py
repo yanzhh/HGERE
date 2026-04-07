@@ -245,6 +245,7 @@ class TestPrunerRunner:
                 "max_mentions_num": 18,
             }
             runner._model = MagicMock()
+            runner._model_args = MagicMock()
             runner._tokenizer = MagicMock()
             runner._device = "cpu"
 
@@ -268,6 +269,7 @@ class TestPrunerRunner:
             "max_mentions_num": 18,
         }
         runner._model = MagicMock()
+        runner._model_args = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
@@ -290,6 +292,7 @@ class TestPrunerRunner:
             "max_mentions_num": 18,
         }
         runner._model = MagicMock()
+        runner._model_args = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
@@ -315,6 +318,7 @@ class TestPrunerRunner:
             "max_mentions_num": 18,
         }
         runner._model = MagicMock()
+        runner._model_args = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
@@ -349,6 +353,7 @@ class TestPrunerRunner:
             "max_mentions_num": 18,
         }
         runner._model = MagicMock()
+        runner._model_args = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
@@ -375,6 +380,7 @@ class TestPrunerRunner:
             "max_mentions_num": 18,
         }
         runner._model = MagicMock()
+        runner._model_args = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
@@ -398,6 +404,7 @@ class TestPrunerRunner:
             "max_mentions_num": 18,
         }
         runner._model = MagicMock()
+        runner._model_args = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
@@ -423,6 +430,7 @@ class TestPrunerRunner:
             "max_mentions_num": 18,
         }
         runner._model = MagicMock()
+        runner._model_args = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
 
