@@ -1,5 +1,5 @@
 label_set: scinlp
-model_dir: saves/scinlp/pruner/friedrich_bs8_lr1e-6
+model_dir: saves/scinlp/pruner/friedrich_bs8_lr1e-6_abbr
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 do_lower_case: true
 model_type: bertspanmarkerpruner
@@ -11,12 +11,12 @@ max_mention_ori_length: 12
 train_params:
     # W&B
     project_name: scinlp-pruner
-    run_name: friedrich_bs8_lr1e-6
+    run_name: friedrich_bs8_lr1e-6_abbr
     # Data
-    data_dir: datasets/scinlp/
-    train_file: train.json
-    dev_file: dev.json
-    test_file: test.json
+    data_dir: datasets_fixed/scinlp/
+    train_file: train.jsonl
+    dev_file: dev.jsonl
+    test_file: test.jsonl
     # Rule-based pre-filter (produced by eval-rulebased-pruner)
     rulebased_pruner_file: datasets/scinlp/pre-filter/rules.json
     # Optimisation

@@ -1,0 +1,36 @@
+ner:
+    - Method
+    - MLModel
+    - MLModelGeneric
+    - ModelArchitecture
+    - Dataset
+    - DatasetGeneric
+    - DataSource
+    - Task
+    - ReferenceLink
+    - URL
+
+relations:
+    symmetric:
+        - coreference
+        - isComparedTo
+    non_symmetric:
+        - citation
+        - usedFor
+        - architecture
+        - evaluatedOn
+        - isPartOf
+        - abbreviates
+        - trainedOn
+        - appliedTo
+        - isHyponymOf
+        - transformedFrom
+        - benchmarkFor
+        - generatedBy
+        - isBasedOn
+        - sourcedFrom
+        - processed
+        - hasInstanceType
+        - size
+        - url
+        - versionOf

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,6 +80,22 @@ def _gsap_ere_postprocess(path: Path) -> None:
     vocab = load_gsap_ere_vocabulary()
     n = convert_jsonl(path, path, vocab)
     print(f"  [vocab] replaced token IDs in {n} documents")
+
+
+def _scinlp_postprocess(path: Path) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    out_lines = []
+    n = 0
+    for line in lines:
+        if not line.strip():
+            continue
+        doc = json.loads(line)
+        if "doc_key" in doc:
+            doc["doc_id"] = doc.pop("doc_key")
+            n += 1
+        out_lines.append(json.dumps(doc))
+    path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+    print(f"  [postprocess] renamed doc_key→doc_id in {n} documents")
 
 
 DATASETS: dict[str, DatasetSpec] = {
@@ -163,16 +180,17 @@ DATASETS: dict[str, DatasetSpec] = {
             "Source: https://github.com/AKADDC/SciNLP (Dataset/ folder)\n"
             "See documentation/download-dataset.md for details."
         ),
+        postprocess=_scinlp_postprocess,
         files={
-            "dev.json": FileSpec(
+            "dev.jsonl": FileSpec(
                 url="https://raw.githubusercontent.com/AKADDC/SciNLP/main/Dataset/dev.json",
                 md5="225912710ca250c7610ecb12b91a530e",
             ),
-            "test.json": FileSpec(
+            "test.jsonl": FileSpec(
                 url="https://raw.githubusercontent.com/AKADDC/SciNLP/main/Dataset/test.json",
                 md5="141e61feca819c7353f91bc7f55ef029",
             ),
-            "train.json": FileSpec(
+            "train.jsonl": FileSpec(
                 url="https://raw.githubusercontent.com/AKADDC/SciNLP/main/Dataset/train.json",
                 md5="e92aae561a376127ff3b938be84c65f9",
             ),

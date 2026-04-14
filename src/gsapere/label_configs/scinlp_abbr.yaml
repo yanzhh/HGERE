@@ -1,0 +1,21 @@
+ner:
+    - method
+    - dataset
+    - task
+    - metric
+
+relations:
+    symmetric:
+        - compareWith
+        - similarWith
+    non_symmetric:
+        - abbreviates
+        - UsedFor
+        - MeasuredBy
+        - trainedWith
+        - evaluatedOn
+        - enhancedBy
+        - evaluatedBy
+        - subclassOf
+        - subtaskOf
+        - partOf

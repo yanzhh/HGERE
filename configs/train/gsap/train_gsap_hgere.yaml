@@ -1,5 +1,5 @@
-label_set: gsap
-model_dir: saves/gsap/HGERE/vogelvieh
+label_set: gsap_abbr
+model_dir: saves/gsap/HGERE/vogelvieh_abbr
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 model_type: hyper
 do_lower_case: true
@@ -25,10 +25,10 @@ ner_prediction_dir: saves/gsap/pruner/pelikan
 # Optimisation
 train_params:
     project_name: gsap-rel-hgere
-    run_name: vogelvieh
-    train_file: ent_pred_train.json
-    dev_file: ent_pred_dev.json
-    test_file: ent_pred_test.json
+    run_name: vogelvieh_abbr
+    train_file: ent_pred_train_abbr.json
+    dev_file: ent_pred_dev_abbr.json
+    test_file: ent_pred_test_abbr.json
     save_results: true
     eval_train: true
     eval_test: true

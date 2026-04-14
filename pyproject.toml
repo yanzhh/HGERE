@@ -49,6 +49,7 @@ gsapere-tune-pruner = "gsapere.evaluation.threshold_analysis:cli"
 gsapere-train-hgere = "gsapere.commands.train_hgere:main"
 gsapere-generate-pruner-docs = "gsapere.documentation.generate_pruner_docs:cli"
 gsapere-analysis-ner-length-distribution = "gsapere.commands.ner_length_distribution:cli"
+gsapere-fix-gold-annos = "gsapere.commands.add_gold_annotations:cli"
 
 [dependency-groups]
 dev = [
