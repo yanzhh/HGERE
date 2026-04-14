@@ -22,9 +22,10 @@ def load_jsonl(path: Path) -> list[dict]:
 
 
 def process_file(pred_path: Path, gold_dir: Path) -> None:
-    # ent_pred_<split>.json → <split>
+    # ent_pred_<split>[_overlap].json → base split for gold lookup
     split = pred_path.stem.removeprefix("ent_pred_")
-    gold_path = gold_dir / f"{split}.jsonl"
+    base_split = split.removesuffix("_overlap")
+    gold_path = gold_dir / f"{base_split}.jsonl"
     if not gold_path.exists():
         print(f"  skip {pred_path.name} — no matching gold file ({gold_path})")
         return
