@@ -612,3 +612,95 @@ class TestSymmetricRelationHandling:
         ds = _make_dataset(path, mock_tokenizer, mock_labels_with_sym, params_sym)
         sym_gold = [e for e in ds.golden_labels if e[-1] == "Similar"]
         assert len(sym_gold) == 1
+
+
+# ---------------------------------------------------------------------------
+# dataset_id propagation (multi-head support)
+# ---------------------------------------------------------------------------
+
+
+class TestDatasetIdPropagation:
+    def test_dataset_id_stored_on_dataset(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+    ) -> None:
+        params = RelationDatasetParams(
+            max_seq_length=64,
+            use_typemarker=False,
+            local_rank=-1,
+            model_type="bert",
+            no_sym=True,
+            nocross=False,
+            dataset_id="scier",
+        )
+        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, params)
+        assert ds.dataset_id == "scier"
+
+    def test_dataset_id_none_by_default(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, relation_params)
+        assert ds.dataset_id is None
+
+    def test_prepare_item_includes_dataset_id(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+    ) -> None:
+        params = RelationDatasetParams(
+            max_seq_length=64,
+            use_typemarker=False,
+            local_rank=-1,
+            model_type="bert",
+            no_sym=True,
+            nocross=False,
+            dataset_id="scier",
+        )
+        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, params)
+        item = ds.prepare_item(0)
+        assert "dataset_id" in item
+        assert item["dataset_id"] == "scier"
+
+    def test_prepare_item_no_dataset_id_key_when_none(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, relation_params)
+        item = ds.prepare_item(0)
+        assert "dataset_id" not in item
+
+    def test_collated_batch_includes_dataset_id(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+    ) -> None:
+        from gsapere.data.collators import RelationCollator
+
+        params = RelationDatasetParams(
+            max_seq_length=64,
+            use_typemarker=False,
+            local_rank=-1,
+            model_type="bert",
+            no_sym=True,
+            nocross=False,
+            dataset_id="scinlp",
+        )
+        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, params)
+        items = [ds.prepare_item(0), ds.prepare_item(1)]
+        collator = RelationCollator(
+            tokenizer_pad_id=mock_tokenizer.pad_token_id, max_seq_length=64
+        )
+        batch = collator(items)
+        assert "dataset_id" in batch
+        assert batch["dataset_id"] == "scinlp"
