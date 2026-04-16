@@ -79,18 +79,23 @@ def log_candidate_stats_to_wandb(split: str, stats: CandidateStats) -> None:
     """
     if wandb.run is None:
         return
-    wandb.log(
-        {
-            f"data/{split}/n_gold": stats.n_gold,
-            f"data/{split}/n_candidates": stats.n_candidates,
-            f"data/{split}/n_tp": stats.n_tp,
-            f"data/{split}/n_fp": stats.n_fp,
-            f"data/{split}/n_fn": stats.n_fn,
-            f"data/{split}/recall": stats.recall,
-            f"data/{split}/precision": stats.precision,
-        },
-        step=0,
-    )
+    if type(stats) is not dict:
+        stats = {"": stats}
+    for ds, ds_stats in stats.items():
+        if ds:
+            ds = f"/{ds}"
+        wandb.log(
+            {
+                f"data{ds}/{split}/n_gold": ds_stats.n_gold,
+                f"data{ds}/{split}/n_candidates": ds_stats.n_candidates,
+                f"data{ds}/{split}/n_tp": ds_stats.n_tp,
+                f"data{ds}/{split}/n_fp": ds_stats.n_fp,
+                f"data{ds}/{split}/n_fn": ds_stats.n_fn,
+                f"data{ds}/{split}/recall": ds_stats.recall,
+                f"data{ds}/{split}/precision": ds_stats.precision,
+            },
+            step=0,
+        )
 
 
 def train(
