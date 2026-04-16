@@ -28,6 +28,53 @@ from ..pre_filter.config import PreFilterParams
 if TYPE_CHECKING:
     pass
 
+
+# ---------------------------------------------------------------------------
+# Multi-dataset configuration
+# ---------------------------------------------------------------------------
+
+
+class DatasetEntry(BaseModel):
+    """One dataset in a multi-dataset training setup."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(description="Dataset identifier, e.g. 'scier', 'scinlp', 'gsap'.")
+    label_set: str = Field(
+        description="Key into the built-in label registry (e.g. 'scier')."
+    )
+    ner_prediction_dir: str = Field(
+        description="Directory containing pruner output files for this dataset."
+    )
+    train_file: str = Field(
+        default="train.json", description="Training split filename."
+    )
+    dev_file: str = Field(default="dev.json", description="Dev split filename.")
+    test_file: str = Field(default="test.json", description="Test split filename.")
+    sampling_weight: float = Field(
+        default=1.0,
+        description="Relative sampling weight for this dataset (before temperature scaling).",
+    )
+
+
+class MultiDatasetConfig(BaseModel):
+    """Configuration for joint multi-dataset training with per-dataset heads."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    datasets: list[DatasetEntry] = Field(
+        description="List of datasets to train on jointly."
+    )
+    sampling_temperature: float = Field(
+        default=0.5,
+        description=(
+            "Temperature for dataset sampling probabilities. "
+            "p(d) proportional to n_d^temperature * sampling_weight. "
+            "0 = always pick the largest dataset; 1 = proportional to size."
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Versioning
 # ---------------------------------------------------------------------------
@@ -260,8 +307,12 @@ class HGERETrainConfig(BaseModel):
     )
 
     # ── Identity ──────────────────────────────────────────────────────────────
-    label_set: str = Field(
-        description="Label set for entity/relation types (e.g. gsap, scier, scinlp)."
+    label_set: Optional[str] = Field(
+        default=None,
+        description=(
+            "Label set for entity/relation types (e.g. gsap, scier, scinlp). "
+            "Required in single-dataset mode; omit when using multi_dataset."
+        ),
     )
 
     # ── Shared inference fields ────────────────────────────────────────────────
@@ -269,8 +320,12 @@ class HGERETrainConfig(BaseModel):
     base_model_name_or_path: str = Field(
         description="Transformer model path or HuggingFace name."
     )
-    ner_prediction_dir: str = Field(
-        description="Input data directory containing pruner output files for HGERE."
+    ner_prediction_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Input data directory containing pruner output files for HGERE. "
+            "Required in single-dataset mode; omit when using multi_dataset."
+        ),
     )
     model_type: str = Field(
         default="hyper",
@@ -367,6 +422,16 @@ class HGERETrainConfig(BaseModel):
 
     baseline: str = Field(default="firstorder", description="Baseline method.")
 
+    # ── Multi-dataset training ─────────────────────────────────────────────────
+    multi_dataset: Optional[MultiDatasetConfig] = Field(
+        default=None,
+        description=(
+            "Multi-dataset training configuration. When set, label_set and "
+            "ner_prediction_dir are not required (each dataset entry has its own). "
+            "Cannot be combined with label_set."
+        ),
+    )
+
     # ── Training parameters ────────────────────────────────────────────────────
     train_params: HGERETrainParams
 
@@ -383,6 +448,31 @@ class HGERETrainConfig(BaseModel):
                 f"Please migrate your config to version {CURRENT_SCHEMA_VERSION}."
             )
         return data
+
+    @model_validator(mode="after")
+    def _check_single_vs_multi_dataset(self) -> "HGERETrainConfig":
+        has_multi = self.multi_dataset is not None
+        has_label_set = self.label_set is not None
+        has_ner_dir = self.ner_prediction_dir is not None
+
+        if has_multi and has_label_set:
+            raise ValueError(
+                "Cannot set both 'label_set' and 'multi_dataset'. "
+                "Use 'label_set' for single-dataset mode or 'multi_dataset' for "
+                "joint multi-dataset training."
+            )
+        if not has_multi:
+            if not has_label_set:
+                raise ValueError(
+                    "Single-dataset mode requires 'label_set'. "
+                    "Provide 'label_set' or use 'multi_dataset' for multi-dataset training."
+                )
+            if not has_ner_dir:
+                raise ValueError(
+                    "Single-dataset mode requires 'ner_prediction_dir'. "
+                    "Provide 'ner_prediction_dir' or use 'multi_dataset' for multi-dataset training."
+                )
+        return self
 
     # ── Factories ─────────────────────────────────────────────────────────────
 
