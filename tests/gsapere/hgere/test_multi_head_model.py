@@ -194,17 +194,15 @@ class TestMultiHeadInit:
         assert isinstance(model.rel_heads, nn.ModuleDict)
         assert set(model.rel_heads.keys()) == {"scier", "scinlp"}
 
-    def test_backward_compat_aliases(self) -> None:
-        """ner_cls and rel_cls should alias the first head for weight-logging compat."""
+    def test_no_shared_tensor_aliases(self) -> None:
+        """In multi-head mode, ner_cls/rel_cls must not exist to avoid HF serialization errors."""
         heads = {
             "scier": {"num_ner_labels": 4, "num_rel_labels": 12},
             "scinlp": {"num_ner_labels": 5, "num_rel_labels": 14},
         }
         model = self._build_model_with_heads(heads)
-        # Aliases should point to the first head
-        first_key = "scier"
-        assert model.ner_cls is model.ner_heads[first_key]
-        assert model.rel_cls is model.rel_heads[first_key]
+        assert not hasattr(model, "ner_cls")
+        assert not hasattr(model, "rel_cls")
 
     def test_rel_head_output_size_per_dataset(self) -> None:
         heads = {
