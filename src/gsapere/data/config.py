@@ -91,3 +91,11 @@ class RelationDatasetParams(BaseModel):
             "and predicted_ner_proba. Gives an oracle upper bound for the HGERE stage."
         ),
     )
+    dataset_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Dataset identifier for multi-head training (e.g. 'scier', 'scinlp', 'gsap'). "
+            "When set, batches include this string so the model selects the correct heads. "
+            "Leave None for single-dataset training."
+        ),
+    )

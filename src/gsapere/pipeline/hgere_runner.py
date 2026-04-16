@@ -48,12 +48,20 @@ _ARCH_PARAMS: tuple[str, ...] = (
 class HGERERunner:
     """Wraps the HGERE model for on-demand entity and relation extraction.
 
-    Models are loaded once at construction. Call run() repeatedly.
+    The model is loaded once at construction. For multi-head models, call
+    :meth:`run` with an explicit *label_set* to select the appropriate head,
+    or call :meth:`run_multi` to run all configured label sets in one pass
+    (pruner candidates are reused; HGERE runs once per label set).
+
+    Args:
+        config: HGERE stage configuration.
+        label_sets: One or more label set names. The first entry is used as the
+            baseline for HuggingFace config initialisation.
     """
 
-    def __init__(self, config: HGEREConfig, label_set: str) -> None:
+    def __init__(self, config: HGEREConfig, label_sets: list[str]) -> None:
         self._config = config
-        self._label_set = label_set
+        self._label_sets = label_sets
         self._load_model()
 
     def _load_model(self) -> None:
@@ -100,7 +108,7 @@ class HGERERunner:
                     return bin_val
             return getattr(cfg, param)
 
-        labels = LABELS[self._label_set]
+        labels = LABELS[self._label_sets[0]]
         num_rel_labels = labels.num_rel_labels(cfg.no_sym)
 
         with suppress_transformers_warnings():
@@ -108,6 +116,9 @@ class HGERERunner:
                 str(model_path), num_labels=num_rel_labels
             )
         bert_config.max_seq_length = cfg.max_seq_length
+        # For multi-head checkpoints, bert_config already has dataset_heads from
+        # config.json, and the model will build nn.ModuleDicts instead.  These
+        # single-head fallback values are only used when dataset_heads is absent.
         bert_config.num_ner_labels = labels.num_ner_labels
         bert_config.alpha = 1.0
 
@@ -151,11 +162,11 @@ class HGERERunner:
         else:
             logger.info("HGERE pre_filter_params: None (using predicted_ner as-is)")
 
-    def _make_args(self, n_gpu: int) -> object:
+    def _make_args(self, n_gpu: int, label_set: str) -> object:
         cfg = self._config
         return types.SimpleNamespace(
             model_type=cfg.model_type,
-            label_set=self._label_set,
+            label_set=label_set,
             max_seq_length=cfg.max_seq_length,
             per_gpu_eval_batch_size=cfg.per_gpu_eval_batch_size,
             train_batch_size=cfg.per_gpu_eval_batch_size,
@@ -180,14 +191,15 @@ class HGERERunner:
     def _run_inference(
         self,
         docs: list[dict[str, Any]],
+        label_set: str,
         show_progress: bool = False,
         debug_break_on_first_rel: bool = False,
         debug_log_rel_probs: bool = False,
     ) -> list[dict[str, Any]]:
-        """Write docs to tempfiles, run HGERE, read results back."""
+        """Write docs to tempfiles, run HGERE with *label_set* head, read results back."""
         n_gpu = torch.cuda.device_count()
-        args = self._make_args(n_gpu)
-        labels = LABELS[self._label_set]
+        args = self._make_args(n_gpu, label_set)
+        labels = LABELS[label_set]
 
         tmp_input = None
         tmp_output = None
@@ -219,6 +231,9 @@ class HGERERunner:
                     else None
                 ),
                 use_gold_ner=cfg.use_gold_ner,
+                # Pass label_set as dataset_id so multi-head models route to
+                # the correct NER and relation head in forward().
+                dataset_id=label_set,
             )
             dataset = RelationDataset(
                 logger=logger,
@@ -262,6 +277,7 @@ class HGERERunner:
     def run(
         self,
         docs: list[dict[str, Any]],
+        label_set: str | None = None,
         show_progress: bool = False,
         debug_break_on_first_rel: bool = False,
         debug_log_rel_probs: bool = False,
@@ -270,6 +286,8 @@ class HGERERunner:
 
         Args:
             docs: Documents with ``predicted_ner`` populated by PrunerRunner.
+            label_set: Label set / head to activate. Defaults to the first
+                entry in ``label_sets`` passed at construction.
             show_progress: Show a tqdm progress bar over inference batches.
             debug_break_on_first_rel: If True, log and raise on the first
                 predicted relation — for diagnosing zero-relation issues.
@@ -282,7 +300,41 @@ class HGERERunner:
             return []
         return self._run_inference(
             docs,
+            label_set=label_set or self._label_sets[0],
             show_progress=show_progress,
             debug_break_on_first_rel=debug_break_on_first_rel,
             debug_log_rel_probs=debug_log_rel_probs,
         )
+
+    def run_multi(
+        self,
+        docs: list[dict[str, Any]],
+        show_progress: bool = False,
+        debug_break_on_first_rel: bool = False,
+        debug_log_rel_probs: bool = False,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Run HGERE once per configured label set.
+
+        The pruner-enriched *docs* (with ``predicted_ner``) are reused across
+        all label set runs; no additional pruner pass is needed.
+
+        Args:
+            docs: Documents with ``predicted_ner`` already populated.
+            show_progress: Show tqdm progress bars.
+            debug_break_on_first_rel: Raise after first predicted relation.
+
+        Returns:
+            Mapping ``{label_set: enriched_docs}`` — one entry per label set.
+        """
+        if not docs:
+            return {ls: [] for ls in self._label_sets}
+        return {
+            ls: self._run_inference(
+                docs,
+                label_set=ls,
+                show_progress=show_progress,
+                debug_break_on_first_rel=debug_break_on_first_rel,
+                debug_log_rel_probs=debug_log_rel_probs,
+            )
+            for ls in self._label_sets
+        }

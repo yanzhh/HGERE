@@ -50,6 +50,9 @@ _EVAL_KEYS = [
     "ent_numbers",
 ]
 
+# Keys passed to the model without moving to a CUDA device.
+_NON_TENSOR_KEYS = {"dataset_id"}
+
 
 # ---------------------------------------------------------------------------
 # Decoding helpers
@@ -317,6 +320,7 @@ def infer_hgere(
             ent_counts = batch["ent_numbers"]
 
             inputs = {k: v.to(args.device) for k, v in batch.items() if k in _EVAL_KEYS}
+            inputs.update({k: v for k, v in batch.items() if k in _NON_TENSOR_KEYS})
 
             if inputs["ent_numbers"].sum() == 0:
                 ner_predictions.update({tuple(si): {} for si in sent_indices})

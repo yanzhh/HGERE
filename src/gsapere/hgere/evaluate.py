@@ -33,6 +33,9 @@ EVAL_KEYS = [
     "ent_numbers",
 ]
 
+# Keys that are passed to the model but must NOT be moved to a CUDA device.
+_NON_TENSOR_KEYS = {"dataset_id"}
+
 
 def get_gold_ner_with_nolabel(ner_golden_labels: set) -> set:
     ner_golden_nolabels = set()
@@ -165,7 +168,8 @@ def evaluate(
 
             for k, v in batch.items():
                 if k in input_keys:
-                    v = v.to(args.device)
+                    inputs[k] = v.to(args.device)
+                elif k in _NON_TENSOR_KEYS:
                     inputs[k] = v
 
             if inputs["ent_numbers"].sum() == 0:
