@@ -43,7 +43,7 @@ train_params:
     pre_filter_params:
         method: threshold
         value: 0.069
-    num_train_epochs: 4
+    num_train_epochs: 20
     eval_epochs: 1
     per_gpu_train_batch_size: 21
     gradient_accumulation_steps: 1
