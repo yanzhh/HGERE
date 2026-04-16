@@ -99,6 +99,7 @@ class RuleBasedPruner:
             "patterns": [list(p) for p in self.prune_patterns],
             "max_span_len": self.max_span_len,
         }
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(Path(path), "w") as f:
             json.dump(data, f)
 
