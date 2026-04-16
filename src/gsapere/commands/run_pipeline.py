@@ -132,6 +132,21 @@ def _load_docs(file_path: Path, logger: logging.Logger) -> list[dict]:
     return docs
 
 
+def _output_path_for_label_set(output_file: Path, label_set: str) -> Path:
+    """Insert ``_<label_set>`` before the file extension."""
+    return output_file.parent / f"{output_file.stem}_{label_set}{output_file.suffix}"
+
+
+def _write_results(
+    results: list[dict], output_file: Path, logger: logging.Logger
+) -> None:
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file, "w") as f:
+        for doc in results:
+            f.write(json.dumps(doc) + "\n")
+    logger.info("Wrote %d predictions to %s", len(results), output_file)
+
+
 def _process_file(
     pipeline: Pipeline,
     input_file: Path,
@@ -146,8 +161,15 @@ def _process_file(
         logger.warning("No documents in %s — skipping.", input_file)
         return
 
+    label_sets = pipeline._config.label_sets
+    multi = len(label_sets) > 1
+
     effective_batch = batch_size if batch_size > 0 else len(docs)
-    all_results: list[dict] = []
+
+    if multi:
+        all_results: dict[str, list[dict]] = {ls: [] for ls in label_sets}
+    else:
+        all_results_single: list[dict] = []
 
     show_doc_bar = len(docs) > 1
     doc_bar = (
@@ -160,25 +182,35 @@ def _process_file(
             batch = docs[start : start + effective_batch]
             total_sents = sum(len(d.get("sentences", [])) for d in batch)
             show_progress = total_sents > 100
-            all_results.extend(
-                pipeline.process_documents(
+            if multi:
+                batch_results = pipeline.process_documents_multi(
                     batch,
                     show_progress=show_progress,
                     debug_break_on_first_rel=debug_break_on_first_rel,
                     debug_log_rel_probs=debug_log_rel_probs,
                 )
-            )
+                for ls, docs_out in batch_results.items():
+                    all_results[ls].extend(docs_out)
+            else:
+                all_results_single.extend(
+                    pipeline.process_documents(
+                        batch,
+                        show_progress=show_progress,
+                        debug_break_on_first_rel=debug_break_on_first_rel,
+                        debug_log_rel_probs=debug_log_rel_probs,
+                    )
+                )
             if doc_bar is not None:
                 doc_bar.update(len(batch))
     finally:
         if doc_bar is not None:
             doc_bar.close()
 
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_file, "w") as f:
-        for doc in all_results:
-            f.write(json.dumps(doc) + "\n")
-    logger.info("Wrote %d predictions to %s", len(all_results), output_file)
+    if multi:
+        for ls, results in all_results.items():
+            _write_results(results, _output_path_for_label_set(output_file, ls), logger)
+    else:
+        _write_results(all_results_single, output_file, logger)
 
 
 def cli() -> None:

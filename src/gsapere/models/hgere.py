@@ -48,7 +48,80 @@ from torch.nn import (
     GELU,
 )
 from torch.nn.utils.rnn import pad_sequence
-import pdb
+
+
+# ---------------------------------------------------------------------------
+# Per-dataset head builders (shared by both model classes)
+# ---------------------------------------------------------------------------
+
+
+def _build_ner_head(ent_dim: int, num_ner_labels: int, ent_repr: str) -> Module:
+    """Build a single NER classification head."""
+    if ent_repr == "mix":
+        return CatEncoder(input_dims=[ent_dim] * 2, output_dim=num_ner_labels)
+    return Linear(ent_dim, num_ner_labels)
+
+
+def _build_rel_head(rel_dim: int, num_rel_labels: int) -> Module:
+    """Build a single relation classification head."""
+    return Linear(rel_dim, num_rel_labels)
+
+
+def _apply_ner_head(
+    ner_cls: Module, sub_reprs: torch.Tensor, uni_obj_reprs: torch.Tensor, ent_repr: str
+) -> torch.Tensor:
+    """Call the NER head with the right inputs depending on ent_repr mode."""
+    if ent_repr == "mix":
+        return ner_cls(sub_reprs, uni_obj_reprs)
+    if ent_repr == "sub":
+        return ner_cls(sub_reprs)
+    if ent_repr == "obj":
+        return ner_cls(uni_obj_reprs)
+    raise ValueError(f"Unknown ent_repr: {ent_repr!r}")
+
+
+def _compute_re_loss(
+    re_prediction_scores: torch.Tensor,
+    rel_labels: torch.Tensor,
+    num_labels: int,
+    args: object,
+) -> torch.Tensor:
+    """Compute RE loss (focal or cross-entropy)."""
+    re_logits = re_prediction_scores.reshape(-1, num_labels)
+    re_targets = rel_labels.reshape(-1)
+    if getattr(args, "re_focal_loss", False):
+        gamma = getattr(args, "re_focal_gamma", 2.0)
+        mask = re_targets != -1
+        logits_m = re_logits[mask]
+        targets_m = re_targets[mask]
+        log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
+        p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
+        return (
+            -((1 - p_t) ** gamma) * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
+        ).mean()
+    return CrossEntropyLoss(ignore_index=-1)(re_logits, re_targets)
+
+
+def _compute_ner_loss(
+    ner_prediction_scores: torch.Tensor,
+    ner_labels: torch.Tensor,
+    num_ner_labels: int,
+    args: object,
+) -> torch.Tensor:
+    """Compute NER loss (focal or cross-entropy)."""
+    ner_logits = ner_prediction_scores.reshape(-1, num_ner_labels)
+    ner_targets = ner_labels.reshape(-1)
+    if getattr(args, "ner_focal_loss", False):
+        gamma = getattr(args, "ner_focal_gamma", 2.0)
+        mask = ner_targets != -1
+        logits_m = ner_logits[mask]
+        targets_m = ner_targets[mask]
+        log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
+        p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
+        return (
+            -((1 - p_t) ** gamma) * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
+        ).mean()
+    return CrossEntropyLoss(ignore_index=-1)(ner_logits, ner_targets)
 
 
 class BertForHyperGNN(BertPreTrainedModel):
@@ -120,19 +193,42 @@ class BertForHyperGNN(BertPreTrainedModel):
                 "                    {'tersib', 'tercop', 'tergp', 'tersibcop','tersibgp', 'tercopgp', 'tersibcopgp'}"
             )
             raise Exception()
-        # self.ner_cls = CatEncoder(input_dims=[ent_dim]*2, output_dim=self.num_ner_labels)
-        self.rel_cls = Linear(rel_dim, self.num_labels)
-
-        if args.ent_repr == "mix":
-            self.ner_cls = CatEncoder(
-                input_dims=[ent_dim] * 2, output_dim=self.num_ner_labels
+        # Classification heads: single-head or per-dataset multi-head
+        dataset_heads_cfg = getattr(config, "dataset_heads", None)
+        if dataset_heads_cfg is not None:
+            # Multi-head mode: one NER head and one RE head per dataset
+            self._head_info: dict = dataset_heads_cfg
+            self.ner_heads = nn.ModuleDict(
+                {
+                    name: _build_ner_head(
+                        ent_dim, info["num_ner_labels"], args.ent_repr
+                    )
+                    for name, info in dataset_heads_cfg.items()
+                }
             )
+            self.rel_heads = nn.ModuleDict(
+                {
+                    name: _build_rel_head(rel_dim, info["num_rel_labels"])
+                    for name, info in dataset_heads_cfg.items()
+                }
+            )
+            # Aliases to the first head for weight-logging backward compat
+            _first = next(iter(dataset_heads_cfg))
+            self.ner_cls = self.ner_heads[_first]
+            self.rel_cls = self.rel_heads[_first]
         else:
-            self.ner_cls = Linear(ent_dim, self.num_ner_labels)
-
-        self.alpha = torch.tensor(
-            [config.alpha] + [1.0] * (self.num_labels - 1), dtype=torch.float32
-        )
+            # Single-head mode: unchanged behaviour
+            self._head_info = None
+            self.rel_cls = Linear(rel_dim, self.num_labels)
+            if args.ent_repr == "mix":
+                self.ner_cls = CatEncoder(
+                    input_dims=[ent_dim] * 2, output_dim=self.num_ner_labels
+                )
+            else:
+                self.ner_cls = Linear(ent_dim, self.num_ner_labels)
+            self.alpha = torch.tensor(
+                [config.alpha] + [1.0] * (self.num_labels - 1), dtype=torch.float32
+            )
 
         if self.args.layernorm_1st:
             self.sub_layernorm = (
@@ -161,6 +257,7 @@ class BertForHyperGNN(BertPreTrainedModel):
         rel_labels=None,  # bsz * max_ent_num * max_ent_num
         ner_labels=None,  # bsz * max_ent_num
         ent_numbers=None,
+        dataset_id=None,  # str | None — selects per-dataset head in multi-head mode
         # sub_ner_labels=None,
     ):
         # token_type_ids is never provided by the data loader.
@@ -257,17 +354,22 @@ class BertForHyperGNN(BertPreTrainedModel):
         elif self.args.factor_type in {"sib", "cop", "gp", "sibcop", "sibgp", "copgp"}:
             rel_reprs = self.htnnlayer(rel_reprs, ent_numbers)
 
-        # ner_prediction_scores = self.ner_cls(sub_reprs, uni_obj_reprs)
-        re_prediction_scores = self.rel_cls(rel_reprs)
-
-        if self.args.ent_repr == "mix":
-            ner_prediction_scores = self.ner_cls(sub_reprs, uni_obj_reprs)
-        elif self.args.ent_repr == "sub":
-            ner_prediction_scores = self.ner_cls(sub_reprs)
-        elif self.args.ent_repr == "obj":
-            ner_prediction_scores = self.ner_cls(uni_obj_reprs)
+        # Head selection: multi-head routes by dataset_id, single-head uses cls attrs
+        if self._head_info is not None and dataset_id is not None:
+            ner_cls = self.ner_heads[dataset_id]
+            rel_cls = self.rel_heads[dataset_id]
+            num_labels = self._head_info[dataset_id]["num_rel_labels"]
+            num_ner_labels = self._head_info[dataset_id]["num_ner_labels"]
         else:
-            pdb.set_trace()
+            ner_cls = self.ner_cls
+            rel_cls = self.rel_cls
+            num_labels = self.num_labels
+            num_ner_labels = self.num_ner_labels
+
+        re_prediction_scores = rel_cls(rel_reprs)
+        ner_prediction_scores = _apply_ner_head(
+            ner_cls, sub_reprs, uni_obj_reprs, self.args.ent_repr
+        )
 
         outputs = (
             re_prediction_scores,
@@ -278,43 +380,13 @@ class BertForHyperGNN(BertPreTrainedModel):
         re_prediction_scores = re_prediction_scores.float()
 
         if rel_labels is not None:
-            re_logits = re_prediction_scores.reshape(-1, self.num_labels)
-            re_targets = rel_labels.reshape(-1)
-            if getattr(self.args, "re_focal_loss", False):
-                gamma = getattr(self.args, "re_focal_gamma", 2.0)
-                mask = re_targets != -1
-                logits_m = re_logits[mask]
-                targets_m = re_targets[mask]
-                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
-                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                re_loss = (
-                    -((1 - p_t) ** gamma)
-                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ).mean()
-            else:
-                re_loss = CrossEntropyLoss(ignore_index=-1)(re_logits, re_targets)
-
-            ner_logits = ner_prediction_scores.reshape(-1, self.num_ner_labels)
-            ner_targets = ner_labels.reshape(-1)
-            if getattr(self.args, "ner_focal_loss", False):
-                gamma = getattr(self.args, "ner_focal_gamma", 2.0)
-                mask = ner_targets != -1
-                logits_m = ner_logits[mask]
-                targets_m = ner_targets[mask]
-                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
-                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ner_loss = (
-                    -((1 - p_t) ** gamma)
-                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ).mean()
-            else:
-                ner_loss = CrossEntropyLoss(ignore_index=-1)(ner_logits, ner_targets)
-            # else:
-            #     ner_labels_exp = ner_labels.unsqueeze(0).repeat(bsz,1)
-            #     ner_loss = loss_fct_ner(ner_prediction_scores.view(-1, self.num_ner_labels), ner_labels_exp.view(-1))
-
+            re_loss = _compute_re_loss(
+                re_prediction_scores, rel_labels, num_labels, self.args
+            )
+            ner_loss = _compute_ner_loss(
+                ner_prediction_scores, ner_labels, num_ner_labels, self.args
+            )
             loss = re_loss + ner_loss
-
             outputs = (loss, re_loss, ner_loss) + outputs
 
         return outputs
@@ -428,18 +500,39 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
             print(f"No valid factor_type specified: {self.args.factor_type}")
             raise Exception()
 
-        self.rel_cls = Linear(rel_dim, self.num_labels)
-
-        if args.ent_repr == "mix":
-            self.ner_cls = CatEncoder(
-                input_dims=[ent_dim] * 2, output_dim=self.num_ner_labels
+        # Classification heads: single-head or per-dataset multi-head
+        dataset_heads_cfg = getattr(config, "dataset_heads", None)
+        if dataset_heads_cfg is not None:
+            self._head_info: dict = dataset_heads_cfg
+            self.ner_heads = nn.ModuleDict(
+                {
+                    name: _build_ner_head(
+                        ent_dim, info["num_ner_labels"], args.ent_repr
+                    )
+                    for name, info in dataset_heads_cfg.items()
+                }
             )
+            self.rel_heads = nn.ModuleDict(
+                {
+                    name: _build_rel_head(rel_dim, info["num_rel_labels"])
+                    for name, info in dataset_heads_cfg.items()
+                }
+            )
+            _first = next(iter(dataset_heads_cfg))
+            self.ner_cls = self.ner_heads[_first]
+            self.rel_cls = self.rel_heads[_first]
         else:
-            self.ner_cls = Linear(ent_dim, self.num_ner_labels)
-
-        self.alpha = torch.tensor(
-            [config.alpha] + [1.0] * (self.num_labels - 1), dtype=torch.float32
-        )
+            self._head_info = None
+            self.rel_cls = Linear(rel_dim, self.num_labels)
+            if args.ent_repr == "mix":
+                self.ner_cls = CatEncoder(
+                    input_dims=[ent_dim] * 2, output_dim=self.num_ner_labels
+                )
+            else:
+                self.ner_cls = Linear(ent_dim, self.num_ner_labels)
+            self.alpha = torch.tensor(
+                [config.alpha] + [1.0] * (self.num_labels - 1), dtype=torch.float32
+            )
 
         if self.args.layernorm_1st:
             self.sub_layernorm = (
@@ -467,6 +560,7 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         rel_labels=None,
         ner_labels=None,
         ent_numbers=None,
+        dataset_id=None,  # str | None — selects per-dataset head in multi-head mode
     ):
         outputs = self.bert(
             input_ids=input_ids,
@@ -536,16 +630,22 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         elif self.args.factor_type in {"sib", "cop", "gp", "sibcop", "sibgp", "copgp"}:
             rel_reprs = self.htnnlayer(rel_reprs, ent_numbers)
 
-        re_prediction_scores = self.rel_cls(rel_reprs)
-
-        if self.args.ent_repr == "mix":
-            ner_prediction_scores = self.ner_cls(sub_reprs, uni_obj_reprs)
-        elif self.args.ent_repr == "sub":
-            ner_prediction_scores = self.ner_cls(sub_reprs)
-        elif self.args.ent_repr == "obj":
-            ner_prediction_scores = self.ner_cls(uni_obj_reprs)
+        # Head selection: multi-head routes by dataset_id, single-head uses cls attrs
+        if self._head_info is not None and dataset_id is not None:
+            ner_cls = self.ner_heads[dataset_id]
+            rel_cls = self.rel_heads[dataset_id]
+            num_labels = self._head_info[dataset_id]["num_rel_labels"]
+            num_ner_labels = self._head_info[dataset_id]["num_ner_labels"]
         else:
-            pdb.set_trace()
+            ner_cls = self.ner_cls
+            rel_cls = self.rel_cls
+            num_labels = self.num_labels
+            num_ner_labels = self.num_ner_labels
+
+        re_prediction_scores = rel_cls(rel_reprs)
+        ner_prediction_scores = _apply_ner_head(
+            ner_cls, sub_reprs, uni_obj_reprs, self.args.ent_repr
+        )
 
         outputs = (re_prediction_scores, ner_prediction_scores)
 
@@ -553,38 +653,12 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         re_prediction_scores = re_prediction_scores.float()
 
         if rel_labels is not None:
-            re_logits = re_prediction_scores.reshape(-1, self.num_labels)
-            re_targets = rel_labels.reshape(-1)
-            if getattr(self.args, "re_focal_loss", False):
-                gamma = getattr(self.args, "re_focal_gamma", 2.0)
-                mask = re_targets != -1
-                logits_m = re_logits[mask]
-                targets_m = re_targets[mask]
-                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
-                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                re_loss = (
-                    -((1 - p_t) ** gamma)
-                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ).mean()
-            else:
-                re_loss = CrossEntropyLoss(ignore_index=-1)(re_logits, re_targets)
-
-            ner_logits = ner_prediction_scores.reshape(-1, self.num_ner_labels)
-            ner_targets = ner_labels.reshape(-1)
-            if getattr(self.args, "ner_focal_loss", False):
-                gamma = getattr(self.args, "ner_focal_gamma", 2.0)
-                mask = ner_targets != -1
-                logits_m = ner_logits[mask]
-                targets_m = ner_targets[mask]
-                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
-                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ner_loss = (
-                    -((1 - p_t) ** gamma)
-                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ).mean()
-            else:
-                ner_loss = CrossEntropyLoss(ignore_index=-1)(ner_logits, ner_targets)
-
+            re_loss = _compute_re_loss(
+                re_prediction_scores, rel_labels, num_labels, self.args
+            )
+            ner_loss = _compute_ner_loss(
+                ner_prediction_scores, ner_labels, num_ner_labels, self.args
+            )
             loss = re_loss + ner_loss
             outputs = (loss, re_loss, ner_loss) + outputs
 

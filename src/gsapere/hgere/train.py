@@ -35,6 +35,42 @@ TRAIN_KEYS = [
     "ent_numbers",
 ]
 
+# Keys that are passed to the model but must NOT be moved to a CUDA device
+# (they are plain Python scalars / strings).
+_NON_TENSOR_KEYS = {"dataset_id"}
+
+
+def _evaluate_multi_or_single(
+    model: Any,
+    eval_dataset: Any,
+    args: Any,
+    logger: Any,
+) -> dict[str, float]:
+    """Evaluate on a single or multi-dataset eval set.
+
+    When *eval_dataset* is a ``dict[str, RelationDataset]``, each dataset is
+    evaluated independently and the returned dict contains per-dataset metrics
+    under ``{name}/{metric}`` keys plus a macro-averaged ``re+_f1`` used for
+    best-model selection.
+
+    When *eval_dataset* is a single ``RelationDataset``, this is a thin wrapper
+    around :func:`evaluate`.
+    """
+    if isinstance(eval_dataset, dict):
+        per_dataset: dict[str, dict[str, float]] = {}
+        for name, ds in eval_dataset.items():
+            per_dataset[name] = evaluate(model, ds, args, logger)
+        merged: dict[str, float] = {}
+        for name, results in per_dataset.items():
+            for k, v in results.items():
+                merged[f"{name}/{k}"] = v
+        # Macro-average re+_f1 for best-model selection
+        merged["re+_f1"] = sum(r["re+_f1"] for r in per_dataset.values()) / len(
+            per_dataset
+        )
+        return merged
+    return evaluate(model, eval_dataset, args, logger)
+
 
 def log_candidate_stats_to_wandb(split: str, stats: CandidateStats) -> None:
     """Log pruner candidate quality stats for one split to W&B.
@@ -73,8 +109,13 @@ def train(
             wandb_params["name"] = args.run_name
         wandb.init(**wandb_params)
         log_wandb = True
-        log_candidate_stats_to_wandb("train", train_dataset.candidate_stats)
-        log_candidate_stats_to_wandb("dev", eval_dataset.candidate_stats)
+        if isinstance(eval_dataset, dict):
+            for ds_name, ds in eval_dataset.items():
+                log_candidate_stats_to_wandb(f"dev/{ds_name}", ds.candidate_stats)
+        else:
+            log_candidate_stats_to_wandb("dev", eval_dataset.candidate_stats)
+        if hasattr(train_dataset, "candidate_stats"):
+            log_candidate_stats_to_wandb("train", train_dataset.candidate_stats)
         # ner_prediction_dir_name = Path(args.ner_prediction_dir).name
         # output_dir_name = Path(args.model_dir).name
         # tb_writer = SummaryWriter(
@@ -253,7 +294,8 @@ def train(
 
             for k, v in batch.items():
                 if k in input_keys:
-                    v = v.to(args.device)
+                    inputs[k] = v.to(args.device)
+                elif k in _NON_TENSOR_KEYS:
                     inputs[k] = v
             # Compute loss weighting alpha (RE share): static or dynamic sigmoid schedule
             if args.train_time_loss_weighting:
@@ -376,7 +418,7 @@ def train(
                 (epoch_num + 1) % args.eval_epochs == 0
                 or epoch_num + 1 == args.num_train_epochs
             ):  # Only evaluate when single GPU otherwise metrics may not average well
-                results = evaluate(model, eval_dataset, args, logger)
+                results = _evaluate_multi_or_single(model, eval_dataset, args, logger)
                 f1_re_plus = results["re+_f1"]
                 if log_wandb:
                     _EVAL_KEYS = {
@@ -413,12 +455,24 @@ def train(
                     best_f1 = f1_re_plus
                     best_result = results
                     logger.info(f"New Best F1+: {best_f1}")
-                    logger.info(
-                        f"[WEIGHT CHECK before save] rel_cls.weight sum: "
-                        f"{model.rel_cls.weight.data.sum():.6f}  "
-                        f"ner_cls last weight sum: "
-                        f"{list(model.ner_cls.parameters())[-1].data.sum():.6f}"
-                    )
+                    _model_inner = model.module if hasattr(model, "module") else model
+                    if hasattr(_model_inner, "rel_heads"):
+                        # Multi-head: log first head for diagnostic purposes
+                        _first_rel = next(iter(_model_inner.rel_heads.values()))
+                        _first_ner = next(iter(_model_inner.ner_heads.values()))
+                        logger.info(
+                            f"[WEIGHT CHECK before save] rel_heads[first].weight sum: "
+                            f"{_first_rel.weight.data.sum():.6f}  "
+                            f"ner_heads[first] last weight sum: "
+                            f"{list(_first_ner.parameters())[-1].data.sum():.6f}"
+                        )
+                    else:
+                        logger.info(
+                            f"[WEIGHT CHECK before save] rel_cls.weight sum: "
+                            f"{_model_inner.rel_cls.weight.data.sum():.6f}  "
+                            f"ner_cls last weight sum: "
+                            f"{list(_model_inner.ner_cls.parameters())[-1].data.sum():.6f}"
+                        )
                     # @TODO: also save optimizer, scheduler, scaler and best_f1
                     #        Then further training from a checkpoint is possible
                     _save_model(

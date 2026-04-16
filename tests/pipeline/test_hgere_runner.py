@@ -36,7 +36,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         result = runner.run([])
         assert result == []
@@ -50,7 +50,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         with patch(
             "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
@@ -69,7 +69,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         with patch(
             "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
@@ -88,7 +88,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         with patch(
             "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
@@ -107,7 +107,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         with patch(
             "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
@@ -128,7 +128,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         with patch(
             "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
@@ -150,7 +150,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         created_paths: list[str] = []
 
