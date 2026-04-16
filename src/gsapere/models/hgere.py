@@ -212,10 +212,6 @@ class BertForHyperGNN(BertPreTrainedModel):
                     for name, info in dataset_heads_cfg.items()
                 }
             )
-            # Aliases to the first head for weight-logging backward compat
-            _first = next(iter(dataset_heads_cfg))
-            self.ner_cls = self.ner_heads[_first]
-            self.rel_cls = self.rel_heads[_first]
         else:
             # Single-head mode: unchanged behaviour
             self._head_info = None
@@ -518,9 +514,6 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
                     for name, info in dataset_heads_cfg.items()
                 }
             )
-            _first = next(iter(dataset_heads_cfg))
-            self.ner_cls = self.ner_heads[_first]
-            self.rel_cls = self.rel_heads[_first]
         else:
             self._head_info = None
             self.rel_cls = Linear(rel_dim, self.num_labels)

@@ -181,7 +181,7 @@ class TestHGERERunner:
             MockDS.return_value = MagicMock()
             MockDS.return_value.build = MagicMock()
             MockLabels.__getitem__ = MagicMock(return_value=MagicMock())
-            runner._run_inference([tiny_doc_with_candidates])
+            runner._run_inference([tiny_doc_with_candidates], label_set="gsap")
 
         # All temp files should be cleaned up
         for p in created_paths:
