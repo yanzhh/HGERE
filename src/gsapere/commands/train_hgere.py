@@ -48,23 +48,23 @@ def _config_to_namespace(config: HGERETrainConfig) -> argparse.Namespace:
     """Convert a validated :class:`HGERETrainConfig` to a flat :class:`argparse.Namespace`.
 
     1. Top-level fields (excluding ``schema_version``, ``train_params``, and
-       ``multi_dataset``) are included as plain dicts via ``model_dump``.
+       ``datasets``) are included as plain dicts via ``model_dump``.
     2. ``train_params`` fields are flattened into the top level.
-    3. ``multi_dataset`` is preserved as its Pydantic object so callers can
+    3. ``datasets`` is preserved as its Pydantic list so callers can
        access ``ds_entry.name`` etc. as attributes.
     4. ``config_name`` (a legacy HuggingFace arg used by ``setup_training`` but
        absent from the Pydantic config) is defaulted to ``""``.
     """
     flat: dict[str, Any] = config.model_dump(
-        exclude={"schema_version", "train_params", "multi_dataset"}
+        exclude={"schema_version", "train_params", "datasets"}
     )
     flat.update(config.train_params.model_dump())
     flat.setdefault("config_name", "")
     if not flat.get("output_dir"):
         flat["output_dir"] = flat["model_dir"]
-    # Preserve multi_dataset as the original Pydantic object (not a plain dict)
-    # so downstream code can access DatasetEntry attributes.
-    flat["multi_dataset"] = config.multi_dataset
+    # Preserve datasets as the original Pydantic list so downstream code can
+    # access DatasetEntry attributes directly.
+    flat["datasets"] = config.datasets
     return argparse.Namespace(**flat)
 
 
@@ -191,11 +191,11 @@ def main(argv: Optional[list[str]] = None) -> None:
         f"distributed training: {bool(args.local_rank != -1)}, 16-bits training: {args.fp16}",
     )
 
-    if args.multi_dataset is not None:
+    if args.datasets is not None:
         # Multi-dataset mode: derive num_labels from the first dataset entry.
         # These are only used as baseline values for the HF config object;
         # per-dataset head sizes are stored in config.dataset_heads.
-        _first_entry = args.multi_dataset.datasets[0]
+        _first_entry = args.datasets[0]
         labels = LABELS[_first_entry.label_set]
         args.label_set = _first_entry.label_set  # fallback for log messages
         logger.info(

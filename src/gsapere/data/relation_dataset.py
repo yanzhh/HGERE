@@ -68,6 +68,17 @@ class RelationDataset(DocumentDataset):
         self.use_gold_ner = params.use_gold_ner
         self.dataset_id = params.dataset_id
 
+        # When use_dataset_id_token_as_cls=True, replace input_ids[0] ([CLS])
+        # with the dataset-specific token id in prepare_item().
+        self._dataset_cls_token_id: int | None = None
+        if params.use_dataset_id_token_as_cls:
+            if params.dataset_id is None:
+                raise ValueError(
+                    "use_dataset_id_token_as_cls requires dataset_id to be set"
+                )
+            tok_str = f"[{params.dataset_id.upper()}]"
+            self._dataset_cls_token_id = tokenizer.convert_tokens_to_ids(tok_str)
+
         self.ner_label_list: list[str] = labels.ner
         self.sym_labels: list[str] = labels.rel.symmetric(only_nil=self.no_sym)
         self.label_list: list[str] = labels.rel.all
@@ -821,6 +832,8 @@ class RelationDataset(DocumentDataset):
             input_ids = self.tokenizer.convert_tokens_to_ids(
                 entry.subject_marked_tokens
             )
+            if self._dataset_cls_token_id is not None:
+                input_ids[0] = self._dataset_cls_token_id
             input_seq_len = len(input_ids)
             input_ids += [self.tokenizer.pad_token_id] * (
                 self.max_seq_length - input_seq_len

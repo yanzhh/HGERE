@@ -645,7 +645,9 @@ class TestDatasetIdPropagation:
         mock_labels: MagicMock,
         relation_params: RelationDatasetParams,
     ) -> None:
-        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, relation_params)
+        ds = _make_dataset(
+            relation_jsonl_path, mock_tokenizer, mock_labels, relation_params
+        )
         assert ds.dataset_id is None
 
     def test_prepare_item_includes_dataset_id(
@@ -675,7 +677,9 @@ class TestDatasetIdPropagation:
         mock_labels: MagicMock,
         relation_params: RelationDatasetParams,
     ) -> None:
-        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, relation_params)
+        ds = _make_dataset(
+            relation_jsonl_path, mock_tokenizer, mock_labels, relation_params
+        )
         item = ds.prepare_item(0)
         assert "dataset_id" not in item
 
@@ -704,3 +708,89 @@ class TestDatasetIdPropagation:
         batch = collator(items)
         assert "dataset_id" in batch
         assert batch["dataset_id"] == "scinlp"
+
+
+# ---------------------------------------------------------------------------
+# use_dataset_id_token_as_cls — CLS token replacement
+# ---------------------------------------------------------------------------
+
+
+class TestDatasetIdTokenAsCls:
+    def _tokenizer_with_dataset_token(
+        self, mock_tokenizer: MagicMock, dataset_token_id: int = 30522
+    ) -> MagicMock:
+        """Extend mock_tokenizer so [SCIER] resolves to dataset_token_id."""
+
+        def _convert(tokens: list[str] | str) -> list[int] | int:
+            if isinstance(tokens, str):
+                if tokens == "[SCIER]":
+                    return dataset_token_id
+                vocab = {"[CLS]": 101, "[SEP]": 102}
+                return vocab.get(tokens, abs(hash(tokens)) % 900 + 100)
+            return [_convert(t) for t in tokens]
+
+        mock_tokenizer.convert_tokens_to_ids.side_effect = _convert
+        return mock_tokenizer
+
+    def test_raises_without_dataset_id(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+    ) -> None:
+        params = RelationDatasetParams(
+            max_seq_length=64,
+            model_type="bert",
+            no_sym=True,
+            use_dataset_id_token_as_cls=True,
+            dataset_id=None,
+        )
+        with pytest.raises(
+            ValueError, match="use_dataset_id_token_as_cls requires dataset_id"
+        ):
+            _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, params)
+
+    def test_no_replacement_when_flag_false(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+    ) -> None:
+        params = RelationDatasetParams(
+            max_seq_length=64,
+            model_type="bert",
+            no_sym=True,
+            dataset_id="scier",
+            use_dataset_id_token_as_cls=False,
+        )
+        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, params)
+        assert ds._dataset_cls_token_id is None
+        item = ds.prepare_item(0)
+        if item["n_ent"] > 0:
+            # Position 0 should be the normal [CLS] id (101)
+            assert item["input_ids"][0][0].item() == 101
+
+    def test_replacement_at_position_zero(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+    ) -> None:
+        dataset_token_id = 30522
+        tok = self._tokenizer_with_dataset_token(mock_tokenizer, dataset_token_id)
+        params = RelationDatasetParams(
+            max_seq_length=64,
+            model_type="bert",
+            no_sym=True,
+            dataset_id="scier",
+            use_dataset_id_token_as_cls=True,
+        )
+        ds = _make_dataset(relation_jsonl_path, tok, mock_labels, params)
+        assert ds._dataset_cls_token_id == dataset_token_id
+        item = ds.prepare_item(0)
+        if item["n_ent"] > 0:
+            # All subject candidates must have dataset_token_id at position 0
+            for row in item["input_ids"]:
+                assert row[0].item() == dataset_token_id, (
+                    f"Expected {dataset_token_id} at position 0, got {row[0].item()}"
+                )

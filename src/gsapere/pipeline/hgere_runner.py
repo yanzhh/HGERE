@@ -122,9 +122,16 @@ class HGERERunner:
         bert_config.num_ner_labels = labels.num_ner_labels
         bert_config.alpha = 1.0
 
+        # When dataset-specific CLS tokens were added at training time, the tokenizer
+        # saved in model_dir has them; the base model does not.
+        tokenizer_source = (
+            str(model_path)
+            if cfg.use_dataset_id_token_as_cls
+            else cfg.base_model_name_or_path
+        )
         with suppress_transformers_warnings():
             self._tokenizer = tokenizer_class.from_pretrained(
-                cfg.base_model_name_or_path,
+                tokenizer_source,
                 do_lower_case=cfg.do_lower_case,
             )
 
@@ -234,6 +241,7 @@ class HGERERunner:
                 # Pass label_set as dataset_id so multi-head models route to
                 # the correct NER and relation head in forward().
                 dataset_id=label_set,
+                use_dataset_id_token_as_cls=cfg.use_dataset_id_token_as_cls,
             )
             dataset = RelationDataset(
                 logger=logger,

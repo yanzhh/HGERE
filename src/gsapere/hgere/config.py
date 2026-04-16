@@ -57,24 +57,6 @@ class DatasetEntry(BaseModel):
     )
 
 
-class MultiDatasetConfig(BaseModel):
-    """Configuration for joint multi-dataset training with per-dataset heads."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    datasets: list[DatasetEntry] = Field(
-        description="List of datasets to train on jointly."
-    )
-    sampling_temperature: float = Field(
-        default=0.5,
-        description=(
-            "Temperature for dataset sampling probabilities. "
-            "p(d) proportional to n_d^temperature * sampling_weight. "
-            "0 = always pick the largest dataset; 1 = proportional to size."
-        ),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Versioning
 # ---------------------------------------------------------------------------
@@ -422,13 +404,31 @@ class HGERETrainConfig(BaseModel):
 
     baseline: str = Field(default="firstorder", description="Baseline method.")
 
+    use_dataset_id_token_as_cls: bool = Field(
+        default=False,
+        description=(
+            "Replace the [CLS] token at position 0 with a dataset-specific token "
+            "(e.g. [SCIER], [SCINLP], [GSAP]). Special tokens are added to the tokenizer "
+            "at training time, initialized from the [CLS] embedding plus small Gaussian noise "
+            "(σ=0.02), and saved in model_dir. Requires multi-dataset mode (datasets list). "
+            "dataset_id is still propagated separately for head routing."
+        ),
+    )
+
     # ── Multi-dataset training ─────────────────────────────────────────────────
-    multi_dataset: Optional[MultiDatasetConfig] = Field(
+    datasets: Optional[list[DatasetEntry]] = Field(
         default=None,
         description=(
-            "Multi-dataset training configuration. When set, label_set and "
-            "ner_prediction_dir are not required (each dataset entry has its own). "
-            "Cannot be combined with label_set."
+            "List of datasets for joint multi-dataset training. When set, label_set "
+            "and ner_prediction_dir are not required. Cannot be combined with label_set."
+        ),
+    )
+    sampling_temperature: float = Field(
+        default=0.5,
+        description=(
+            "Temperature for dataset sampling probabilities (multi-dataset mode only). "
+            "p(d) proportional to n_d^temperature * sampling_weight. "
+            "0 = always pick the largest dataset; 1 = proportional to size."
         ),
     )
 
@@ -451,26 +451,26 @@ class HGERETrainConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_single_vs_multi_dataset(self) -> "HGERETrainConfig":
-        has_multi = self.multi_dataset is not None
+        has_multi = self.datasets is not None
         has_label_set = self.label_set is not None
         has_ner_dir = self.ner_prediction_dir is not None
 
         if has_multi and has_label_set:
             raise ValueError(
-                "Cannot set both 'label_set' and 'multi_dataset'. "
-                "Use 'label_set' for single-dataset mode or 'multi_dataset' for "
+                "Cannot set both 'label_set' and 'datasets'. "
+                "Use 'label_set' for single-dataset mode or 'datasets' for "
                 "joint multi-dataset training."
             )
         if not has_multi:
             if not has_label_set:
                 raise ValueError(
                     "Single-dataset mode requires 'label_set'. "
-                    "Provide 'label_set' or use 'multi_dataset' for multi-dataset training."
+                    "Provide 'label_set' or use 'datasets' for multi-dataset training."
                 )
             if not has_ner_dir:
                 raise ValueError(
                     "Single-dataset mode requires 'ner_prediction_dir'. "
-                    "Provide 'ner_prediction_dir' or use 'multi_dataset' for multi-dataset training."
+                    "Provide 'ner_prediction_dir' or use 'datasets' for multi-dataset training."
                 )
         return self
 

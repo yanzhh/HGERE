@@ -12,6 +12,7 @@ import torch
 from gsapere.data.tokenizer_utils import (
     _get_marker_ids,
     _get_word_embeddings,
+    add_dataset_cls_tokens,
     adjust_tokenizer,
 )
 
@@ -598,3 +599,83 @@ class TestAdjustTokenizerLminit:
         for i in range(VOCAB_SIZE):
             if i not in modified_rows:
                 assert torch.equal(emb[i], original[i]), f"Row {i} should be unmodified"
+
+
+# ---------------------------------------------------------------------------
+# add_dataset_cls_tokens
+# ---------------------------------------------------------------------------
+
+
+class TestAddDatasetClsTokens:
+    def _make_tokenizer(self, cls_id: int = 101) -> MagicMock:
+        tok = MagicMock()
+        tok.cls_token_id = cls_id
+        # Each call to convert_tokens_to_ids("[SCIER]") etc. returns a fixed id.
+        _id_map: dict[str, int] = {
+            "[SCIER]": 30522,
+            "[SCINLP]": 30523,
+            "[GSAP]": 30524,
+        }
+        tok.convert_tokens_to_ids.side_effect = lambda t: _id_map.get(t, 999)
+        tok.__len__ = lambda self: 30525
+        return tok
+
+    def _make_model_with_embeddings(
+        self, emb: torch.Tensor
+    ) -> tuple[MagicMock, MagicMock]:
+        bert = MagicMock()
+        bert.embeddings = MagicMock(
+            word_embeddings=MagicMock(weight=MagicMock(data=emb))
+        )
+        model = MagicMock()
+        model.bert = bert
+        return model
+
+    def test_adds_special_tokens_and_resizes(self) -> None:
+        emb = torch.randn(30525, 8)
+        model = self._make_model_with_embeddings(emb)
+        tok = self._make_tokenizer()
+
+        add_dataset_cls_tokens(tok, model, "bert", ["scier", "scinlp"], logger)
+
+        tok.add_special_tokens.assert_called_once_with(
+            {"additional_special_tokens": ["[SCIER]", "[SCINLP]"]}
+        )
+        model.resize_token_embeddings.assert_called_once_with(len(tok))
+
+    def test_embeddings_close_to_cls(self) -> None:
+        cls_id = 101
+        emb = torch.zeros(30525, 16)
+        emb[cls_id] = torch.ones(16) * 5.0
+        model = self._make_model_with_embeddings(emb)
+        tok = self._make_tokenizer(cls_id=cls_id)
+
+        add_dataset_cls_tokens(tok, model, "bert", ["scier"], logger)
+
+        scier_id = tok.convert_tokens_to_ids("[SCIER]")
+        # Embedding should be near cls (within 3σ of noise σ=0.02 for 16 dims)
+        diff = (emb[scier_id] - emb[cls_id]).abs().max().item()
+        assert diff < 0.2, f"[SCIER] embedding too far from [CLS]: max_diff={diff}"
+
+    def test_embeddings_not_identical_to_cls(self) -> None:
+        """Noise means [DATASET] != [CLS]."""
+        cls_id = 101
+        emb = torch.zeros(30525, 64)
+        emb[cls_id] = torch.ones(64)
+        model = self._make_model_with_embeddings(emb)
+        tok = self._make_tokenizer(cls_id=cls_id)
+
+        add_dataset_cls_tokens(tok, model, "bert", ["scier"], logger)
+
+        scier_id = tok.convert_tokens_to_ids("[SCIER]")
+        assert not torch.equal(emb[scier_id], emb[cls_id])
+
+    def test_token_names_uppercased(self) -> None:
+        emb = torch.zeros(30525, 8)
+        model = self._make_model_with_embeddings(emb)
+        tok = self._make_tokenizer()
+
+        add_dataset_cls_tokens(tok, model, "bert", ["scier", "scinlp", "gsap"], logger)
+
+        added = tok.add_special_tokens.call_args[0][0]["additional_special_tokens"]
+        assert added == ["[SCIER]", "[SCINLP]", "[GSAP]"]

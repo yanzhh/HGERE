@@ -99,3 +99,11 @@ class RelationDatasetParams(BaseModel):
             "Leave None for single-dataset training."
         ),
     )
+    use_dataset_id_token_as_cls: bool = Field(
+        default=False,
+        description=(
+            "Replace the [CLS] token at position 0 with a dataset-specific token "
+            "(e.g. [SCIER], [SCINLP], [GSAP]). Requires dataset_id to be set. "
+            "The special tokens must have been added to the tokenizer at training time."
+        ),
+    )

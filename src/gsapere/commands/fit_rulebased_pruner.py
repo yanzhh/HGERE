@@ -23,8 +23,10 @@ Example (CLI flags)
 
 import json
 import logging
+import multiprocessing
 import sys
 from collections import defaultdict
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -600,13 +602,29 @@ def _greedy_select(
 # ---------------------------------------------------------------------------
 
 
+class PrunerDatasetEntry(BaseModel):
+    """One dataset in a multi-dataset rule-based pruner fit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(description="Dataset identifier, e.g. 'scier'.")
+    train_file: str = Field(description="Training JSONL file for this dataset.")
+    dev_file: str = Field(description="Dev JSONL file for this dataset.")
+
+
 class FitRulebasedPrunerConfig(BaseModel):
     """Configuration for fitting and evaluating the rule-based span pruner."""
 
     model_config = ConfigDict(extra="forbid")
 
-    train_file: str = Field(description="Training JSONL file.")
-    dev_file: str = Field(description="Dev JSONL file.")
+    datasets: List[PrunerDatasetEntry] = Field(
+        min_length=1,
+        description=(
+            "One or more datasets to fit from. With a single entry this is "
+            "equivalent to the old single-dataset mode. Stats and dev spans are "
+            "concatenated across all datasets."
+        ),
+    )
     max_span_length: int = Field(
         default=20,
         description="Maximum span length in tokens.",
@@ -677,6 +695,14 @@ class FitRulebasedPrunerConfig(BaseModel):
         default=15,
         description="Number of configurations to show in the sweep table.",
     )
+    n_workers: int = Field(
+        default=1,
+        description=(
+            "Number of parallel worker processes. 1 = single-threaded (default). "
+            "Speeds up stats collection and span loading for large datasets. "
+            "Multiprocessing overhead makes this slower for small datasets (<1000 docs)."
+        ),
+    )
     save: Optional[str] = Field(
         default=None,
         description="If set, save the learned pruner patterns to this JSON file.",
@@ -692,6 +718,63 @@ class FitRulebasedPrunerConfig(BaseModel):
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+
+def _merge_stats(parts: List) -> "pd.DataFrame":
+    """Merge partial collect_stats DataFrames by summing counts per ngram."""
+    combined = pd.concat(parts, ignore_index=True)
+    agg = combined.groupby("ngram", as_index=False).agg(
+        count_entity=("count_entity", "sum"),
+        count_nil=("count_nil", "sum"),
+        n_tokens=("n_tokens", "first"),
+        has_start=("has_start", "first"),
+        has_end=("has_end", "first"),
+        has_before=("has_before", "first"),
+        has_after=("has_after", "first"),
+    )
+    agg["frequency"] = agg["count_entity"] + agg["count_nil"]
+    agg["entity_rate"] = agg["count_entity"] / agg["frequency"]
+    return agg.sort_values("frequency", ascending=False).reset_index(drop=True)
+
+
+def _load_dev_spans_task(args: Tuple) -> Tuple[List, List]:
+    """Worker target: unpack (source, max_span_length) and call _load_dev_spans."""
+    source, max_span_length = args
+    return _load_dev_spans(source, max_span_length)
+
+
+def _collect_stats_parallel(
+    docs: List[dict], n_workers: int, **kwargs
+) -> "pd.DataFrame":
+    """Run collect_stats in parallel by splitting docs into n_workers chunks."""
+    if n_workers <= 1 or len(docs) <= n_workers:
+        return collect_stats(docs, **kwargs)
+    chunk_size = max(1, len(docs) // n_workers)
+    chunks = [docs[i : i + chunk_size] for i in range(0, len(docs), chunk_size)]
+    with multiprocessing.Pool(min(n_workers, len(chunks))) as pool:
+        parts = pool.map(partial(collect_stats, **kwargs), chunks)
+    return _merge_stats(parts)
+
+
+def _load_dev_spans_parallel(
+    sources: List, max_span_length: int, n_workers: int
+) -> Tuple[List, List]:
+    """Load dev spans from multiple sources (file paths or doc lists) in parallel."""
+    if n_workers <= 1 or len(sources) <= 1:
+        gold_all, spans_all = [], []
+        for src in sources:
+            g, s = _load_dev_spans(src, max_span_length)
+            gold_all.extend(g)
+            spans_all.extend(s)
+        return gold_all, spans_all
+    tasks = [(src, max_span_length) for src in sources]
+    with multiprocessing.Pool(min(n_workers, len(tasks))) as pool:
+        results = pool.map(_load_dev_spans_task, tasks)
+    gold_all, spans_all = [], []
+    for g, s in results:
+        gold_all.extend(g)
+        spans_all.extend(s)
+    return gold_all, spans_all
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -720,10 +803,17 @@ def main(argv: Optional[List[str]] = None) -> None:
     max_before_tokens = max_tokens if "before" in pattern_types else None
     max_after_tokens = max_tokens if "after" in pattern_types else None
 
-    # 1. Load training documents and optionally split into stats-train / internal-dev
-    logger.info("Loading training documents from %s ...", config.train_file)
-    all_train_docs = load_docs(config.train_file)
-    logger.info("  %d documents loaded.", len(all_train_docs))
+    # 1. Load training documents from all datasets
+    all_train_docs = []
+    dev_files: List[str] = []
+    for ds in config.datasets:
+        docs = load_docs(ds.train_file)
+        logger.info(
+            "  [%s] %d training documents from %s.", ds.name, len(docs), ds.train_file
+        )
+        all_train_docs.extend(docs)
+        dev_files.append(ds.dev_file)
+    logger.info("  Total: %d training documents.", len(all_train_docs))
 
     if config.train_split < 1.0:
         import random
@@ -740,17 +830,18 @@ def main(argv: Optional[List[str]] = None) -> None:
             len(stats_docs),
             len(sweep_docs),
         )
-        sweep_file = None  # signals to use sweep_docs directly
     else:
         stats_docs = all_train_docs
         sweep_docs = None
-        sweep_file = config.dev_file
 
     # 2. Collect statistics from the stats split
     full_only = pattern_types == {"full"}
-    logger.info("Collecting n-gram statistics (max_tokens=%d) ...", max_tokens)
-    stats = collect_stats(
-        stats_docs,
+    logger.info(
+        "Collecting n-gram statistics (max_tokens=%d, n_workers=%d) ...",
+        max_tokens,
+        config.n_workers,
+    )
+    stats_kwargs = dict(
         max_span_length=config.max_span_length,
         max_ngram=config.max_ngram,
         full_only=full_only,
@@ -760,9 +851,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         max_before_tokens=max_before_tokens,
         max_after_tokens=max_after_tokens,
     )
+    stats = _collect_stats_parallel(stats_docs, config.n_workers, **stats_kwargs)
     logger.info("  %d unique n-grams collected.", len(stats))
 
-    # 3. Load sweep spans (internal split or external dev file)
+    # 3. Load sweep spans (internal split or external dev files)
     if sweep_docs is not None:
         logger.info(
             "Enumerating spans from internal dev split (%d docs) ...", len(sweep_docs)
@@ -771,9 +863,11 @@ def main(argv: Optional[List[str]] = None) -> None:
             sweep_docs, config.max_span_length
         )
     else:
-        logger.info("Loading dev spans from %s ...", sweep_file)
-        gold_spans_sweep, all_sweep_spans = _load_dev_spans(
-            sweep_file, config.max_span_length
+        logger.info(
+            "Loading sweep spans from dev files (n_workers=%d) ...", config.n_workers
+        )
+        gold_spans_sweep, all_sweep_spans = _load_dev_spans_parallel(
+            dev_files, config.max_span_length, config.n_workers
         )
 
     total_sweep = len(all_sweep_spans)
@@ -782,8 +876,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
 
     # 4. Load external dev spans for final evaluation (always the real dev set)
-    logger.info("Loading external dev spans from %s ...", config.dev_file)
-    gold_spans, all_dev_spans = _load_dev_spans(config.dev_file, config.max_span_length)
+    logger.info("Loading external dev spans (n_workers=%d) ...", config.n_workers)
+    gold_spans, all_dev_spans = _load_dev_spans_parallel(
+        dev_files, config.max_span_length, config.n_workers
+    )
     total_candidates = len(all_dev_spans)
     logger.info(
         "  %d gold entities, %d candidate spans.", len(gold_spans), total_candidates

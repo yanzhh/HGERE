@@ -1,0 +1,51 @@
+# Multi-head inference: SciER + SciNLP heads from a jointly trained checkpoint.
+#
+# The pruner runs once. HGERE runs once per label set and writes separate
+# output files: <output>_scier.jsonl and <output>_scinlp.jsonl.
+#
+# Usage:
+#   uv run run-pipeline \
+#       --config configs/inference/multi-head-scier-scinlp-pipeline.yaml \
+#       --input docs.jsonl \
+#       --output predictions.jsonl
+
+label_sets: [scier, scinlp]
+
+pruner:
+    model_dir: saves/scier/pruner/friedrich_bs8_lr1e-6
+    base_model_name_or_path: allenai/scibert_scivocab_uncased
+    do_lower_case: true
+    model_type: bertspanmarkerpruner
+    per_gpu_eval_batch_size: 32
+    max_seq_length: 256
+    max_pair_length: 64
+    max_mention_ori_length: 12
+    rulebased_pruner_file: datasets/scier/pre-filter/rules.json
+    topk_ratio: 8
+    min_mentions_num: 1
+    max_mentions_num: 60
+    final_pruning:
+        method: threshold
+        threshold: 0.0005
+
+hgere:
+    model_dir: saves/multi_head/scier_scinlp_run1
+    base_model_name_or_path: allenai/scibert_scivocab_uncased
+    model_type: hyper
+    do_lower_case: true
+    no_sym: true
+    per_gpu_eval_batch_size: 32
+    max_seq_length: 512
+    factor_type: ternary
+    factor_encoder: biaf
+    ent_dim: 400
+    rel_dim: 400
+    mem_dim: 400
+    ent_repr: mix
+    n_iter: 3
+    layernorm: true
+    layernorm_1st: true
+    attn_self: true
+    pre_filter_params:
+        method: threshold
+        value: 0.0125

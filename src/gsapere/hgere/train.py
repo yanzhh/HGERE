@@ -22,6 +22,7 @@ from transformers import get_linear_schedule_with_warmup
 
 import wandb
 from gsapere.data.data_types import CandidateStats
+from gsapere.data.multi_dataset import MultiRelationDataset
 from gsapere.hgere.evaluate import evaluate
 from gsapere.utils import set_seed
 
@@ -45,31 +46,59 @@ def _evaluate_multi_or_single(
     eval_dataset: Any,
     args: Any,
     logger: Any,
+    persist_predictions: bool = False,
+    prefix: str = "",
 ) -> dict[str, float]:
     """Evaluate on a single or multi-dataset eval set.
 
-    When *eval_dataset* is a ``dict[str, RelationDataset]``, each dataset is
-    evaluated independently and the returned dict contains per-dataset metrics
-    under ``{name}/{metric}`` keys plus a macro-averaged ``re+_f1`` used for
-    best-model selection.
+    When *eval_dataset* is a ``dict[str, RelationDataset]`` or a
+    :class:`~gsapere.data.multi_dataset.MultiRelationDataset`, each dataset is
+    evaluated independently. Prediction files are written to
+    ``<model_dir>/<dataset_name>/`` so results stay separated by dataset.
 
-    When *eval_dataset* is a single ``RelationDataset``, this is a thin wrapper
-    around :func:`evaluate`.
+    Returns per-dataset metrics under ``{name}/{metric}`` keys plus a
+    macro-averaged ``re+_f1`` used for best-model checkpoint selection.
     """
-    if isinstance(eval_dataset, dict):
+    import copy
+
+    # Normalise: both dict and MultiRelationDataset expose a datasets dict
+    if isinstance(eval_dataset, MultiRelationDataset):
+        datasets_dict = eval_dataset.datasets
+    elif isinstance(eval_dataset, dict):
+        datasets_dict = eval_dataset
+    else:
+        datasets_dict = None
+
+    if datasets_dict is not None:
         per_dataset: dict[str, dict[str, float]] = {}
-        for name, ds in eval_dataset.items():
-            per_dataset[name] = evaluate(model, ds, args, logger)
+        for name, ds in datasets_dict.items():
+            # Write each dataset's predictions to <model_dir>/<dataset_name>/
+            ds_args = copy.copy(args)
+            ds_args.output_dir = str(Path(args.model_dir) / name)
+            per_dataset[name] = evaluate(
+                model,
+                ds,
+                ds_args,
+                logger,
+                prefix=prefix,
+                persist_predictions=persist_predictions,
+            )
         merged: dict[str, float] = {}
         for name, results in per_dataset.items():
             for k, v in results.items():
                 merged[f"{name}/{k}"] = v
-        # Macro-average re+_f1 for best-model selection
         merged["re+_f1"] = sum(r["re+_f1"] for r in per_dataset.values()) / len(
             per_dataset
         )
         return merged
-    return evaluate(model, eval_dataset, args, logger)
+    return evaluate(
+        model,
+        eval_dataset,
+        args,
+        logger,
+        prefix=prefix,
+        persist_predictions=persist_predictions,
+    )
 
 
 def log_candidate_stats_to_wandb(split: str, stats: CandidateStats) -> None:

@@ -2,9 +2,9 @@
 
 Covers:
 - Single-dataset config still validates correctly (backward compat)
-- MultiDatasetConfig / DatasetEntry parse and validate correctly
-- HGERETrainConfig with multi_dataset set validates without label_set/ner_prediction_dir
-- Exactly one of (label_set, multi_dataset) must be present
+- DatasetEntry parses and validates correctly
+- HGERETrainConfig with datasets set validates without label_set/ner_prediction_dir
+- Exactly one of (label_set, datasets) must be present
 """
 
 from __future__ import annotations
@@ -38,21 +38,19 @@ MULTI_DS_CONFIG: dict[str, Any] = {
     "schema_version": "1.0",
     "model_dir": "saves/hgere/multi_run",
     "base_model_name_or_path": "pretrained_models/scibert",
-    "multi_dataset": {
-        "sampling_temperature": 0.5,
-        "datasets": [
-            {
-                "name": "scier",
-                "label_set": "scier",
-                "ner_prediction_dir": "saves/scier/pruner/output",
-            },
-            {
-                "name": "scinlp",
-                "label_set": "scinlp",
-                "ner_prediction_dir": "saves/scinlp/pruner/output",
-            },
-        ],
-    },
+    "sampling_temperature": 0.5,
+    "datasets": [
+        {
+            "name": "scier",
+            "label_set": "scier",
+            "ner_prediction_dir": "saves/scier/pruner/output",
+        },
+        {
+            "name": "scinlp",
+            "label_set": "scinlp",
+            "ner_prediction_dir": "saves/scinlp/pruner/output",
+        },
+    ],
     "train_params": MINIMAL_TRAIN_PARAMS,
 }
 
@@ -67,7 +65,7 @@ class TestSingleDatasetBackwardCompat:
         config = HGERETrainConfig.model_validate(SINGLE_DS_CONFIG)
         assert config.label_set == "gsap"
         assert config.ner_prediction_dir == "data/pruner_output"
-        assert config.multi_dataset is None
+        assert config.datasets is None
 
     def test_single_dataset_train_params_present(self) -> None:
         config = HGERETrainConfig.model_validate(SINGLE_DS_CONFIG)
@@ -86,8 +84,8 @@ class TestSingleDatasetBackwardCompat:
 class TestMultiDatasetConfig:
     def test_multi_dataset_config_parses(self) -> None:
         config = HGERETrainConfig.model_validate(MULTI_DS_CONFIG)
-        assert config.multi_dataset is not None
-        assert len(config.multi_dataset.datasets) == 2
+        assert config.datasets is not None
+        assert len(config.datasets) == 2
 
     def test_multi_dataset_no_label_set_required(self) -> None:
         """label_set and ner_prediction_dir should not be required in multi-dataset mode."""
@@ -97,7 +95,7 @@ class TestMultiDatasetConfig:
 
     def test_dataset_entries_parsed(self) -> None:
         config = HGERETrainConfig.model_validate(MULTI_DS_CONFIG)
-        ds = config.multi_dataset.datasets
+        ds = config.datasets
         assert ds[0].name == "scier"
         assert ds[0].label_set == "scier"
         assert ds[0].ner_prediction_dir == "saves/scier/pruner/output"
@@ -105,7 +103,7 @@ class TestMultiDatasetConfig:
 
     def test_dataset_entry_defaults(self) -> None:
         config = HGERETrainConfig.model_validate(MULTI_DS_CONFIG)
-        ds = config.multi_dataset.datasets[0]
+        ds = config.datasets[0]
         assert ds.train_file == "train.json"
         assert ds.dev_file == "dev.json"
         assert ds.test_file == "test.json"
@@ -113,16 +111,15 @@ class TestMultiDatasetConfig:
 
     def test_sampling_temperature_parsed(self) -> None:
         config = HGERETrainConfig.model_validate(MULTI_DS_CONFIG)
-        assert config.multi_dataset.sampling_temperature == pytest.approx(0.5)
+        assert config.sampling_temperature == pytest.approx(0.5)
 
     def test_sampling_temperature_default(self) -> None:
-        data = {**MULTI_DS_CONFIG, "multi_dataset": {**MULTI_DS_CONFIG["multi_dataset"]}}
-        del data["multi_dataset"]["sampling_temperature"]
+        data = {k: v for k, v in MULTI_DS_CONFIG.items() if k != "sampling_temperature"}
         config = HGERETrainConfig.model_validate(data)
-        assert config.multi_dataset.sampling_temperature == pytest.approx(0.5)
+        assert config.sampling_temperature == pytest.approx(0.5)
 
     def test_multi_dataset_with_label_set_raises(self) -> None:
-        """Providing both label_set and multi_dataset should fail."""
+        """Providing both label_set and datasets should fail."""
         data = {**MULTI_DS_CONFIG, "label_set": "gsap"}
         with pytest.raises(Exception):
             HGERETrainConfig.model_validate(data)

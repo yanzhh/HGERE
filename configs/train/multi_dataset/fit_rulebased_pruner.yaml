@@ -1,0 +1,31 @@
+# Fit a shared rule-based pre-filter from SciER + SciNLP + GSAP-ERE.
+#
+# N-gram statistics are collected from all three training sets and dev spans
+# are evaluated from all three dev sets. The resulting rules.json is shared
+# across all datasets and referenced as rulebased_pruner_file in train_pruner.yaml.
+#
+# Usage:
+#   uv run gsapere-fit-rulebased-pruner configs/train/multi_dataset/fit_rulebased_pruner.yaml
+
+datasets:
+  - name: scier
+    train_file: datasets/scier/train.jsonl
+    dev_file: datasets/scier/dev.jsonl
+  - name: scinlp
+    train_file: datasets_fixed/scinlp/train.jsonl
+    dev_file: datasets_fixed/scinlp/dev.jsonl
+  - name: gsap
+    train_file: datasets/gsap-ere/2025-05-15/train.jsonl
+    dev_file: datasets/gsap-ere/2025-05-15/dev.jsonl
+
+max_span_length: 20
+max_ngram: 14
+max_entity_rate: 0.0
+min_count_ratio: 0.01
+pattern_types: "prefix,suffix,full,infix,before,after"
+max_tokens: 3
+train_split: 0.8
+seed: 42
+target_fn: 2
+n_workers: 8
+save: saves/multi/pruner/rules.json

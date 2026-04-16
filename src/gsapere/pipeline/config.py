@@ -116,6 +116,7 @@ class HGEREConfig(BaseModel):
     pre_filter_params: Optional[PreFilterParams] = None
     use_gold_ner: bool = False
     n_workers: int = 4
+    use_dataset_id_token_as_cls: bool = False
 
 
 class PipelineConfig(BaseModel):

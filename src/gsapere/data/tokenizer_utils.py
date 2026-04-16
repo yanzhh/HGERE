@@ -127,3 +127,35 @@ def adjust_tokenizer(
 
         word_embeddings[start_id].copy_(word_embeddings[mask_id])
         word_embeddings[end_id].copy_(word_embeddings[init_id])
+
+
+def add_dataset_cls_tokens(
+    tokenizer: Any,
+    model: Any,
+    model_type: str,
+    dataset_names: List[str],
+    logger: Any,
+) -> None:
+    """Add per-dataset CLS tokens and initialise embeddings from [CLS] + noise.
+
+    For each name in *dataset_names*, adds a ``[NAME]`` special token to the
+    tokenizer, resizes the model embedding table, and initialises the new
+    embedding from the ``[CLS]`` embedding plus Gaussian noise (σ=0.02).
+
+    Must be called before saving the tokenizer so the new tokens are persisted.
+    """
+    import torch
+
+    token_strs = [f"[{name.upper()}]" for name in dataset_names]
+    tokenizer.add_special_tokens({"additional_special_tokens": token_strs})
+    model.resize_token_embeddings(len(tokenizer))
+
+    word_embeddings = _get_word_embeddings(model, model_type)
+    cls_id = tokenizer.cls_token_id
+    cls_emb = word_embeddings[cls_id].clone()
+
+    for tok_str in token_strs:
+        tok_id = tokenizer.convert_tokens_to_ids(tok_str)
+        noise = torch.randn_like(cls_emb) * 0.02
+        word_embeddings[tok_id] = cls_emb + noise
+        logger.info("Added %s (id=%d), init from [CLS]+noise(σ=0.02)", tok_str, tok_id)
