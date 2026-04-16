@@ -7,8 +7,7 @@
 #
 # Usage:
 #   uv run train-hgere configs/train/multi_dataset_example.yaml
-
-model_dir: saves/multi_head/scier_scinlp_run1
+model_dir: saves/multi_head/scier_scinlp_test
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 model_type: hyper
 do_lower_case: true
@@ -36,23 +35,23 @@ multi_dataset:
   datasets:
     - name: scier
       label_set: scier
-      ner_prediction_dir: saves/scier/pruner/output
+      ner_prediction_dir: saves/scier/pruner/friedrich
       train_file: ent_pred_train.json
       dev_file: ent_pred_dev.json
       test_file: ent_pred_test.json
       sampling_weight: 1.0
     - name: scinlp
       label_set: scinlp
-      ner_prediction_dir: saves/scinlp/pruner/output
+      ner_prediction_dir: saves/scinlp/pruner/friedrich
       train_file: ent_pred_train.json
       dev_file: ent_pred_dev.json
       test_file: ent_pred_test.json
       sampling_weight: 1.0
 
 train_params:
-  log_wandb: false
+  log_wandb: true
   project_name: multi-head-hgere
-  run_name: scier_scinlp_run1
+  run_name: scier_scinlp_first_test
   save_results: true
   eval_train: false
   eval_dev: true
@@ -62,11 +61,11 @@ train_params:
   preload_dataset: false
   n_workers: 16
   do_train: true
-  learning_rate: 2e-5
-  learning_rate_cls: 2e-5
-  num_train_epochs: 30
+  learning_rate: 1e-5
+  learning_rate_cls: 1e-5
+  num_train_epochs: 5
   eval_epochs: 1
-  per_gpu_train_batch_size: 16
+  per_gpu_train_batch_size: 21
   gradient_accumulation_steps: 1
   adam_epsilon: 1e-8
   fp16: true
