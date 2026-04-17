@@ -1,0 +1,55 @@
+# Run inference with the shared multi-dataset pruner on SciNLP.
+# Produces ent_pred_*.json in saves/multi/pruner/run1/scinlp/ for HGERE training.
+#
+# Usage:
+#   uv run gsapere-train-pruner configs/train/multi_dataset/infer_pruner_scinlp.yaml
+
+label_set: scinlp
+model_dir: saves/multi/pruner/run1
+output_dir: saves/multi/pruner/run1/scinlp
+base_model_name_or_path: allenai/scibert_scivocab_uncased
+do_lower_case: true
+model_type: bertspanmarkerpruner
+per_gpu_eval_batch_size: 32
+max_seq_length: 256
+max_pair_length: 64
+max_mention_ori_length: 12
+
+train_params:
+    project_name: multi-pruner
+    run_name: run1
+    data_dir: datasets_fixed/scinlp
+    train_file: train.jsonl
+    dev_file: dev.jsonl
+    test_file: test.jsonl
+    do_train: false
+    eval_train: true
+    eval_dev: true
+    eval_test: true
+    save_predictions: true
+    rulebased_pruner_file: saves/multi/pruner/rules.json
+    seed: 44
+    learning_rate: 1e-6
+    num_train_epochs: 8
+    eval_epochs: 1
+    per_gpu_train_batch_size: 16
+    gradient_accumulation_steps: 1
+    save_steps: 1000
+    fp16: true
+    local_rank: -1
+    pruner_loss: focal
+    topk_ratio: 8
+    min_mentions_num: 1
+    max_mentions_num: 60
+    onedropout: true
+    lminit: true
+    nocross: true
+    biaf_span: true
+    biaf_mode: 2
+    biaf_factorize: true
+    span_hidden_size: 768
+    rank: 768
+    span_size: 256
+    evaluate_during_training: false
+    eval_all_checkpoints: true
+    overwrite_model_dir: false
