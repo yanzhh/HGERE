@@ -75,10 +75,12 @@ def _make_roberta_model(embeddings: torch.Tensor) -> Any:
 
 def _bert_tokenizer(
     mask_id: int = 103,
+    cls_id: int = 101,
     extra_encode: dict[str, int] | None = None,
 ) -> MagicMock:
     """Tokenizer stub that returns single-token encodes and a fixed vocab size."""
     tok = MagicMock()
+    tok.cls_token_id = cls_id
     encode_map: dict[str, list[int]] = {"[MASK]": [mask_id]}
     if extra_encode:
         for k, v in extra_encode.items():
@@ -94,10 +96,12 @@ def _bert_tokenizer(
 
 def _modernbert_tokenizer(
     mask_id: int = 103,
+    cls_id: int = 101,
     extra_encode: dict[str, int] | None = None,
     multi_token_words: list[str] | None = None,
 ) -> MagicMock:
     tok = MagicMock()
+    tok.cls_token_id = cls_id
     encode_map: dict[str, list[int]] = {"[MASK]": [mask_id]}
     if extra_encode:
         for k, v in extra_encode.items():
@@ -607,22 +611,15 @@ class TestAdjustTokenizerLminit:
 
 
 class TestAddDatasetClsTokens:
-    def _make_tokenizer(self, cls_id: int = 101) -> MagicMock:
+    """Tests for add_dataset_cls_tokens — uses [unusedX] slots, returns {name: id}."""
+
+    def _make_bert_tokenizer(self, cls_id: int = 101) -> MagicMock:
         tok = MagicMock()
         tok.cls_token_id = cls_id
-        # Each call to convert_tokens_to_ids("[SCIER]") etc. returns a fixed id.
-        _id_map: dict[str, int] = {
-            "[SCIER]": 30522,
-            "[SCINLP]": 30523,
-            "[GSAP]": 30524,
-        }
-        tok.convert_tokens_to_ids.side_effect = lambda t: _id_map.get(t, 999)
-        tok.__len__ = lambda self: 30525
+        tok.__len__ = lambda self: 30522
         return tok
 
-    def _make_model_with_embeddings(
-        self, emb: torch.Tensor
-    ) -> tuple[MagicMock, MagicMock]:
+    def _make_model_with_embeddings(self, emb: torch.Tensor) -> MagicMock:
         bert = MagicMock()
         bert.embeddings = MagicMock(
             word_embeddings=MagicMock(weight=MagicMock(data=emb))
@@ -631,51 +628,89 @@ class TestAddDatasetClsTokens:
         model.bert = bert
         return model
 
-    def test_adds_special_tokens_and_resizes(self) -> None:
-        emb = torch.randn(30525, 8)
+    def test_bert_returns_mapping(self) -> None:
+        """For BERT, [unusedX] is at vocab position X+1; no add_special_tokens call."""
+        emb = _make_embeddings()
         model = self._make_model_with_embeddings(emb)
-        tok = self._make_tokenizer()
+        tok = self._make_bert_tokenizer()
 
-        add_dataset_cls_tokens(tok, model, "bert", ["scier", "scinlp"], logger)
-
-        tok.add_special_tokens.assert_called_once_with(
-            {"additional_special_tokens": ["[SCIER]", "[SCINLP]"]}
+        mapping = add_dataset_cls_tokens(
+            tok, model, "bert", ["scier", "scinlp"], start_unused_idx=4, logger=logger
         )
-        model.resize_token_embeddings.assert_called_once_with(len(tok))
 
-    def test_embeddings_close_to_cls(self) -> None:
+        # [unused4]=5, [unused5]=6 for BERT
+        assert mapping == {"scier": 5, "scinlp": 6}
+        tok.add_special_tokens.assert_not_called()
+
+    def test_bert_embeddings_close_to_cls(self) -> None:
         cls_id = 101
-        emb = torch.zeros(30525, 16)
-        emb[cls_id] = torch.ones(16) * 5.0
+        emb = _make_embeddings()
+        emb[cls_id] = torch.ones(EMBED_DIM) * 5.0
         model = self._make_model_with_embeddings(emb)
-        tok = self._make_tokenizer(cls_id=cls_id)
+        tok = self._make_bert_tokenizer(cls_id=cls_id)
 
-        add_dataset_cls_tokens(tok, model, "bert", ["scier"], logger)
+        mapping = add_dataset_cls_tokens(
+            tok, model, "bert", ["scier"], start_unused_idx=4, logger=logger
+        )
 
-        scier_id = tok.convert_tokens_to_ids("[SCIER]")
-        # Embedding should be near cls (within 3σ of noise σ=0.02 for 16 dims)
+        scier_id = mapping["scier"]  # = 5
         diff = (emb[scier_id] - emb[cls_id]).abs().max().item()
-        assert diff < 0.2, f"[SCIER] embedding too far from [CLS]: max_diff={diff}"
+        assert diff < 0.2, f"Embedding too far from [CLS]: max_diff={diff}"
 
-    def test_embeddings_not_identical_to_cls(self) -> None:
-        """Noise means [DATASET] != [CLS]."""
+    def test_bert_embeddings_not_identical_to_cls(self) -> None:
         cls_id = 101
-        emb = torch.zeros(30525, 64)
+        emb = torch.zeros(VOCAB_SIZE, 64)
         emb[cls_id] = torch.ones(64)
         model = self._make_model_with_embeddings(emb)
-        tok = self._make_tokenizer(cls_id=cls_id)
+        tok = self._make_bert_tokenizer(cls_id=cls_id)
 
-        add_dataset_cls_tokens(tok, model, "bert", ["scier"], logger)
+        mapping = add_dataset_cls_tokens(
+            tok, model, "bert", ["scier"], start_unused_idx=4, logger=logger
+        )
 
-        scier_id = tok.convert_tokens_to_ids("[SCIER]")
-        assert not torch.equal(emb[scier_id], emb[cls_id])
+        assert not torch.equal(emb[mapping["scier"]], emb[cls_id])
 
-    def test_token_names_uppercased(self) -> None:
-        emb = torch.zeros(30525, 8)
+    def test_albert_adds_tokens_and_resizes(self) -> None:
+        """Albert needs explicit add_special_tokens + resize for new [unusedX] slots."""
+        emb = _make_embeddings()
+        model = _make_albert_model(emb)
+        tok = _bert_tokenizer()
+
+        mapping = add_dataset_cls_tokens(
+            tok, model, "albert", ["scier", "scinlp"], start_unused_idx=4, logger=logger
+        )
+
+        tok.add_special_tokens.assert_called_once_with(
+            {"additional_special_tokens": ["[unused4]", "[unused5]"]}
+        )
+        model.albert.resize_token_embeddings.assert_called_once_with(len(tok))
+        # Albert IDs: 30000 + idx
+        assert mapping == {"scier": 30004, "scinlp": 30005}
+
+    def test_modernbert_adds_tokens_and_resizes(self) -> None:
+        emb = _make_embeddings()
+        model = _make_modernbert_model(emb)
+        tok = _modernbert_tokenizer()
+
+        mapping = add_dataset_cls_tokens(
+            tok, model, "modernbert", ["scier"], start_unused_idx=4, logger=logger
+        )
+
+        tok.add_special_tokens.assert_called_once_with(
+            {"additional_special_tokens": ["[unused4]"]}
+        )
+        model.bert.resize_token_embeddings.assert_called_once_with(len(tok))
+        # modernbert: convert_tokens_to_ids("[unused4]") → 30004 per mock
+        assert mapping == {"scier": 30004}
+
+    def test_start_unused_idx_zero(self) -> None:
+        """start_unused_idx=0 uses [unused0]=1, [unused1]=2 for BERT."""
+        emb = _make_embeddings()
         model = self._make_model_with_embeddings(emb)
-        tok = self._make_tokenizer()
+        tok = self._make_bert_tokenizer()
 
-        add_dataset_cls_tokens(tok, model, "bert", ["scier", "scinlp", "gsap"], logger)
+        mapping = add_dataset_cls_tokens(
+            tok, model, "bert", ["a", "b"], start_unused_idx=0, logger=logger
+        )
 
-        added = tok.add_special_tokens.call_args[0][0]["additional_special_tokens"]
-        assert added == ["[SCIER]", "[SCINLP]", "[GSAP]"]
+        assert mapping == {"a": 1, "b": 2}

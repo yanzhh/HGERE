@@ -126,15 +126,21 @@ def setup_training(args, logger):
             raise ValueError(
                 "use_dataset_id_token_as_cls requires multi-dataset mode (datasets list)"
             )
-        add_dataset_cls_tokens(
+        dataset_cls_mapping = add_dataset_cls_tokens(
             tokenizer=tokenizer,
             model=model,
             model_type=args.model_type,
             dataset_names=[ds.name for ds in datasets_cfg],
+            start_unused_idx=n_special_tokens,
             logger=logger,
         )
-        tokenizer.save_pretrained(args.model_dir)
-        logger.info("Saved tokenizer with dataset CLS tokens to %s", args.model_dir)
+        # Persist the mapping in the HF model config (→ config.json) and on
+        # args (→ training_args.bin) so inference can recover token IDs without
+        # needing a separately-saved tokenizer.
+        config.dataset_cls_token_ids = dataset_cls_mapping
+        args.dataset_cls_token_ids = dataset_cls_mapping
+    else:
+        args.dataset_cls_token_ids = {}
 
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
@@ -344,7 +350,9 @@ def _load_dataset_for_entry(
         max_ents=args.max_ents,
         use_gold_ner=getattr(args, "use_gold_ner", False),
         dataset_id=ds_entry.name,
-        use_dataset_id_token_as_cls=getattr(args, "use_dataset_id_token_as_cls", False),
+        dataset_cls_token_id=(getattr(args, "dataset_cls_token_ids", None) or {}).get(
+            ds_entry.name
+        ),
     )
     dataset = RelationDataset(
         logger=logger,

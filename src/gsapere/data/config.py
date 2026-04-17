@@ -99,11 +99,12 @@ class RelationDatasetParams(BaseModel):
             "Leave None for single-dataset training."
         ),
     )
-    use_dataset_id_token_as_cls: bool = Field(
-        default=False,
+    dataset_cls_token_id: Optional[int] = Field(
+        default=None,
         description=(
-            "Replace the [CLS] token at position 0 with a dataset-specific token "
-            "(e.g. [SCIER], [SCINLP], [GSAP]). Requires dataset_id to be set. "
-            "The special tokens must have been added to the tokenizer at training time."
+            "Pre-resolved token ID of the [unusedX] slot to substitute at position 0 "
+            "instead of [CLS]. Set by the training/inference orchestration code from "
+            "the model config's dataset_cls_token_ids mapping. When None, no substitution "
+            "is performed. Requires dataset_id to be set (for head routing)."
         ),
     )

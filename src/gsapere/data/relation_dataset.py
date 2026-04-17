@@ -67,17 +67,9 @@ class RelationDataset(DocumentDataset):
         self.split = params.split
         self.use_gold_ner = params.use_gold_ner
         self.dataset_id = params.dataset_id
-
-        # When use_dataset_id_token_as_cls=True, replace input_ids[0] ([CLS])
-        # with the dataset-specific token id in prepare_item().
-        self._dataset_cls_token_id: int | None = None
-        if params.use_dataset_id_token_as_cls:
-            if params.dataset_id is None:
-                raise ValueError(
-                    "use_dataset_id_token_as_cls requires dataset_id to be set"
-                )
-            tok_str = f"[{params.dataset_id.upper()}]"
-            self._dataset_cls_token_id = tokenizer.convert_tokens_to_ids(tok_str)
+        # Pre-resolved [unusedX] token ID to substitute at position 0 instead of [CLS].
+        # None means no substitution (standard behaviour).
+        self._dataset_cls_token_id = params.dataset_cls_token_id
 
         self.ner_label_list: list[str] = labels.ner
         self.sym_labels: list[str] = labels.rel.symmetric(only_nil=self.no_sym)

@@ -122,16 +122,9 @@ class HGERERunner:
         bert_config.num_ner_labels = labels.num_ner_labels
         bert_config.alpha = 1.0
 
-        # When dataset-specific CLS tokens were added at training time, the tokenizer
-        # saved in model_dir has them; the base model does not.
-        tokenizer_source = (
-            str(model_path)
-            if cfg.use_dataset_id_token_as_cls
-            else cfg.base_model_name_or_path
-        )
         with suppress_transformers_warnings():
             self._tokenizer = tokenizer_class.from_pretrained(
-                tokenizer_source,
+                cfg.base_model_name_or_path,
                 do_lower_case=cfg.do_lower_case,
             )
 
@@ -161,6 +154,7 @@ class HGERERunner:
             )
         self._model.to(device)
         self._model.eval()
+        self._bert_config = bert_config
         logger.info("HGERE model loaded from %s", model_path)
         if cfg.pre_filter_params is not None:
             logger.info(
@@ -224,6 +218,19 @@ class HGERERunner:
                 tmp_output = f_out.name
 
             cfg = self._config
+            dataset_cls_token_id: int | None = None
+            if cfg.use_dataset_id_token_as_cls:
+                cls_ids: dict[str, int] = (
+                    getattr(self._bert_config, "dataset_cls_token_ids", None) or {}
+                )
+                dataset_cls_token_id = cls_ids.get(label_set)
+                if dataset_cls_token_id is None:
+                    logger.warning(
+                        "use_dataset_id_token_as_cls=True but no token ID found for "
+                        "'%s' in model config.dataset_cls_token_ids=%r",
+                        label_set,
+                        cls_ids,
+                    )
             dataset_params = RelationDatasetParams(
                 max_seq_length=cfg.max_seq_length,
                 model_type=cfg.model_type,
@@ -241,7 +248,7 @@ class HGERERunner:
                 # Pass label_set as dataset_id so multi-head models route to
                 # the correct NER and relation head in forward().
                 dataset_id=label_set,
-                use_dataset_id_token_as_cls=cfg.use_dataset_id_token_as_cls,
+                dataset_cls_token_id=dataset_cls_token_id,
             )
             dataset = RelationDataset(
                 logger=logger,

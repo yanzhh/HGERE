@@ -134,28 +134,65 @@ def add_dataset_cls_tokens(
     model: Any,
     model_type: str,
     dataset_names: List[str],
+    start_unused_idx: int,
     logger: Any,
-) -> None:
-    """Add per-dataset CLS tokens and initialise embeddings from [CLS] + noise.
+) -> dict[str, int]:
+    """Reserve [unusedX] slots for per-dataset CLS tokens; init from [CLS]+noise.
 
-    For each name in *dataset_names*, adds a ``[NAME]`` special token to the
-    tokenizer, resizes the model embedding table, and initialises the new
-    embedding from the ``[CLS]`` embedding plus Gaussian noise (σ=0.02).
+    Uses pre-existing ``[unusedX]`` vocabulary entries (same mechanism as the
+    subject/object span markers) rather than adding brand-new special tokens.
+    This avoids any tokenizer-persistence issues — the IDs are stable positions
+    in the original BERT/SciBERT vocabulary.
 
-    Must be called before saving the tokenizer so the new tokens are persisted.
+    For albert/modernbert the required ``[unusedX]`` tokens are explicitly added
+    to the tokenizer and the embedding table is resized (same as adjust_tokenizer).
+    For BERT/SciBERT the tokens already exist at vocabulary position ``X + 1``.
+
+    Parameters
+    ----------
+    start_unused_idx:
+        Index of the first free ``[unusedX]`` slot — typically ``n_special_tokens``
+        (the number of slots already consumed by subject/object markers).
+
+    Returns
+    -------
+    dict[str, int]
+        Mapping ``{dataset_name: token_id}`` for storage in the HF model config.
     """
     import torch
 
-    token_strs = [f"[{name.upper()}]" for name in dataset_names]
-    tokenizer.add_special_tokens({"additional_special_tokens": token_strs})
-    model.resize_token_embeddings(len(tokenizer))
+    n = len(dataset_names)
+    end_idx = start_unused_idx + n
+
+    # albert / modernbert: add the new [unusedX] tokens and resize
+    if model_type.startswith("albert"):
+        new_tokens = [f"[unused{x}]" for x in range(start_unused_idx, end_idx)]
+        tokenizer.add_special_tokens({"additional_special_tokens": new_tokens})
+        model.albert.resize_token_embeddings(len(tokenizer))
+    elif model_type.startswith("modernbert"):
+        new_tokens = [f"[unused{x}]" for x in range(start_unused_idx, end_idx)]
+        tokenizer.add_special_tokens({"additional_special_tokens": new_tokens})
+        model.bert.resize_token_embeddings(len(tokenizer))
+    # BERT / SciBERT: [unusedX] already exists in vocabulary at position X+1
+
+    all_ids = _get_marker_ids(tokenizer, model_type, end_idx)
+    dataset_token_ids = all_ids[start_unused_idx:]
 
     word_embeddings = _get_word_embeddings(model, model_type)
     cls_id = tokenizer.cls_token_id
     cls_emb = word_embeddings[cls_id].clone()
 
-    for tok_str in token_strs:
-        tok_id = tokenizer.convert_tokens_to_ids(tok_str)
+    mapping: dict[str, int] = {}
+    for i, dataset_name in enumerate(dataset_names):
+        tok_id = dataset_token_ids[i]
         noise = torch.randn_like(cls_emb) * 0.02
         word_embeddings[tok_id] = cls_emb + noise
-        logger.info("Added %s (id=%d), init from [CLS]+noise(σ=0.02)", tok_str, tok_id)
+        logger.info(
+            "Dataset CLS token '%s': [unused%d] (id=%d), init from [CLS]+noise(σ=0.02)",
+            dataset_name,
+            start_unused_idx + i,
+            tok_id,
+        )
+        mapping[dataset_name] = tok_id
+
+    return mapping
