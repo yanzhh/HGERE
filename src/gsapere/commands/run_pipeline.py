@@ -31,6 +31,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
+from gsapere.labels import LABELS
 from gsapere.pipeline.pipeline import Pipeline
 
 
@@ -133,8 +134,8 @@ def _load_docs(file_path: Path, logger: logging.Logger) -> list[dict]:
 
 
 def _output_path_for_label_set(output_file: Path, label_set: str) -> Path:
-    """Insert ``_<label_set>`` before the file extension."""
-    return output_file.parent / f"{output_file.stem}_{label_set}{output_file.suffix}"
+    """Write into a subfolder named after the label set, keeping the original filename."""
+    return output_file.parent / label_set / output_file.name
 
 
 def _write_results(
@@ -239,6 +240,15 @@ def cli() -> None:
 
     logger.info("Loading pipeline from %s", args.config)
     pipeline = Pipeline.from_yaml(args.config)
+
+    unknown = [ls for ls in pipeline._config.label_sets if ls not in LABELS]
+    if unknown:
+        logger.error(
+            "Unknown label set(s): %s. Known label sets: %s",
+            unknown,
+            sorted(LABELS.keys()),
+        )
+        sys.exit(1)
 
     file_iter: tqdm | list[Path]
     if input_path.is_dir():
