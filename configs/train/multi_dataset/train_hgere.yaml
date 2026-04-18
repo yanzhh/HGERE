@@ -8,7 +8,7 @@
 # Usage:
 #   uv run train-hgere configs/train/multi_dataset/train_hgere.yaml
 
-model_dir: saves/multi/hgere/run1
+model_dir: saves/multi-sciere/hgere/magic_raindrop
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 model_type: hyper
 do_lower_case: true
@@ -28,26 +28,24 @@ attn_self: true
 
 ner_focal_loss: false
 re_focal_loss: false
+use_dataset_id_token_as_cls: false
 
 sampling_temperature: 0.5
 datasets:
-  - name: scier
-    label_set: scier
-    ner_prediction_dir: saves/multi/pruner/run1/scier
+  - label_set: scier
+    ner_prediction_dir: saves/multi-sciere/pruner/sittich-shuffle-6ep/scier
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
     sampling_weight: 1.0
-  - name: scinlp
-    label_set: scinlp
-    ner_prediction_dir: saves/multi/pruner/run1/scinlp
+  - label_set: scinlp
+    ner_prediction_dir: saves/multi-sciere/pruner/sittich-shuffle-6ep/scinlp
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
     sampling_weight: 1.0
-  - name: gsap
-    label_set: gsap
-    ner_prediction_dir: saves/multi/pruner/run1/gsap
+  - label_set: gsap
+    ner_prediction_dir: saves/multi-sciere/pruner/sittich-shuffle-6ep/gsap-ere
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
@@ -55,8 +53,11 @@ datasets:
 
 train_params:
     log_wandb: true
-    project_name: multi-hgere
-    run_name: run1
+    pre_filter_params:
+        method: threshold
+        value: 0.002
+    project_name: multi-head-hgere
+    run_name: magic_raindrop
     save_results: true
     eval_train: false
     eval_dev: true
@@ -68,7 +69,7 @@ train_params:
     do_train: true
     learning_rate: 1e-5
     learning_rate_cls: 1e-5
-    num_train_epochs: 10
+    num_train_epochs: 8
     eval_epochs: 1
     per_gpu_train_batch_size: 21
     gradient_accumulation_steps: 1
