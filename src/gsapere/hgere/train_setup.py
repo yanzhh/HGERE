@@ -130,7 +130,7 @@ def setup_training(args, logger):
             tokenizer=tokenizer,
             model=model,
             model_type=args.model_type,
-            dataset_names=[ds.name for ds in datasets_cfg],
+            dataset_names=[ds.label_set for ds in datasets_cfg],
             start_unused_idx=n_special_tokens,
             logger=logger,
         )
@@ -326,9 +326,9 @@ def _load_dataset_for_entry(
         "test": ds_entry.test_file,
     }
     file_path = Path(ds_entry.ner_prediction_dir) / file_map[split]
-    logger.info(f"  [{ds_entry.name}] {split} file: {file_path}")
+    logger.info(f"  [{ds_entry.label_set}] {split} file: {file_path}")
     assert os.path.isfile(file_path), (
-        f"Missing {split} file for {ds_entry.name}: {file_path}"
+        f"Missing {split} file for {ds_entry.label_set}: {file_path}"
     )
 
     labels = LABELS[ds_entry.label_set]
@@ -349,9 +349,9 @@ def _load_dataset_for_entry(
         pre_filter_params=getattr(args, "pre_filter_params", None),
         max_ents=args.max_ents,
         use_gold_ner=getattr(args, "use_gold_ner", False),
-        dataset_id=ds_entry.name,
+        dataset_id=ds_entry.label_set,
         dataset_cls_token_id=(getattr(args, "dataset_cls_token_ids", None) or {}).get(
-            ds_entry.name
+            ds_entry.label_set
         ),
     )
     dataset = RelationDataset(
@@ -368,7 +368,7 @@ def _load_dataset_for_entry(
         n_workers=getattr(args, "n_workers", 32),
         pin_memory=True,
     )
-    logger.info("    [%s] %s examples = %d", ds_entry.name, split, len(dataset))
+    logger.info("    [%s] %s examples = %d", ds_entry.label_set, split, len(dataset))
     return dataset
 
 
@@ -393,17 +393,17 @@ def _load_multi_datasets(
         if train_split == eval_split:
             # Both sides want the same split (e.g. test/test)
             ds = _load_dataset_for_entry(train_split, ds_entry, tokenizer, args, logger)
-            train_datasets[ds_entry.name] = ds
-            eval_datasets[ds_entry.name] = ds
+            train_datasets[ds_entry.label_set] = ds
+            eval_datasets[ds_entry.label_set] = ds
         else:
-            train_datasets[ds_entry.name] = _load_dataset_for_entry(
+            train_datasets[ds_entry.label_set] = _load_dataset_for_entry(
                 train_split, ds_entry, tokenizer, args, logger
             )
-            eval_datasets[ds_entry.name] = _load_dataset_for_entry(
+            eval_datasets[ds_entry.label_set] = _load_dataset_for_entry(
                 eval_split, ds_entry, tokenizer, args, logger
             )
 
-    sampling_weights = {ds.name: ds.sampling_weight for ds in datasets_cfg}
+    sampling_weights = {ds.label_set: ds.sampling_weight for ds in datasets_cfg}
     train_wrapper = MultiRelationDataset(
         datasets=train_datasets,
         sampling_temperature=getattr(args, "sampling_temperature", 0.5),

@@ -31,22 +31,19 @@ re_focal_loss: false
 
 sampling_temperature: 0.5
 datasets:
-  - name: scier
-    label_set: scier
+  - label_set: scier
     ner_prediction_dir: saves/multi/pruner/run1/scier
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
     sampling_weight: 1.0
-  - name: scinlp
-    label_set: scinlp
+  - label_set: scinlp
     ner_prediction_dir: saves/multi/pruner/run1/scinlp
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
     sampling_weight: 1.0
-  - name: gsap
-    label_set: gsap
+  - label_set: gsap
     ner_prediction_dir: saves/multi/pruner/run1/gsap
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json

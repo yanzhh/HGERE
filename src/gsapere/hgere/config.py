@@ -39,7 +39,6 @@ class DatasetEntry(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(description="Dataset identifier, e.g. 'scier', 'scinlp', 'gsap'.")
     label_set: str = Field(
         description="Key into the built-in label registry (e.g. 'scier')."
     )
