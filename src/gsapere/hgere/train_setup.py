@@ -85,7 +85,7 @@ def setup_training(args, logger):
     datasets_cfg = getattr(args, "datasets", None)
     if datasets_cfg is not None:
         config.dataset_heads = {
-            ds_entry.name: {
+            ds_entry.label_set: {
                 "num_ner_labels": LABELS[ds_entry.label_set].num_ner_labels,
                 "num_rel_labels": LABELS[ds_entry.label_set].num_rel_labels(
                     args.no_sym
