@@ -12,11 +12,11 @@ datasets:
     train_file: datasets/scier/train.jsonl
     dev_file: datasets/scier/dev.jsonl
   - name: scinlp
-    train_file: datasets_fixed/scinlp/train.jsonl
-    dev_file: datasets_fixed/scinlp/dev.jsonl
+    train_file: datasets/scinlp/train.jsonl
+    dev_file: datasets/scinlp/dev.jsonl
   - name: gsap
-    train_file: datasets/gsap-ere/2025-05-15/train.jsonl
-    dev_file: datasets/gsap-ere/2025-05-15/dev.jsonl
+    train_file: datasets/gsap-ere/train.jsonl
+    dev_file: datasets/gsap-ere/dev.jsonl
 
 max_span_length: 20
 max_ngram: 14
@@ -27,5 +27,5 @@ max_tokens: 3
 train_split: 0.8
 seed: 42
 target_fn: 2
-n_workers: 8
-save: saves/multi/pruner/rules.json
+n_workers: 16
+save: saves/multi-sciere/pre-filter/rules.json

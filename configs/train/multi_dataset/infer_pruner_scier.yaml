@@ -1,12 +1,12 @@
-# Run inference with the shared multi-dataset pruner on SciER.
-# Produces ent_pred_*.json in saves/multi/pruner/run1/scier/ for HGERE training.
+# Run inference with the shared multi-dataset pruner on GSAP-ERE.
+# Produces ent_pred_*.json in saves/multi/pruner/run1/gsap/ for HGERE training.
 #
 # Usage:
-#   uv run gsapere-train-pruner configs/train/multi_dataset/infer_pruner_scier.yaml
+#   uv run gsapere-train-pruner configs/train/multi_dataset/infer_pruner_gsap.yaml
 
-label_set: scier
-model_dir: saves/multi/pruner/run1
-output_dir: saves/multi/pruner/run1/scier
+label_set: gsap
+model_dir: saves/multi-sciere/pruner/sittich-shuffle-6ep
+output_dir: saves/multi-sciere/pruner/sittich-shuffle-6ep/scier
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 do_lower_case: true
 model_type: bertspanmarkerpruner
@@ -17,8 +17,8 @@ max_mention_ori_length: 12
 
 train_params:
     project_name: multi-pruner
-    run_name: run1
-    data_dir: datasets/scier
+    run_name: xxx
+    data_dir: datasets/scier/
     train_file: train.jsonl
     dev_file: dev.jsonl
     test_file: test.jsonl
@@ -26,8 +26,7 @@ train_params:
     eval_train: true
     eval_dev: true
     eval_test: true
-    save_predictions: true
-    rulebased_pruner_file: saves/multi/pruner/rules.json
+    rulebased_pruner_file: saves/multi-sciere/pre-filter/rules.json
     seed: 44
     learning_rate: 1e-6
     num_train_epochs: 8

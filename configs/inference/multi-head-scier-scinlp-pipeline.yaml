@@ -9,10 +9,10 @@
 #       --input docs.jsonl \
 #       --output predictions.jsonl
 
-label_sets: [scier, scinlp]
+label_sets: [scier, scinlp, gsapner]
 
 pruner:
-    model_dir: saves/scier/pruner/friedrich_bs8_lr1e-6
+    model_dir: saves/multi-sciere/pruner/sittich-shuffle-6ep
     base_model_name_or_path: allenai/scibert_scivocab_uncased
     do_lower_case: true
     model_type: bertspanmarkerpruner
@@ -20,16 +20,16 @@ pruner:
     max_seq_length: 256
     max_pair_length: 64
     max_mention_ori_length: 12
-    rulebased_pruner_file: datasets/scier/pre-filter/rules.json
+    rulebased_pruner_file: saves/multi-sciere/pre-filter/rules.json
     topk_ratio: 8
     min_mentions_num: 1
     max_mentions_num: 60
     final_pruning:
         method: threshold
-        threshold: 0.0005
+        threshold: 0.00001
 
 hgere:
-    model_dir: saves/multi_head/scier_scinlp_run1
+    model_dir: saves/multi-sciere/hgere/magic_raindrop
     base_model_name_or_path: allenai/scibert_scivocab_uncased
     model_type: hyper
     do_lower_case: true
@@ -48,4 +48,4 @@ hgere:
     attn_self: true
     pre_filter_params:
         method: threshold
-        value: 0.0125
+        value: 0.002

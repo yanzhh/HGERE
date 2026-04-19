@@ -18,7 +18,7 @@ pruner:
         threshold: 0.0005
 
 hgere:
-    model_dir: saves/unified-sciere/HGERE/best-unified-hgere
+    model_dir: saves/unified-sciere/HGERE/elefant
     base_model_name_or_path: allenai/scibert_scivocab_uncased
     model_type: hyper
     do_lower_case: true
