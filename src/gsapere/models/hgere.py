@@ -387,6 +387,109 @@ class BertForHyperGNN(BertPreTrainedModel):
 
         return outputs
 
+    def forward_all_heads(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        sub_positions=None,
+        ent_numbers=None,
+        **kwargs,
+    ) -> dict[str, tuple]:
+        """Run encoder+HyperGNN once and apply every head.
+
+        Returns ``{dataset_id: (re_logits, ner_logits)}`` for all heads.
+        Only valid for multi-head checkpoints (``dataset_heads`` in config).
+        """
+        if self._head_info is None:
+            raise RuntimeError("forward_all_heads requires a multi-head model.")
+
+        ids = input_ids if input_ids is not None else kwargs.get("inputs_embeds")
+        token_type_ids = torch.zeros(ids.shape[:2], dtype=torch.long, device=ids.device)
+
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+        )
+        hidden_states = self.dropout(outputs[0])
+
+        seq_len = self.max_seq_length
+        max_ent_num = max(ent_numbers)
+        tot_seq_len = input_ids.shape[-1]
+        ent_len = (tot_seq_len - seq_len) // 2
+
+        obj_start_states = hidden_states[:, seq_len : seq_len + ent_len][
+            :, :max_ent_num, :
+        ]
+        obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
+        sub_start_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+        ]
+        sub_end_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
+        ]
+
+        sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)
+        obj_reprs = self.obj_encoder(obj_start_states, obj_end_states)
+        rel_reprs = self.rel_encoder(
+            sub_reprs.unsqueeze(-2).expand(obj_reprs.shape), obj_reprs
+        )
+
+        rel_reprs = pad_sequence(
+            torch.split(rel_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=0,
+        )
+        obj_reprs = pad_sequence(
+            torch.split(obj_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=-1e4,
+        )
+        uni_obj_reprs = torch.max(obj_reprs, dim=1)[0]
+        sub_reprs = pad_sequence(
+            torch.split(sub_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=0,
+        )
+
+        mask1d = get_ent_mask1d(ent_numbers)
+        mask2d = get_ent_mask2d(ent_numbers)
+        uni_obj_reprs *= mask1d.unsqueeze(-1)
+        rel_reprs *= mask2d.unsqueeze(-1)
+
+        if self.args.layernorm_1st:
+            sub_reprs = self.sub_layernorm(sub_reprs)
+            uni_obj_reprs = self.obj_layernorm(uni_obj_reprs)
+            rel_reprs = self.rel_layernorm(rel_reprs)
+
+        if self.args.factor_type in {
+            "ternary",
+            "tersib",
+            "tercop",
+            "tergp",
+            "tersibcop",
+            "tersibgp",
+            "tercopgp",
+            "tersibcopgp",
+        }:
+            sub_reprs, uni_obj_reprs, rel_reprs = self.htnnlayer(
+                sub_reprs, uni_obj_reprs, rel_reprs, ent_numbers
+            )
+        elif self.args.factor_type in {"sib", "cop", "gp", "sibcop", "sibgp", "copgp"}:
+            rel_reprs = self.htnnlayer(rel_reprs, ent_numbers)
+
+        return {
+            ds_id: (
+                self.rel_heads[ds_id](rel_reprs).float(),
+                _apply_ner_head(
+                    self.ner_heads[ds_id], sub_reprs, uni_obj_reprs, self.args.ent_repr
+                ).float(),
+            )
+            for ds_id in self._head_info
+        }
+
 
 class ModernBertForHyperGNN(ModernBertPreTrainedModel):
     """ModernBERT-backed HGERE model.
@@ -656,6 +759,105 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
             outputs = (loss, re_loss, ner_loss) + outputs
 
         return outputs
+
+    def forward_all_heads(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        sub_positions=None,
+        ent_numbers=None,
+        **kwargs,
+    ) -> dict[str, tuple]:
+        """Run encoder+HyperGNN once and apply every head.
+
+        Returns ``{dataset_id: (re_logits, ner_logits)}`` for all heads.
+        Only valid for multi-head checkpoints (``dataset_heads`` in config).
+        """
+        if self._head_info is None:
+            raise RuntimeError("forward_all_heads requires a multi-head model.")
+
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+        )
+        hidden_states = self.dropout(outputs[0])
+
+        seq_len = self.max_seq_length
+        max_ent_num = max(ent_numbers)
+        tot_seq_len = input_ids.shape[-1]
+        ent_len = (tot_seq_len - seq_len) // 2
+
+        obj_start_states = hidden_states[:, seq_len : seq_len + ent_len][
+            :, :max_ent_num, :
+        ]
+        obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
+        sub_start_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+        ]
+        sub_end_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
+        ]
+
+        sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)
+        obj_reprs = self.obj_encoder(obj_start_states, obj_end_states)
+        rel_reprs = self.rel_encoder(
+            sub_reprs.unsqueeze(-2).expand(obj_reprs.shape), obj_reprs
+        )
+
+        rel_reprs = pad_sequence(
+            torch.split(rel_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=0,
+        )
+        obj_reprs = pad_sequence(
+            torch.split(obj_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=-1e4,
+        )
+        uni_obj_reprs = torch.max(obj_reprs, dim=1)[0]
+        sub_reprs = pad_sequence(
+            torch.split(sub_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=0,
+        )
+
+        mask1d = get_ent_mask1d(ent_numbers)
+        mask2d = get_ent_mask2d(ent_numbers)
+        uni_obj_reprs *= mask1d.unsqueeze(-1)
+        rel_reprs *= mask2d.unsqueeze(-1)
+
+        if self.args.layernorm_1st:
+            sub_reprs = self.sub_layernorm(sub_reprs)
+            uni_obj_reprs = self.obj_layernorm(uni_obj_reprs)
+            rel_reprs = self.rel_layernorm(rel_reprs)
+
+        if self.args.factor_type in {
+            "ternary",
+            "tersib",
+            "tercop",
+            "tergp",
+            "tersibcop",
+            "tersibgp",
+            "tercopgp",
+            "tersibcopgp",
+        }:
+            sub_reprs, uni_obj_reprs, rel_reprs = self.htnnlayer(
+                sub_reprs, uni_obj_reprs, rel_reprs, ent_numbers
+            )
+        elif self.args.factor_type in {"sib", "cop", "gp", "sibcop", "sibgp", "copgp"}:
+            rel_reprs = self.htnnlayer(rel_reprs, ent_numbers)
+
+        return {
+            ds_id: (
+                self.rel_heads[ds_id](rel_reprs).float(),
+                _apply_ner_head(
+                    self.ner_heads[ds_id], sub_reprs, uni_obj_reprs, self.args.ent_repr
+                ).float(),
+            )
+            for ds_id in self._head_info
+        }
 
 
 def get_ent_mask1d(n_ents, max_num=None):

@@ -18,7 +18,7 @@ import torch
 
 from gsapere.data.config import RelationDatasetParams
 from gsapere.data.relation_dataset import RelationDataset
-from gsapere.hgere.inference import infer_hgere
+from gsapere.hgere.inference import LabelMeta, infer_hgere, infer_hgere_multi
 from gsapere.hgere.train_setup import resolve_checkpoint
 from gsapere.labels import LABELS
 from gsapere.models.hgere import MODEL_CLASSES
@@ -50,8 +50,8 @@ class HGERERunner:
 
     The model is loaded once at construction. For multi-head models, call
     :meth:`run` with an explicit *label_set* to select the appropriate head,
-    or call :meth:`run_multi` to run all configured label sets in one pass
-    (pruner candidates are reused; HGERE runs once per label set).
+    or call :meth:`run_multi` to run all heads in a single forward pass per
+    batch (encoder and HyperGNN run once; each head is applied separately).
 
     Args:
         config: HGERE stage configuration.
@@ -321,6 +321,108 @@ class HGERERunner:
             debug_log_rel_probs=debug_log_rel_probs,
         )
 
+    def _run_inference_multi(
+        self,
+        docs: list[dict[str, Any]],
+        show_progress: bool = False,
+        debug_break_on_first_rel: bool = False,
+        debug_log_rel_probs: bool = False,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Run all heads in one forward pass per batch."""
+        n_gpu = torch.cuda.device_count()
+        cfg = self._config
+        primary_ls = self._label_sets[0]
+        args = self._make_args(n_gpu, primary_ls)
+
+        tmp_input = None
+        tmp_outputs: dict[str, str] = {}
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".jsonl", delete=False
+            ) as f_in:
+                tmp_input = f_in.name
+                for doc in docs:
+                    f_in.write(json.dumps(doc) + "\n")
+
+            for ls in self._label_sets:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".jsonl", delete=False
+                ) as f_out:
+                    tmp_outputs[ls] = f_out.name
+
+            dataset_cls_token_id: int | None = None
+            if cfg.use_dataset_id_token_as_cls:
+                cls_ids: dict[str, int] = (
+                    getattr(self._bert_config, "dataset_cls_token_ids", None) or {}
+                )
+                dataset_cls_token_id = cls_ids.get(primary_ls)
+
+            dataset_params = RelationDatasetParams(
+                max_seq_length=cfg.max_seq_length,
+                model_type=cfg.model_type,
+                use_typemarker=cfg.use_typemarker,
+                no_sym=cfg.no_sym,
+                nocross=cfg.nocross,
+                local_rank=cfg.local_rank,
+                split="inference",
+                pre_filter_params=(
+                    cfg.pre_filter_params.model_dump()
+                    if cfg.pre_filter_params
+                    else None
+                ),
+                use_gold_ner=cfg.use_gold_ner,
+                dataset_id=primary_ls,
+                dataset_cls_token_id=dataset_cls_token_id,
+            )
+            dataset = RelationDataset(
+                logger=logger,
+                tokenizer=self._tokenizer,
+                labels=LABELS[primary_ls],
+                file_path=tmp_input,
+                params=dataset_params,
+            )
+            dataset.build(
+                batch_size=args.eval_batch_size,
+                shuffle=False,
+                batch_by_size=False,
+                n_workers=cfg.n_workers,
+                pin_memory=True,
+            )
+
+            label_metas = {
+                ls: LabelMeta(
+                    ner_label_list=LABELS[ls].ner,
+                    sym_labels=LABELS[ls].rel.symmetric(only_nil=cfg.no_sym),
+                    label_list=LABELS[ls].rel.all,
+                )
+                for ls in self._label_sets
+            }
+
+            infer_hgere_multi(
+                model=self._model,
+                eval_dataset=dataset,
+                label_metas=label_metas,
+                args=args,
+                logger=logger,
+                source_file_path=tmp_input,
+                output_paths=tmp_outputs,
+                gold_only=False,
+                disable_progress=not show_progress,
+                debug_break_on_first_rel=debug_break_on_first_rel,
+                debug_log_rel_probs=debug_log_rel_probs,
+            )
+
+            results: dict[str, list[dict[str, Any]]] = {}
+            for ls, tmp_out in tmp_outputs.items():
+                with open(tmp_out) as f:
+                    results[ls] = [json.loads(line) for line in f]
+            return results
+
+        finally:
+            for p in [tmp_input, *tmp_outputs.values()]:
+                if p and os.path.exists(p):
+                    os.unlink(p)
+
     def run_multi(
         self,
         docs: list[dict[str, Any]],
@@ -328,10 +430,10 @@ class HGERERunner:
         debug_break_on_first_rel: bool = False,
         debug_log_rel_probs: bool = False,
     ) -> dict[str, list[dict[str, Any]]]:
-        """Run HGERE once per configured label set.
+        """Run all HGERE heads in a single forward pass per batch.
 
-        The pruner-enriched *docs* (with ``predicted_ner``) are reused across
-        all label set runs; no additional pruner pass is needed.
+        The encoder and HyperGNN run once; every configured head is applied to
+        the shared representations.
 
         Args:
             docs: Documents with ``predicted_ner`` already populated.
@@ -343,13 +445,9 @@ class HGERERunner:
         """
         if not docs:
             return {ls: [] for ls in self._label_sets}
-        return {
-            ls: self._run_inference(
-                docs,
-                label_set=ls,
-                show_progress=show_progress,
-                debug_break_on_first_rel=debug_break_on_first_rel,
-                debug_log_rel_probs=debug_log_rel_probs,
-            )
-            for ls in self._label_sets
-        }
+        return self._run_inference_multi(
+            docs,
+            show_progress=show_progress,
+            debug_break_on_first_rel=debug_break_on_first_rel,
+            debug_log_rel_probs=debug_log_rel_probs,
+        )
