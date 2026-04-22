@@ -159,8 +159,11 @@ class HGERETrainParams(BaseModel):
     project_name: str = Field(
         default="hgere", description="Weights & Biases project name."
     )
-    run_name: Optional[str] = Field(
-        default=None, description="Weights & Biases run name."
+    run_name: optional[str] = field(
+        default=none, description="weights & biases run name."
+    )
+    wandb_entity: optional[str] = field(
+        default=none, description="weights & biases entity name to share across wandb users."
     )
     log_wandb: bool = Field(
         default=False, description="Whether to log training in W&B."

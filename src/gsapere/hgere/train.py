@@ -71,6 +71,8 @@ def train(
         wandb_params = dict(project=args.project_name, config=vars(args))
         if args.run_name is not None:
             wandb_params["name"] = args.run_name
+        if args.wandb_entity is not None:
+            wandb_params["entitiy"] = args.wandb_entity
         wandb.init(**wandb_params)
         log_wandb = True
         log_candidate_stats_to_wandb("train", train_dataset.candidate_stats)
