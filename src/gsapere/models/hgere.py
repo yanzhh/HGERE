@@ -48,7 +48,80 @@ from torch.nn import (
     GELU,
 )
 from torch.nn.utils.rnn import pad_sequence
-import pdb
+
+
+# ---------------------------------------------------------------------------
+# Per-dataset head builders (shared by both model classes)
+# ---------------------------------------------------------------------------
+
+
+def _build_ner_head(ent_dim: int, num_ner_labels: int, ent_repr: str) -> Module:
+    """Build a single NER classification head."""
+    if ent_repr == "mix":
+        return CatEncoder(input_dims=[ent_dim] * 2, output_dim=num_ner_labels)
+    return Linear(ent_dim, num_ner_labels)
+
+
+def _build_rel_head(rel_dim: int, num_rel_labels: int) -> Module:
+    """Build a single relation classification head."""
+    return Linear(rel_dim, num_rel_labels)
+
+
+def _apply_ner_head(
+    ner_cls: Module, sub_reprs: torch.Tensor, uni_obj_reprs: torch.Tensor, ent_repr: str
+) -> torch.Tensor:
+    """Call the NER head with the right inputs depending on ent_repr mode."""
+    if ent_repr == "mix":
+        return ner_cls(sub_reprs, uni_obj_reprs)
+    if ent_repr == "sub":
+        return ner_cls(sub_reprs)
+    if ent_repr == "obj":
+        return ner_cls(uni_obj_reprs)
+    raise ValueError(f"Unknown ent_repr: {ent_repr!r}")
+
+
+def _compute_re_loss(
+    re_prediction_scores: torch.Tensor,
+    rel_labels: torch.Tensor,
+    num_labels: int,
+    args: object,
+) -> torch.Tensor:
+    """Compute RE loss (focal or cross-entropy)."""
+    re_logits = re_prediction_scores.reshape(-1, num_labels)
+    re_targets = rel_labels.reshape(-1)
+    if getattr(args, "re_focal_loss", False):
+        gamma = getattr(args, "re_focal_gamma", 2.0)
+        mask = re_targets != -1
+        logits_m = re_logits[mask]
+        targets_m = re_targets[mask]
+        log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
+        p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
+        return (
+            -((1 - p_t) ** gamma) * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
+        ).mean()
+    return CrossEntropyLoss(ignore_index=-1)(re_logits, re_targets)
+
+
+def _compute_ner_loss(
+    ner_prediction_scores: torch.Tensor,
+    ner_labels: torch.Tensor,
+    num_ner_labels: int,
+    args: object,
+) -> torch.Tensor:
+    """Compute NER loss (focal or cross-entropy)."""
+    ner_logits = ner_prediction_scores.reshape(-1, num_ner_labels)
+    ner_targets = ner_labels.reshape(-1)
+    if getattr(args, "ner_focal_loss", False):
+        gamma = getattr(args, "ner_focal_gamma", 2.0)
+        mask = ner_targets != -1
+        logits_m = ner_logits[mask]
+        targets_m = ner_targets[mask]
+        log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
+        p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
+        return (
+            -((1 - p_t) ** gamma) * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
+        ).mean()
+    return CrossEntropyLoss(ignore_index=-1)(ner_logits, ner_targets)
 
 
 class BertForHyperGNN(BertPreTrainedModel):
@@ -120,19 +193,38 @@ class BertForHyperGNN(BertPreTrainedModel):
                 "                    {'tersib', 'tercop', 'tergp', 'tersibcop','tersibgp', 'tercopgp', 'tersibcopgp'}"
             )
             raise Exception()
-        # self.ner_cls = CatEncoder(input_dims=[ent_dim]*2, output_dim=self.num_ner_labels)
-        self.rel_cls = Linear(rel_dim, self.num_labels)
-
-        if args.ent_repr == "mix":
-            self.ner_cls = CatEncoder(
-                input_dims=[ent_dim] * 2, output_dim=self.num_ner_labels
+        # Classification heads: single-head or per-dataset multi-head
+        dataset_heads_cfg = getattr(config, "dataset_heads", None)
+        if dataset_heads_cfg is not None:
+            # Multi-head mode: one NER head and one RE head per dataset
+            self._head_info: dict = dataset_heads_cfg
+            self.ner_heads = nn.ModuleDict(
+                {
+                    name: _build_ner_head(
+                        ent_dim, info["num_ner_labels"], args.ent_repr
+                    )
+                    for name, info in dataset_heads_cfg.items()
+                }
+            )
+            self.rel_heads = nn.ModuleDict(
+                {
+                    name: _build_rel_head(rel_dim, info["num_rel_labels"])
+                    for name, info in dataset_heads_cfg.items()
+                }
             )
         else:
-            self.ner_cls = Linear(ent_dim, self.num_ner_labels)
-
-        self.alpha = torch.tensor(
-            [config.alpha] + [1.0] * (self.num_labels - 1), dtype=torch.float32
-        )
+            # Single-head mode: unchanged behaviour
+            self._head_info = None
+            self.rel_cls = Linear(rel_dim, self.num_labels)
+            if args.ent_repr == "mix":
+                self.ner_cls = CatEncoder(
+                    input_dims=[ent_dim] * 2, output_dim=self.num_ner_labels
+                )
+            else:
+                self.ner_cls = Linear(ent_dim, self.num_ner_labels)
+            self.alpha = torch.tensor(
+                [config.alpha] + [1.0] * (self.num_labels - 1), dtype=torch.float32
+            )
 
         if self.args.layernorm_1st:
             self.sub_layernorm = (
@@ -161,6 +253,7 @@ class BertForHyperGNN(BertPreTrainedModel):
         rel_labels=None,  # bsz * max_ent_num * max_ent_num
         ner_labels=None,  # bsz * max_ent_num
         ent_numbers=None,
+        dataset_id=None,  # str | None — selects per-dataset head in multi-head mode
         # sub_ner_labels=None,
     ):
         # token_type_ids is never provided by the data loader.
@@ -257,17 +350,22 @@ class BertForHyperGNN(BertPreTrainedModel):
         elif self.args.factor_type in {"sib", "cop", "gp", "sibcop", "sibgp", "copgp"}:
             rel_reprs = self.htnnlayer(rel_reprs, ent_numbers)
 
-        # ner_prediction_scores = self.ner_cls(sub_reprs, uni_obj_reprs)
-        re_prediction_scores = self.rel_cls(rel_reprs)
-
-        if self.args.ent_repr == "mix":
-            ner_prediction_scores = self.ner_cls(sub_reprs, uni_obj_reprs)
-        elif self.args.ent_repr == "sub":
-            ner_prediction_scores = self.ner_cls(sub_reprs)
-        elif self.args.ent_repr == "obj":
-            ner_prediction_scores = self.ner_cls(uni_obj_reprs)
+        # Head selection: multi-head routes by dataset_id, single-head uses cls attrs
+        if self._head_info is not None and dataset_id is not None:
+            ner_cls = self.ner_heads[dataset_id]
+            rel_cls = self.rel_heads[dataset_id]
+            num_labels = self._head_info[dataset_id]["num_rel_labels"]
+            num_ner_labels = self._head_info[dataset_id]["num_ner_labels"]
         else:
-            pdb.set_trace()
+            ner_cls = self.ner_cls
+            rel_cls = self.rel_cls
+            num_labels = self.num_labels
+            num_ner_labels = self.num_ner_labels
+
+        re_prediction_scores = rel_cls(rel_reprs)
+        ner_prediction_scores = _apply_ner_head(
+            ner_cls, sub_reprs, uni_obj_reprs, self.args.ent_repr
+        )
 
         outputs = (
             re_prediction_scores,
@@ -278,46 +376,119 @@ class BertForHyperGNN(BertPreTrainedModel):
         re_prediction_scores = re_prediction_scores.float()
 
         if rel_labels is not None:
-            re_logits = re_prediction_scores.reshape(-1, self.num_labels)
-            re_targets = rel_labels.reshape(-1)
-            if getattr(self.args, "re_focal_loss", False):
-                gamma = getattr(self.args, "re_focal_gamma", 2.0)
-                mask = re_targets != -1
-                logits_m = re_logits[mask]
-                targets_m = re_targets[mask]
-                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
-                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                re_loss = (
-                    -((1 - p_t) ** gamma)
-                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ).mean()
-            else:
-                re_loss = CrossEntropyLoss(ignore_index=-1)(re_logits, re_targets)
-
-            ner_logits = ner_prediction_scores.reshape(-1, self.num_ner_labels)
-            ner_targets = ner_labels.reshape(-1)
-            if getattr(self.args, "ner_focal_loss", False):
-                gamma = getattr(self.args, "ner_focal_gamma", 2.0)
-                mask = ner_targets != -1
-                logits_m = ner_logits[mask]
-                targets_m = ner_targets[mask]
-                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
-                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ner_loss = (
-                    -((1 - p_t) ** gamma)
-                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ).mean()
-            else:
-                ner_loss = CrossEntropyLoss(ignore_index=-1)(ner_logits, ner_targets)
-            # else:
-            #     ner_labels_exp = ner_labels.unsqueeze(0).repeat(bsz,1)
-            #     ner_loss = loss_fct_ner(ner_prediction_scores.view(-1, self.num_ner_labels), ner_labels_exp.view(-1))
-
+            re_loss = _compute_re_loss(
+                re_prediction_scores, rel_labels, num_labels, self.args
+            )
+            ner_loss = _compute_ner_loss(
+                ner_prediction_scores, ner_labels, num_ner_labels, self.args
+            )
             loss = re_loss + ner_loss
-
             outputs = (loss, re_loss, ner_loss) + outputs
 
         return outputs
+
+    def forward_all_heads(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        sub_positions=None,
+        ent_numbers=None,
+        **kwargs,
+    ) -> dict[str, tuple]:
+        """Run encoder+HyperGNN once and apply every head.
+
+        Returns ``{dataset_id: (re_logits, ner_logits)}`` for all heads.
+        Only valid for multi-head checkpoints (``dataset_heads`` in config).
+        """
+        if self._head_info is None:
+            raise RuntimeError("forward_all_heads requires a multi-head model.")
+
+        ids = input_ids if input_ids is not None else kwargs.get("inputs_embeds")
+        token_type_ids = torch.zeros(ids.shape[:2], dtype=torch.long, device=ids.device)
+
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+        )
+        hidden_states = self.dropout(outputs[0])
+
+        seq_len = self.max_seq_length
+        max_ent_num = max(ent_numbers)
+        tot_seq_len = input_ids.shape[-1]
+        ent_len = (tot_seq_len - seq_len) // 2
+
+        obj_start_states = hidden_states[:, seq_len : seq_len + ent_len][
+            :, :max_ent_num, :
+        ]
+        obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
+        sub_start_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+        ]
+        sub_end_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
+        ]
+
+        sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)
+        obj_reprs = self.obj_encoder(obj_start_states, obj_end_states)
+        rel_reprs = self.rel_encoder(
+            sub_reprs.unsqueeze(-2).expand(obj_reprs.shape), obj_reprs
+        )
+
+        rel_reprs = pad_sequence(
+            torch.split(rel_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=0,
+        )
+        obj_reprs = pad_sequence(
+            torch.split(obj_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=-1e4,
+        )
+        uni_obj_reprs = torch.max(obj_reprs, dim=1)[0]
+        sub_reprs = pad_sequence(
+            torch.split(sub_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=0,
+        )
+
+        mask1d = get_ent_mask1d(ent_numbers)
+        mask2d = get_ent_mask2d(ent_numbers)
+        uni_obj_reprs *= mask1d.unsqueeze(-1)
+        rel_reprs *= mask2d.unsqueeze(-1)
+
+        if self.args.layernorm_1st:
+            sub_reprs = self.sub_layernorm(sub_reprs)
+            uni_obj_reprs = self.obj_layernorm(uni_obj_reprs)
+            rel_reprs = self.rel_layernorm(rel_reprs)
+
+        if self.args.factor_type in {
+            "ternary",
+            "tersib",
+            "tercop",
+            "tergp",
+            "tersibcop",
+            "tersibgp",
+            "tercopgp",
+            "tersibcopgp",
+        }:
+            sub_reprs, uni_obj_reprs, rel_reprs = self.htnnlayer(
+                sub_reprs, uni_obj_reprs, rel_reprs, ent_numbers
+            )
+        elif self.args.factor_type in {"sib", "cop", "gp", "sibcop", "sibgp", "copgp"}:
+            rel_reprs = self.htnnlayer(rel_reprs, ent_numbers)
+
+        return {
+            ds_id: (
+                self.rel_heads[ds_id](rel_reprs).float(),
+                _apply_ner_head(
+                    self.ner_heads[ds_id], sub_reprs, uni_obj_reprs, self.args.ent_repr
+                ).float(),
+            )
+            for ds_id in self._head_info
+        }
 
 
 class ModernBertForHyperGNN(ModernBertPreTrainedModel):
@@ -428,18 +599,36 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
             print(f"No valid factor_type specified: {self.args.factor_type}")
             raise Exception()
 
-        self.rel_cls = Linear(rel_dim, self.num_labels)
-
-        if args.ent_repr == "mix":
-            self.ner_cls = CatEncoder(
-                input_dims=[ent_dim] * 2, output_dim=self.num_ner_labels
+        # Classification heads: single-head or per-dataset multi-head
+        dataset_heads_cfg = getattr(config, "dataset_heads", None)
+        if dataset_heads_cfg is not None:
+            self._head_info: dict = dataset_heads_cfg
+            self.ner_heads = nn.ModuleDict(
+                {
+                    name: _build_ner_head(
+                        ent_dim, info["num_ner_labels"], args.ent_repr
+                    )
+                    for name, info in dataset_heads_cfg.items()
+                }
+            )
+            self.rel_heads = nn.ModuleDict(
+                {
+                    name: _build_rel_head(rel_dim, info["num_rel_labels"])
+                    for name, info in dataset_heads_cfg.items()
+                }
             )
         else:
-            self.ner_cls = Linear(ent_dim, self.num_ner_labels)
-
-        self.alpha = torch.tensor(
-            [config.alpha] + [1.0] * (self.num_labels - 1), dtype=torch.float32
-        )
+            self._head_info = None
+            self.rel_cls = Linear(rel_dim, self.num_labels)
+            if args.ent_repr == "mix":
+                self.ner_cls = CatEncoder(
+                    input_dims=[ent_dim] * 2, output_dim=self.num_ner_labels
+                )
+            else:
+                self.ner_cls = Linear(ent_dim, self.num_ner_labels)
+            self.alpha = torch.tensor(
+                [config.alpha] + [1.0] * (self.num_labels - 1), dtype=torch.float32
+            )
 
         if self.args.layernorm_1st:
             self.sub_layernorm = (
@@ -467,6 +656,7 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         rel_labels=None,
         ner_labels=None,
         ent_numbers=None,
+        dataset_id=None,  # str | None — selects per-dataset head in multi-head mode
     ):
         outputs = self.bert(
             input_ids=input_ids,
@@ -536,16 +726,22 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         elif self.args.factor_type in {"sib", "cop", "gp", "sibcop", "sibgp", "copgp"}:
             rel_reprs = self.htnnlayer(rel_reprs, ent_numbers)
 
-        re_prediction_scores = self.rel_cls(rel_reprs)
-
-        if self.args.ent_repr == "mix":
-            ner_prediction_scores = self.ner_cls(sub_reprs, uni_obj_reprs)
-        elif self.args.ent_repr == "sub":
-            ner_prediction_scores = self.ner_cls(sub_reprs)
-        elif self.args.ent_repr == "obj":
-            ner_prediction_scores = self.ner_cls(uni_obj_reprs)
+        # Head selection: multi-head routes by dataset_id, single-head uses cls attrs
+        if self._head_info is not None and dataset_id is not None:
+            ner_cls = self.ner_heads[dataset_id]
+            rel_cls = self.rel_heads[dataset_id]
+            num_labels = self._head_info[dataset_id]["num_rel_labels"]
+            num_ner_labels = self._head_info[dataset_id]["num_ner_labels"]
         else:
-            pdb.set_trace()
+            ner_cls = self.ner_cls
+            rel_cls = self.rel_cls
+            num_labels = self.num_labels
+            num_ner_labels = self.num_ner_labels
+
+        re_prediction_scores = rel_cls(rel_reprs)
+        ner_prediction_scores = _apply_ner_head(
+            ner_cls, sub_reprs, uni_obj_reprs, self.args.ent_repr
+        )
 
         outputs = (re_prediction_scores, ner_prediction_scores)
 
@@ -553,42 +749,115 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         re_prediction_scores = re_prediction_scores.float()
 
         if rel_labels is not None:
-            re_logits = re_prediction_scores.reshape(-1, self.num_labels)
-            re_targets = rel_labels.reshape(-1)
-            if getattr(self.args, "re_focal_loss", False):
-                gamma = getattr(self.args, "re_focal_gamma", 2.0)
-                mask = re_targets != -1
-                logits_m = re_logits[mask]
-                targets_m = re_targets[mask]
-                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
-                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                re_loss = (
-                    -((1 - p_t) ** gamma)
-                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ).mean()
-            else:
-                re_loss = CrossEntropyLoss(ignore_index=-1)(re_logits, re_targets)
-
-            ner_logits = ner_prediction_scores.reshape(-1, self.num_ner_labels)
-            ner_targets = ner_labels.reshape(-1)
-            if getattr(self.args, "ner_focal_loss", False):
-                gamma = getattr(self.args, "ner_focal_gamma", 2.0)
-                mask = ner_targets != -1
-                logits_m = ner_logits[mask]
-                targets_m = ner_targets[mask]
-                log_p = torch.nn.functional.log_softmax(logits_m, dim=-1)
-                p_t = log_p.exp().gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ner_loss = (
-                    -((1 - p_t) ** gamma)
-                    * log_p.gather(1, targets_m.unsqueeze(1)).squeeze(1)
-                ).mean()
-            else:
-                ner_loss = CrossEntropyLoss(ignore_index=-1)(ner_logits, ner_targets)
-
+            re_loss = _compute_re_loss(
+                re_prediction_scores, rel_labels, num_labels, self.args
+            )
+            ner_loss = _compute_ner_loss(
+                ner_prediction_scores, ner_labels, num_ner_labels, self.args
+            )
             loss = re_loss + ner_loss
             outputs = (loss, re_loss, ner_loss) + outputs
 
         return outputs
+
+    def forward_all_heads(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        sub_positions=None,
+        ent_numbers=None,
+        **kwargs,
+    ) -> dict[str, tuple]:
+        """Run encoder+HyperGNN once and apply every head.
+
+        Returns ``{dataset_id: (re_logits, ner_logits)}`` for all heads.
+        Only valid for multi-head checkpoints (``dataset_heads`` in config).
+        """
+        if self._head_info is None:
+            raise RuntimeError("forward_all_heads requires a multi-head model.")
+
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+        )
+        hidden_states = self.dropout(outputs[0])
+
+        seq_len = self.max_seq_length
+        max_ent_num = max(ent_numbers)
+        tot_seq_len = input_ids.shape[-1]
+        ent_len = (tot_seq_len - seq_len) // 2
+
+        obj_start_states = hidden_states[:, seq_len : seq_len + ent_len][
+            :, :max_ent_num, :
+        ]
+        obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
+        sub_start_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+        ]
+        sub_end_states = hidden_states[
+            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
+        ]
+
+        sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)
+        obj_reprs = self.obj_encoder(obj_start_states, obj_end_states)
+        rel_reprs = self.rel_encoder(
+            sub_reprs.unsqueeze(-2).expand(obj_reprs.shape), obj_reprs
+        )
+
+        rel_reprs = pad_sequence(
+            torch.split(rel_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=0,
+        )
+        obj_reprs = pad_sequence(
+            torch.split(obj_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=-1e4,
+        )
+        uni_obj_reprs = torch.max(obj_reprs, dim=1)[0]
+        sub_reprs = pad_sequence(
+            torch.split(sub_reprs, ent_numbers.tolist()),
+            batch_first=True,
+            padding_value=0,
+        )
+
+        mask1d = get_ent_mask1d(ent_numbers)
+        mask2d = get_ent_mask2d(ent_numbers)
+        uni_obj_reprs *= mask1d.unsqueeze(-1)
+        rel_reprs *= mask2d.unsqueeze(-1)
+
+        if self.args.layernorm_1st:
+            sub_reprs = self.sub_layernorm(sub_reprs)
+            uni_obj_reprs = self.obj_layernorm(uni_obj_reprs)
+            rel_reprs = self.rel_layernorm(rel_reprs)
+
+        if self.args.factor_type in {
+            "ternary",
+            "tersib",
+            "tercop",
+            "tergp",
+            "tersibcop",
+            "tersibgp",
+            "tercopgp",
+            "tersibcopgp",
+        }:
+            sub_reprs, uni_obj_reprs, rel_reprs = self.htnnlayer(
+                sub_reprs, uni_obj_reprs, rel_reprs, ent_numbers
+            )
+        elif self.args.factor_type in {"sib", "cop", "gp", "sibcop", "sibgp", "copgp"}:
+            rel_reprs = self.htnnlayer(rel_reprs, ent_numbers)
+
+        return {
+            ds_id: (
+                self.rel_heads[ds_id](rel_reprs).float(),
+                _apply_ner_head(
+                    self.ner_heads[ds_id], sub_reprs, uni_obj_reprs, self.args.ent_repr
+                ).float(),
+            )
+            for ds_id in self._head_info
+        }
 
 
 def get_ent_mask1d(n_ents, max_num=None):

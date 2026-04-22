@@ -1,0 +1,12 @@
+train_file: datasets/unified-sciere/unified_train.jsonl
+dev_file: datasets/unified-sciere/unified_dev.jsonl
+max_span_length: 20
+max_ngram: 14
+max_entity_rate: 0.0
+min_count_ratio: 0.01
+pattern_types: "prefix,suffix,full,infix,before,after"
+max_tokens: 3
+train_split: 0.8
+seed: 42
+target_fn: 2
+save: datasets/unified-sciere/pre-filter/rules.json

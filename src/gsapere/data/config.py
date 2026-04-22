@@ -91,3 +91,20 @@ class RelationDatasetParams(BaseModel):
             "and predicted_ner_proba. Gives an oracle upper bound for the HGERE stage."
         ),
     )
+    dataset_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Dataset identifier for multi-head training (e.g. 'scier', 'scinlp', 'gsap'). "
+            "When set, batches include this string so the model selects the correct heads. "
+            "Leave None for single-dataset training."
+        ),
+    )
+    dataset_cls_token_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "Pre-resolved token ID of the [unusedX] slot to substitute at position 0 "
+            "instead of [CLS]. Set by the training/inference orchestration code from "
+            "the model config's dataset_cls_token_ids mapping. When None, no substitution "
+            "is performed. Requires dataset_id to be set (for head routing)."
+        ),
+    )

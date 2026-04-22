@@ -35,6 +35,7 @@ import json
 import shutil
 import timeit
 from collections import defaultdict
+from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
 from typing import Literal
@@ -49,6 +50,9 @@ _EVAL_KEYS = [
     "sub_positions",
     "ent_numbers",
 ]
+
+# Keys passed to the model without moving to a CUDA device.
+_NON_TENSOR_KEYS = {"dataset_id"}
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +321,7 @@ def infer_hgere(
             ent_counts = batch["ent_numbers"]
 
             inputs = {k: v.to(args.device) for k, v in batch.items() if k in _EVAL_KEYS}
+            inputs.update({k: v for k, v in batch.items() if k in _NON_TENSOR_KEYS})
 
             if inputs["ent_numbers"].sum() == 0:
                 ner_predictions.update({tuple(si): {} for si in sent_indices})
@@ -370,6 +375,142 @@ def infer_hgere(
 
     elapsed = timeit.default_timer() - start_time
     logger.info("Fixed-span inference done in %.1f s", elapsed)
+
+
+@dataclass
+class LabelMeta:
+    """Label-set metadata needed for decoding model outputs."""
+
+    ner_label_list: list[str]
+    sym_labels: list[str]
+    label_list: list[str]
+
+
+def infer_hgere_multi(
+    model,
+    eval_dataset,
+    label_metas: dict[str, "LabelMeta"],
+    args,
+    logger,
+    source_file_path: str,
+    output_paths: dict[str, str],
+    gold_only: bool = False,
+    disable_progress: bool = False,
+    debug_break_on_first_rel: bool = False,
+    debug_log_rel_probs: bool = False,
+) -> None:
+    """Run all multi-heads in one forward pass per batch.
+
+    The encoder and HyperGNN run once per batch; every head is applied to the
+    shared representations.  Results are written to per-label-set output files.
+
+    Args:
+        model: Loaded multi-head HGERE model.
+        eval_dataset: A single RelationDataset whose DataLoader is used.
+            Candidate spans are label-set agnostic (pruner output).
+        label_metas: Mapping ``{label_set: LabelMeta}`` with label lists for
+            decoding each head's output.
+        args: Inference args (device, etc.).
+        logger: Python logger.
+        source_file_path: Path to the original data file (with gold ``ner``).
+        output_paths: Mapping ``{label_set: output_path}`` for writing results.
+        gold_only: Filter predictions to gold span endpoints only.
+        disable_progress: Suppress tqdm bars.
+        debug_break_on_first_rel: Raise after the first predicted relation.
+        debug_log_rel_probs: Log top-5 relation probabilities per span pair.
+    """
+    model.eval()
+    start_time = timeit.default_timer()
+
+    label_sets = list(label_metas.keys())
+
+    ner_predictions_all: dict[str, dict] = {ls: {} for ls in label_sets}
+    rel_predictions_all: dict[str, dict] = {ls: defaultdict(list) for ls in label_sets}
+
+    precomputed: dict[str, tuple] = {}
+    for ls, meta in label_metas.items():
+        rel_label_list = list(meta.label_list)
+        n_rel_label = len(rel_label_list)
+        sym_labels = list(meta.sym_labels)
+        n_syms = len(sym_labels)
+        n_unsyms = n_rel_label - n_syms
+        precomputed[ls] = (rel_label_list, n_rel_label, sym_labels, n_syms, n_unsyms)
+
+    with torch.no_grad():
+        for batch in tqdm(
+            eval_dataset.loader,
+            desc="ERE inference (multi-head)",
+            total=len(eval_dataset.loader),
+            disable=disable_progress,
+        ):
+            sent_indices = batch["indices"]
+            obj_mentions = batch["obj_token_pos"]
+            ent_counts = batch["ent_numbers"]
+
+            inputs = {k: v.to(args.device) for k, v in batch.items() if k in _EVAL_KEYS}
+
+            if inputs["ent_numbers"].sum() == 0:
+                for ls in label_sets:
+                    ner_predictions_all[ls].update(
+                        {tuple(si): {} for si in sent_indices}
+                    )
+                continue
+
+            all_outputs = model.forward_all_heads(**inputs)
+
+            for ls, (re_logits_raw, ner_logits) in all_outputs.items():
+                if ls not in label_metas:
+                    continue
+                rel_label_list, n_rel_label, sym_labels, n_syms, n_unsyms = precomputed[
+                    ls
+                ]
+                ner_label_list = label_metas[ls].ner_label_list
+
+                rel_logits = torch.nn.functional.log_softmax(re_logits_raw, dim=-1)
+                ner_preds = torch.argmax(ner_logits, dim=-1)
+
+                ner_predictions_all[ls].update(
+                    _decode_ner_batch(
+                        sent_indices,
+                        obj_mentions,
+                        ner_preds,
+                        ner_logits,
+                        ner_label_list,
+                    )
+                )
+                batch_rels = _decode_relation_batch(
+                    sent_indices,
+                    obj_mentions,
+                    ent_counts,
+                    rel_logits,
+                    ner_predictions_all[ls],
+                    rel_label_list,
+                    n_syms,
+                    n_rel_label,
+                    n_unsyms,
+                    logger,
+                    debug_log_rel_probs=debug_log_rel_probs,
+                    debug_break_on_first_rel=debug_break_on_first_rel,
+                )
+                for sent_id, rels in batch_rels.items():
+                    rel_predictions_all[ls][sent_id].extend(rels)
+
+    for ls in label_sets:
+        tot_ner, tot_ner_proba, tot_rel, tot_rel_proba = _collect_per_sentence_output(
+            ner_predictions_all[ls], rel_predictions_all[ls]
+        )
+        _write_predictions(
+            source_file_path,
+            output_paths[ls],
+            tot_ner,
+            tot_ner_proba,
+            tot_rel,
+            tot_rel_proba,
+            gold_only,
+        )
+
+    elapsed = timeit.default_timer() - start_time
+    logger.info("Multi-head inference done in %.1f s", elapsed)
 
 
 def prepare_input_file(

@@ -1,0 +1,17 @@
+ner:
+    - Method
+    - Dataset
+    - Task
+
+relations:
+    symmetric:
+        - coreference
+        - isComparedTo
+    non_symmetric:
+        - appliedTo
+        - benchmarkFor
+        - trainedEvaluatedOn
+        - coreference
+        - isHyponymOf
+        - isComparedTo
+        - usedFor

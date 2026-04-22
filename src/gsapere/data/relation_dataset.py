@@ -66,6 +66,10 @@ class RelationDataset(DocumentDataset):
         self.local_rank = params.local_rank
         self.split = params.split
         self.use_gold_ner = params.use_gold_ner
+        self.dataset_id = params.dataset_id
+        # Pre-resolved [unusedX] token ID to substitute at position 0 instead of [CLS].
+        # None means no substitution (standard behaviour).
+        self._dataset_cls_token_id = params.dataset_cls_token_id
 
         self.ner_label_list: list[str] = labels.ner
         self.sym_labels: list[str] = labels.rel.symmetric(only_nil=self.no_sym)
@@ -820,6 +824,8 @@ class RelationDataset(DocumentDataset):
             input_ids = self.tokenizer.convert_tokens_to_ids(
                 entry.subject_marked_tokens
             )
+            if self._dataset_cls_token_id is not None:
+                input_ids[0] = self._dataset_cls_token_id
             input_seq_len = len(input_ids)
             input_ids += [self.tokenizer.pad_token_id] * (
                 self.max_seq_length - input_seq_len
@@ -879,7 +885,7 @@ class RelationDataset(DocumentDataset):
             rel_labels_t = torch.tensor(rel_labels_list, dtype=torch.int64)
             ner_labels_t = torch.tensor(sent.ner_labels, dtype=torch.int64)
 
-        return dict(
+        item = dict(
             indices=sent.index,
             input_ids=input_ids_t,
             attention_mask=attention_mask_t,
@@ -892,6 +898,9 @@ class RelationDataset(DocumentDataset):
             n_ent=n_subject_candidates,
             subtoken_len=self.max_seq_length,
         )
+        if self.dataset_id is not None:
+            item["dataset_id"] = self.dataset_id
+        return item
 
     # ------------------------------------------------------------------
     # DataLoader construction

@@ -36,7 +36,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         result = runner.run([])
         assert result == []
@@ -50,7 +50,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         with patch(
             "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
@@ -69,7 +69,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         with patch(
             "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
@@ -88,7 +88,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         with patch(
             "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
@@ -107,7 +107,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         with patch(
             "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
@@ -128,7 +128,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         with patch(
             "gsapere.pipeline.hgere_runner.HGERERunner._run_inference"
@@ -150,7 +150,7 @@ class TestHGERERunner:
         runner._model = MagicMock()
         runner._tokenizer = MagicMock()
         runner._device = "cpu"
-        runner._label_set = "gsap"
+        runner._label_sets = ["gsap"]
 
         created_paths: list[str] = []
 
@@ -181,7 +181,7 @@ class TestHGERERunner:
             MockDS.return_value = MagicMock()
             MockDS.return_value.build = MagicMock()
             MockLabels.__getitem__ = MagicMock(return_value=MagicMock())
-            runner._run_inference([tiny_doc_with_candidates])
+            runner._run_inference([tiny_doc_with_candidates], label_set="gsap")
 
         # All temp files should be cleaned up
         for p in created_paths:

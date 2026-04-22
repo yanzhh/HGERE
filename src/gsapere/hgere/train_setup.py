@@ -10,10 +10,14 @@ import torch
 import wandb
 
 from ..data.config import RelationDatasetParams
+from ..data.multi_dataset import MultiRelationDataset
 from ..data.relation_dataset import RelationDataset
-from ..data.tokenizer_utils import adjust_tokenizer as _adjust_tokenizer
-from ..hgere.evaluate import evaluate, get_checkpoints
-from ..hgere.train import log_candidate_stats_to_wandb, train
+from ..data.tokenizer_utils import (
+    add_dataset_cls_tokens,
+    adjust_tokenizer as _adjust_tokenizer,
+)
+from ..hgere.evaluate import get_checkpoints
+from ..hgere.train import _evaluate_multi_or_single, log_candidate_stats_to_wandb, train
 from ..labels import LABELS
 from ..models.hgere import MODEL_CLASSES
 from ..utils import set_seed
@@ -75,6 +79,23 @@ def setup_training(args, logger):
     config.max_seq_length = args.max_seq_length
     config.alpha = args.alpha
     config.num_ner_labels = args.num_ner_labels
+
+    # Multi-dataset: attach per-dataset head config to HF config so that the
+    # model __init__ builds nn.ModuleDicts instead of single heads.
+    datasets_cfg = getattr(args, "datasets", None)
+    if datasets_cfg is not None:
+        config.dataset_heads = {
+            ds_entry.label_set: {
+                "num_ner_labels": LABELS[ds_entry.label_set].num_ner_labels,
+                "num_rel_labels": LABELS[ds_entry.label_set].num_rel_labels(
+                    args.no_sym
+                ),
+            }
+            for ds_entry in datasets_cfg
+        }
+    else:
+        config.dataset_heads = None
+
     _transformers_logger = logging.getLogger("transformers.modeling_utils")
     _prev_level = _transformers_logger.level
     _transformers_logger.setLevel(logging.ERROR)
@@ -100,6 +121,27 @@ def setup_training(args, logger):
         logger=logger,
     )
 
+    if args.do_train and getattr(args, "use_dataset_id_token_as_cls", False):
+        if datasets_cfg is None:
+            raise ValueError(
+                "use_dataset_id_token_as_cls requires multi-dataset mode (datasets list)"
+            )
+        dataset_cls_mapping = add_dataset_cls_tokens(
+            tokenizer=tokenizer,
+            model=model,
+            model_type=args.model_type,
+            dataset_names=[ds.label_set for ds in datasets_cfg],
+            start_unused_idx=n_special_tokens,
+            logger=logger,
+        )
+        # Persist the mapping in the HF model config (→ config.json) and on
+        # args (→ training_args.bin) so inference can recover token IDs without
+        # needing a separately-saved tokenizer.
+        config.dataset_cls_token_ids = dataset_cls_mapping
+        args.dataset_cls_token_ids = dataset_cls_mapping
+    else:
+        args.dataset_cls_token_ids = {}
+
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
@@ -111,10 +153,15 @@ def setup_training(args, logger):
     if args.do_train:
         logger.info("TRAINING")
         logger.info("+" * 20)
-        train_dataset = load_dataset("train", tokenizer, args, logger)
-        _log_entity_stats("train", train_dataset, logger)
-        dev_dataset = load_dataset("dev", tokenizer, args, logger)
-        _log_entity_stats("dev", dev_dataset, logger)
+        if datasets_cfg is not None:
+            train_dataset, dev_dataset = _load_multi_datasets(
+                datasets_cfg, tokenizer, args, logger
+            )
+        else:
+            train_dataset = load_dataset("train", tokenizer, args, logger)
+            _log_entity_stats("train", train_dataset, logger)
+            dev_dataset = load_dataset("dev", tokenizer, args, logger)
+            _log_entity_stats("dev", dev_dataset, logger)
         global_step, tr_loss, best_f1, best_result = train(
             model, train_dataset, dev_dataset, args, logger
         )
@@ -133,14 +180,35 @@ def setup_training(args, logger):
             logger.info(f"No checkpoints available in {args.model_dir}")
         # Load datasets if needed:
         if args.eval_test:
-            test_dataset = load_dataset("test", tokenizer, args, logger)
-            _log_entity_stats("test", test_dataset, logger)
-            log_candidate_stats_to_wandb("test", test_dataset.candidate_stats)
+            if datasets_cfg is not None:
+                _, test_dataset = _load_multi_datasets(
+                    datasets_cfg, tokenizer, args, logger, splits=("test", "test")
+                )
+            else:
+                test_dataset = load_dataset("test", tokenizer, args, logger)
+                _log_entity_stats("test", test_dataset, logger)
+                log_candidate_stats_to_wandb("test", test_dataset.candidate_stats)
         if not args.do_train:
             if args.eval_train:
-                train_dataset = load_dataset("train", tokenizer, args, logger)
+                if datasets_cfg is not None:
+                    # Return the train dict directly (not wrapped in MultiRelationDataset)
+                    # so _evaluate_multi_or_single can route per-dataset.
+                    _, train_dataset = _load_multi_datasets(
+                        datasets_cfg,
+                        tokenizer,
+                        args,
+                        logger,
+                        splits=("train", "train"),
+                    )
+                else:
+                    train_dataset = load_dataset("train", tokenizer, args, logger)
             if args.eval_dev:
-                dev_dataset = load_dataset("dev", tokenizer, args, logger)
+                if datasets_cfg is not None:
+                    _, dev_dataset = _load_multi_datasets(
+                        datasets_cfg, tokenizer, args, logger
+                    )
+                else:
+                    dev_dataset = load_dataset("dev", tokenizer, args, logger)
         for checkpoint in checkpoints:
             report: dict[str, Any] = {}
             if best_result:
@@ -153,12 +221,22 @@ def setup_training(args, logger):
                     checkpoint, config=config, args=args
                 )
                 model.to(args.device)
-                logger.info(
-                    f"[WEIGHT CHECK after reload] rel_cls.weight sum: "
-                    f"{model.rel_cls.weight.data.sum():.6f}  "
-                    f"ner_cls last weight sum: "
-                    f"{list(model.ner_cls.parameters())[-1].data.sum():.6f}"
-                )
+                if hasattr(model, "rel_heads"):
+                    _first_rel = next(iter(model.rel_heads.values()))
+                    _first_ner = next(iter(model.ner_heads.values()))
+                    logger.info(
+                        f"[WEIGHT CHECK after reload] rel_heads[first].weight sum: "
+                        f"{_first_rel.weight.data.sum():.6f}  "
+                        f"ner_heads[first] last weight sum: "
+                        f"{list(_first_ner.parameters())[-1].data.sum():.6f}"
+                    )
+                else:
+                    logger.info(
+                        f"[WEIGHT CHECK after reload] rel_cls.weight sum: "
+                        f"{model.rel_cls.weight.data.sum():.6f}  "
+                        f"ner_cls last weight sum: "
+                        f"{list(model.ner_cls.parameters())[-1].data.sum():.6f}"
+                    )
             # eval train
             _SPLIT_KEYS = {
                 "ner_precision",
@@ -172,15 +250,15 @@ def setup_training(args, logger):
                 "re+_f1",
             }
             if args.eval_train:
-                train_results = evaluate(
+                train_results = _evaluate_multi_or_single(
                     model,
                     train_dataset,
                     args,
                     logger,
-                    prefix=global_step,
                     persist_predictions=True,
+                    prefix=global_step,
                 )
-                report[args.train_file] = train_results
+                report["train"] = train_results
                 if wandb.run is not None:
                     wandb.log(
                         {
@@ -192,25 +270,25 @@ def setup_training(args, logger):
                     )
             # eval dev
             if args.eval_dev:
-                report[args.dev_file] = evaluate(
+                report["dev"] = _evaluate_multi_or_single(
                     model,
                     dev_dataset,
                     args,
                     logger,
-                    prefix=global_step,
                     persist_predictions=True,
+                    prefix=global_step,
                 )
             # eval test
             if args.eval_test:
-                test_results = evaluate(
+                test_results = _evaluate_multi_or_single(
                     model,
                     test_dataset,
                     args,
                     logger,
-                    prefix=global_step,
                     persist_predictions=True,
+                    prefix=global_step,
                 )
-                report[args.test_file] = test_results
+                report["test"] = test_results
                 if wandb.run is not None:
                     wandb.log(
                         {
@@ -228,10 +306,113 @@ def setup_training(args, logger):
             with open(output_test_file, "w") as f:
                 json.dump(report, f, indent=4)
 
+    if wandb.run is not None:
+        wandb.finish()
+
 
 # ---------------------------------------------------------------------------
 # Dataset loading
 # ---------------------------------------------------------------------------
+
+
+def _load_dataset_for_entry(
+    split: str,
+    ds_entry: Any,
+    tokenizer: Any,
+    args: Any,
+    logger: logging.Logger,
+) -> RelationDataset:
+    """Load one dataset split for a :class:`~gsapere.hgere.config.DatasetEntry`."""
+    file_map = {
+        "train": ds_entry.train_file,
+        "dev": ds_entry.dev_file,
+        "test": ds_entry.test_file,
+    }
+    file_path = Path(ds_entry.ner_prediction_dir) / file_map[split]
+    logger.info(f"  [{ds_entry.label_set}] {split} file: {file_path}")
+    assert os.path.isfile(file_path), (
+        f"Missing {split} file for {ds_entry.label_set}: {file_path}"
+    )
+
+    labels = LABELS[ds_entry.label_set]
+    batch_size = (
+        args.train_batch_size
+        if split == "train"
+        else args.eval_batch_size * max(1, args.n_gpu)
+    )
+    params = RelationDatasetParams(
+        max_seq_length=args.max_seq_length,
+        model_type=args.model_type,
+        use_typemarker=args.use_typemarker,
+        no_sym=args.no_sym,
+        nocross=args.nocross,
+        local_rank=args.local_rank,
+        split=split,
+        preload=args.preload_dataset,
+        pre_filter_params=getattr(args, "pre_filter_params", None),
+        max_ents=args.max_ents,
+        use_gold_ner=getattr(args, "use_gold_ner", False),
+        dataset_id=ds_entry.label_set,
+        dataset_cls_token_id=(getattr(args, "dataset_cls_token_ids", None) or {}).get(
+            ds_entry.label_set
+        ),
+    )
+    dataset = RelationDataset(
+        logger=logger,
+        tokenizer=tokenizer,
+        labels=labels,
+        file_path=file_path,
+        params=params,
+    )
+    dataset.build(
+        batch_size=batch_size,
+        shuffle=args.shuffle and split == "train",
+        batch_by_size=getattr(args, "batch_by_size", False),
+        n_workers=getattr(args, "n_workers", 32),
+        pin_memory=True,
+    )
+    logger.info("    [%s] %s examples = %d", ds_entry.label_set, split, len(dataset))
+    return dataset
+
+
+def _load_multi_datasets(
+    datasets_cfg: Any,
+    tokenizer: Any,
+    args: Any,
+    logger: logging.Logger,
+    splits: tuple[str, str] = ("train", "dev"),
+) -> tuple[Any, dict[str, RelationDataset]]:
+    """Load all datasets for a list of :class:`~gsapere.hgere.config.DatasetEntry`.
+
+    Returns:
+        A 2-tuple ``(train_wrapper, eval_dict)`` where *train_wrapper* is a
+        :class:`MultiRelationDataset` (or ``None`` when ``splits[0] != "train"``)
+        and *eval_dict* maps dataset name → dataset for the eval split.
+    """
+    train_split, eval_split = splits
+    train_datasets: dict[str, RelationDataset] = {}
+    eval_datasets: dict[str, RelationDataset] = {}
+    for ds_entry in datasets_cfg:
+        if train_split == eval_split:
+            # Both sides want the same split (e.g. test/test)
+            ds = _load_dataset_for_entry(train_split, ds_entry, tokenizer, args, logger)
+            train_datasets[ds_entry.label_set] = ds
+            eval_datasets[ds_entry.label_set] = ds
+        else:
+            train_datasets[ds_entry.label_set] = _load_dataset_for_entry(
+                train_split, ds_entry, tokenizer, args, logger
+            )
+            eval_datasets[ds_entry.label_set] = _load_dataset_for_entry(
+                eval_split, ds_entry, tokenizer, args, logger
+            )
+
+    sampling_weights = {ds.label_set: ds.sampling_weight for ds in datasets_cfg}
+    train_wrapper = MultiRelationDataset(
+        datasets=train_datasets,
+        sampling_temperature=getattr(args, "sampling_temperature", 0.5),
+        sampling_weights=sampling_weights,
+    )
+    return train_wrapper, eval_datasets
 
 
 def load_dataset(

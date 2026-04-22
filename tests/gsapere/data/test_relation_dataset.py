@@ -612,3 +612,164 @@ class TestSymmetricRelationHandling:
         ds = _make_dataset(path, mock_tokenizer, mock_labels_with_sym, params_sym)
         sym_gold = [e for e in ds.golden_labels if e[-1] == "Similar"]
         assert len(sym_gold) == 1
+
+
+# ---------------------------------------------------------------------------
+# dataset_id propagation (multi-head support)
+# ---------------------------------------------------------------------------
+
+
+class TestDatasetIdPropagation:
+    def test_dataset_id_stored_on_dataset(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+    ) -> None:
+        params = RelationDatasetParams(
+            max_seq_length=64,
+            use_typemarker=False,
+            local_rank=-1,
+            model_type="bert",
+            no_sym=True,
+            nocross=False,
+            dataset_id="scier",
+        )
+        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, params)
+        assert ds.dataset_id == "scier"
+
+    def test_dataset_id_none_by_default(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        ds = _make_dataset(
+            relation_jsonl_path, mock_tokenizer, mock_labels, relation_params
+        )
+        assert ds.dataset_id is None
+
+    def test_prepare_item_includes_dataset_id(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+    ) -> None:
+        params = RelationDatasetParams(
+            max_seq_length=64,
+            use_typemarker=False,
+            local_rank=-1,
+            model_type="bert",
+            no_sym=True,
+            nocross=False,
+            dataset_id="scier",
+        )
+        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, params)
+        item = ds.prepare_item(0)
+        assert "dataset_id" in item
+        assert item["dataset_id"] == "scier"
+
+    def test_prepare_item_no_dataset_id_key_when_none(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        ds = _make_dataset(
+            relation_jsonl_path, mock_tokenizer, mock_labels, relation_params
+        )
+        item = ds.prepare_item(0)
+        assert "dataset_id" not in item
+
+    def test_collated_batch_includes_dataset_id(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+    ) -> None:
+        from gsapere.data.collators import RelationCollator
+
+        params = RelationDatasetParams(
+            max_seq_length=64,
+            use_typemarker=False,
+            local_rank=-1,
+            model_type="bert",
+            no_sym=True,
+            nocross=False,
+            dataset_id="scinlp",
+        )
+        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, params)
+        items = [ds.prepare_item(0), ds.prepare_item(1)]
+        collator = RelationCollator(
+            tokenizer_pad_id=mock_tokenizer.pad_token_id, max_seq_length=64
+        )
+        batch = collator(items)
+        assert "dataset_id" in batch
+        assert batch["dataset_id"] == "scinlp"
+
+
+# ---------------------------------------------------------------------------
+# use_dataset_id_token_as_cls — CLS token replacement
+# ---------------------------------------------------------------------------
+
+
+class TestDatasetIdTokenAsCls:
+    """Tests for dataset_cls_token_id: pre-resolved [unusedX] token substitution."""
+
+    def test_no_replacement_when_none(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+    ) -> None:
+        params = RelationDatasetParams(
+            max_seq_length=64,
+            model_type="bert",
+            no_sym=True,
+            dataset_id="scier",
+            dataset_cls_token_id=None,
+        )
+        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, params)
+        assert ds._dataset_cls_token_id is None
+        item = ds.prepare_item(0)
+        if item["n_ent"] > 0:
+            assert item["input_ids"][0][0].item() == 101
+
+    def test_replacement_at_position_zero(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+    ) -> None:
+        # Simulates [unused4]=id 5 being the dataset CLS token for 'scier'
+        dataset_token_id = 5
+        params = RelationDatasetParams(
+            max_seq_length=64,
+            model_type="bert",
+            no_sym=True,
+            dataset_id="scier",
+            dataset_cls_token_id=dataset_token_id,
+        )
+        ds = _make_dataset(relation_jsonl_path, mock_tokenizer, mock_labels, params)
+        assert ds._dataset_cls_token_id == dataset_token_id
+        item = ds.prepare_item(0)
+        if item["n_ent"] > 0:
+            for row in item["input_ids"]:
+                assert row[0].item() == dataset_token_id, (
+                    f"Expected {dataset_token_id} at position 0, got {row[0].item()}"
+                )
+
+    def test_no_replacement_without_token_id(
+        self,
+        relation_jsonl_path: Path,
+        mock_tokenizer: MagicMock,
+        mock_labels: MagicMock,
+        relation_params: RelationDatasetParams,
+    ) -> None:
+        """dataset_cls_token_id defaults to None → no substitution."""
+        ds = _make_dataset(
+            relation_jsonl_path, mock_tokenizer, mock_labels, relation_params
+        )
+        assert ds._dataset_cls_token_id is None

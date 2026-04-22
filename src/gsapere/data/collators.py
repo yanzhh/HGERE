@@ -84,6 +84,7 @@ def _collate_relation_batch(
             item[k] = item[k].unsqueeze(0)
         for k in ["indices", "sub", "obj_token_pos"]:
             item[k] = [item[k]]
+        # dataset_id is a plain string — already present or absent in the item copy
         return item
 
     subject_token_spans: list[Any] = []
@@ -179,7 +180,7 @@ def _collate_relation_batch(
             obj_token_pos.append([])
             subject_token_spans.append([])
 
-    return dict(
+    result = dict(
         indices=indices,
         input_ids=batch_input_ids,
         attention_mask=batch_attn_mask,
@@ -191,3 +192,7 @@ def _collate_relation_batch(
         obj_token_pos=obj_token_pos,
         ent_numbers=ent_numbers,
     )
+    # Propagate dataset_id when present (homogeneous batches share one dataset_id)
+    if "dataset_id" in batch[0]:
+        result["dataset_id"] = batch[0]["dataset_id"]
+    return result

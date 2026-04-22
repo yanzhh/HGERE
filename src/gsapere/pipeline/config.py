@@ -8,12 +8,12 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator, Literal, Optional
+from typing import Generator, Literal, Optional, Union
 
 import transformers
 
 from ..config import load_yaml_strict
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..pre_filter.config import PreFilterParams
 
@@ -116,16 +116,59 @@ class HGEREConfig(BaseModel):
     pre_filter_params: Optional[PreFilterParams] = None
     use_gold_ner: bool = False
     n_workers: int = 4
+    use_dataset_id_token_as_cls: bool = False
 
 
 class PipelineConfig(BaseModel):
-    """Top-level pipeline configuration."""
+    """Top-level pipeline configuration.
+
+    Exactly one of ``label_set`` or ``label_sets`` must be provided:
+
+    - ``label_set: scier`` — single-dataset mode (backward compatible).
+    - ``label_sets: [scier, scinlp]`` — multi-head mode: HGERE runs once per
+      label set and writes separate output files.
+
+    After construction, ``label_sets`` is always a non-empty list regardless of
+    which form was used.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    label_set: str
+    label_set: Optional[str] = Field(
+        default=None,
+        description="Single dataset label set (backward-compatible shorthand).",
+    )
+    label_sets: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "One or more dataset label sets for multi-head inference. "
+            "HGERE runs once per entry and writes separate output files."
+        ),
+    )
+    seeds: Union[int, list[int]] = Field(
+        default=42,
+        description=(
+            "Seed(s) for HGERE model selection. Pass a plain integer to run a single "
+            "un-suffixed model. Pass a list to iterate over seed-specific model "
+            "directories (e.g. hgere.model_dir + '_seed42') and write outputs into "
+            "a '/{seed}/' subfolder."
+        ),
+    )
     pruner: PrunerConfig
     hgere: HGEREConfig
+
+    @model_validator(mode="after")
+    def _normalize_label_sets(self) -> "PipelineConfig":
+        has_single = self.label_set is not None
+        has_multi = self.label_sets is not None
+        if has_single and has_multi:
+            raise ValueError("Set either 'label_set' or 'label_sets', not both.")
+        if not has_single and not has_multi:
+            raise ValueError("One of 'label_set' or 'label_sets' is required.")
+        if not has_multi:
+            # Normalize single → list so callers can always use label_sets.
+            self.label_sets = [self.label_set]
+        return self
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "PipelineConfig":

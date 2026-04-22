@@ -17,7 +17,7 @@ error pointing at the current version.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 
 from ..config import load_yaml_strict
@@ -27,6 +27,34 @@ from ..pre_filter.config import PreFilterParams
 
 if TYPE_CHECKING:
     pass
+
+
+# ---------------------------------------------------------------------------
+# Multi-dataset configuration
+# ---------------------------------------------------------------------------
+
+
+class DatasetEntry(BaseModel):
+    """One dataset in a multi-dataset training setup."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label_set: str = Field(
+        description="Key into the built-in label registry (e.g. 'scier')."
+    )
+    ner_prediction_dir: str = Field(
+        description="Directory containing pruner output files for this dataset."
+    )
+    train_file: str = Field(
+        default="train.json", description="Training split filename."
+    )
+    dev_file: str = Field(default="dev.json", description="Dev split filename.")
+    test_file: str = Field(default="test.json", description="Test split filename.")
+    sampling_weight: float = Field(
+        default=1.0,
+        description="Relative sampling weight for this dataset (before temperature scaling).",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Versioning
@@ -50,6 +78,17 @@ class HGERETrainParams(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_deprecated_seed(cls, data: object) -> object:
+        if isinstance(data, dict) and "seed" in data:
+            raise ValueError(
+                "'train_params.seed' has been moved. "
+                "Use 'seeds' at the top level of the config instead "
+                "(e.g. seeds: 42  or  seeds: [42, 43, 44])."
+            )
+        return data
+
     # ── Data ────────────────────────────────────────────────────────────────
     train_file: str = Field(
         default="train.json",
@@ -64,7 +103,6 @@ class HGERETrainParams(BaseModel):
     )
 
     # ── Optimisation ────────────────────────────────────────────────────────
-    seed: int = Field(default=42, description="Random seed for reproducibility.")
     learning_rate: float = Field(description="Learning rate for BERT layers.")
     learning_rate_cls: float = Field(
         default=-1,
@@ -165,6 +203,13 @@ class HGERETrainParams(BaseModel):
     wandb_entity: optional[str] = field(
         default=none, description="weights & biases entity name to share across wandb users."
     )
+    wandb_group: Optional[str] = Field(
+        default=None,
+        description=(
+            "Weights & Biases group name. When training with multiple seeds, "
+            "automatically set to the base run_name so all seed runs are grouped together."
+        ),
+    )
     log_wandb: bool = Field(
         default=False, description="Whether to log training in W&B."
     )
@@ -263,8 +308,22 @@ class HGERETrainConfig(BaseModel):
     )
 
     # ── Identity ──────────────────────────────────────────────────────────────
-    label_set: str = Field(
-        description="Label set for entity/relation types (e.g. gsap, scier, scinlp)."
+    label_set: Optional[str] = Field(
+        default=None,
+        description=(
+            "Label set for entity/relation types (e.g. gsap, scier, scinlp). "
+            "Required in single-dataset mode; omit when using multi_dataset."
+        ),
+    )
+
+    # ── Seeds ─────────────────────────────────────────────────────────────────
+    seeds: Union[int, list[int]] = Field(
+        default=42,
+        description=(
+            "Random seed(s) for reproducibility. Pass a single integer or a list. "
+            "When a list is given, training/inference runs once per seed and "
+            "'_seed<n>' is appended to model_dir, run_name, and output_dir."
+        ),
     )
 
     # ── Shared inference fields ────────────────────────────────────────────────
@@ -272,8 +331,12 @@ class HGERETrainConfig(BaseModel):
     base_model_name_or_path: str = Field(
         description="Transformer model path or HuggingFace name."
     )
-    ner_prediction_dir: str = Field(
-        description="Input data directory containing pruner output files for HGERE."
+    ner_prediction_dir: Optional[str] = Field(
+        default=None,
+        description=(
+            "Input data directory containing pruner output files for HGERE. "
+            "Required in single-dataset mode; omit when using multi_dataset."
+        ),
     )
     model_type: str = Field(
         default="hyper",
@@ -370,6 +433,34 @@ class HGERETrainConfig(BaseModel):
 
     baseline: str = Field(default="firstorder", description="Baseline method.")
 
+    use_dataset_id_token_as_cls: bool = Field(
+        default=False,
+        description=(
+            "Replace the [CLS] token at position 0 with a dataset-specific token "
+            "(e.g. [SCIER], [SCINLP], [GSAP]). Special tokens are added to the tokenizer "
+            "at training time, initialized from the [CLS] embedding plus small Gaussian noise "
+            "(σ=0.02), and saved in model_dir. Requires multi-dataset mode (datasets list). "
+            "dataset_id is still propagated separately for head routing."
+        ),
+    )
+
+    # ── Multi-dataset training ─────────────────────────────────────────────────
+    datasets: Optional[list[DatasetEntry]] = Field(
+        default=None,
+        description=(
+            "List of datasets for joint multi-dataset training. When set, label_set "
+            "and ner_prediction_dir are not required. Cannot be combined with label_set."
+        ),
+    )
+    sampling_temperature: float = Field(
+        default=0.5,
+        description=(
+            "Temperature for dataset sampling probabilities (multi-dataset mode only). "
+            "p(d) proportional to n_d^temperature * sampling_weight. "
+            "0 = always pick the largest dataset; 1 = proportional to size."
+        ),
+    )
+
     # ── Training parameters ────────────────────────────────────────────────────
     train_params: HGERETrainParams
 
@@ -386,6 +477,31 @@ class HGERETrainConfig(BaseModel):
                 f"Please migrate your config to version {CURRENT_SCHEMA_VERSION}."
             )
         return data
+
+    @model_validator(mode="after")
+    def _check_single_vs_multi_dataset(self) -> "HGERETrainConfig":
+        has_multi = self.datasets is not None
+        has_label_set = self.label_set is not None
+        has_ner_dir = self.ner_prediction_dir is not None
+
+        if has_multi and has_label_set:
+            raise ValueError(
+                "Cannot set both 'label_set' and 'datasets'. "
+                "Use 'label_set' for single-dataset mode or 'datasets' for "
+                "joint multi-dataset training."
+            )
+        if not has_multi:
+            if not has_label_set:
+                raise ValueError(
+                    "Single-dataset mode requires 'label_set'. "
+                    "Provide 'label_set' or use 'datasets' for multi-dataset training."
+                )
+            if not has_ner_dir:
+                raise ValueError(
+                    "Single-dataset mode requires 'ner_prediction_dir'. "
+                    "Provide 'ner_prediction_dir' or use 'datasets' for multi-dataset training."
+                )
+        return self
 
     # ── Factories ─────────────────────────────────────────────────────────────
 

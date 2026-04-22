@@ -22,6 +22,7 @@ from transformers import get_linear_schedule_with_warmup
 
 import wandb
 from gsapere.data.data_types import CandidateStats
+from gsapere.data.multi_dataset import MultiRelationDataset
 from gsapere.hgere.evaluate import evaluate
 from gsapere.utils import set_seed
 
@@ -35,6 +36,70 @@ TRAIN_KEYS = [
     "ent_numbers",
 ]
 
+# Keys that are passed to the model but must NOT be moved to a CUDA device
+# (they are plain Python scalars / strings).
+_NON_TENSOR_KEYS = {"dataset_id"}
+
+
+def _evaluate_multi_or_single(
+    model: Any,
+    eval_dataset: Any,
+    args: Any,
+    logger: Any,
+    persist_predictions: bool = False,
+    prefix: str = "",
+) -> dict[str, float]:
+    """Evaluate on a single or multi-dataset eval set.
+
+    When *eval_dataset* is a ``dict[str, RelationDataset]`` or a
+    :class:`~gsapere.data.multi_dataset.MultiRelationDataset`, each dataset is
+    evaluated independently. Prediction files are written to
+    ``<model_dir>/<dataset_name>/`` so results stay separated by dataset.
+
+    Returns per-dataset metrics under ``{name}/{metric}`` keys plus a
+    macro-averaged ``re+_f1`` used for best-model checkpoint selection.
+    """
+    import copy
+
+    # Normalise: both dict and MultiRelationDataset expose a datasets dict
+    if isinstance(eval_dataset, MultiRelationDataset):
+        datasets_dict = eval_dataset.datasets
+    elif isinstance(eval_dataset, dict):
+        datasets_dict = eval_dataset
+    else:
+        datasets_dict = None
+
+    if datasets_dict is not None:
+        per_dataset: dict[str, dict[str, float]] = {}
+        for name, ds in datasets_dict.items():
+            # Write each dataset's predictions to <model_dir>/<dataset_name>/
+            ds_args = copy.copy(args)
+            ds_args.output_dir = str(Path(args.model_dir) / name)
+            per_dataset[name] = evaluate(
+                model,
+                ds,
+                ds_args,
+                logger,
+                prefix=prefix,
+                persist_predictions=persist_predictions,
+            )
+        merged: dict[str, float] = {}
+        for name, results in per_dataset.items():
+            for k, v in results.items():
+                merged[f"{name}/{k}"] = v
+        merged["re+_f1"] = sum(r["re+_f1"] for r in per_dataset.values()) / len(
+            per_dataset
+        )
+        return merged
+    return evaluate(
+        model,
+        eval_dataset,
+        args,
+        logger,
+        prefix=prefix,
+        persist_predictions=persist_predictions,
+    )
+
 
 def log_candidate_stats_to_wandb(split: str, stats: CandidateStats) -> None:
     """Log pruner candidate quality stats for one split to W&B.
@@ -43,18 +108,23 @@ def log_candidate_stats_to_wandb(split: str, stats: CandidateStats) -> None:
     """
     if wandb.run is None:
         return
-    wandb.log(
-        {
-            f"data/{split}/n_gold": stats.n_gold,
-            f"data/{split}/n_candidates": stats.n_candidates,
-            f"data/{split}/n_tp": stats.n_tp,
-            f"data/{split}/n_fp": stats.n_fp,
-            f"data/{split}/n_fn": stats.n_fn,
-            f"data/{split}/recall": stats.recall,
-            f"data/{split}/precision": stats.precision,
-        },
-        step=0,
-    )
+    if type(stats) is not dict:
+        stats = {"": stats}
+    for ds, ds_stats in stats.items():
+        if ds:
+            ds = f"/{ds}"
+        wandb.log(
+            {
+                f"data{ds}/{split}/n_gold": ds_stats.n_gold,
+                f"data{ds}/{split}/n_candidates": ds_stats.n_candidates,
+                f"data{ds}/{split}/n_tp": ds_stats.n_tp,
+                f"data{ds}/{split}/n_fp": ds_stats.n_fp,
+                f"data{ds}/{split}/n_fn": ds_stats.n_fn,
+                f"data{ds}/{split}/recall": ds_stats.recall,
+                f"data{ds}/{split}/precision": ds_stats.precision,
+            },
+            step=0,
+        )
 
 
 def train(
@@ -73,10 +143,17 @@ def train(
             wandb_params["name"] = args.run_name
         if args.wandb_entity is not None:
             wandb_params["entitiy"] = args.wandb_entity
+        if args.wandb_group is not None:
+            wandb_params["group"] = args.wandb_group
         wandb.init(**wandb_params)
         log_wandb = True
-        log_candidate_stats_to_wandb("train", train_dataset.candidate_stats)
-        log_candidate_stats_to_wandb("dev", eval_dataset.candidate_stats)
+        if isinstance(eval_dataset, dict):
+            for ds_name, ds in eval_dataset.items():
+                log_candidate_stats_to_wandb(f"dev/{ds_name}", ds.candidate_stats)
+        else:
+            log_candidate_stats_to_wandb("dev", eval_dataset.candidate_stats)
+        if hasattr(train_dataset, "candidate_stats"):
+            log_candidate_stats_to_wandb("train", train_dataset.candidate_stats)
         # ner_prediction_dir_name = Path(args.ner_prediction_dir).name
         # output_dir_name = Path(args.model_dir).name
         # tb_writer = SummaryWriter(
@@ -255,7 +332,8 @@ def train(
 
             for k, v in batch.items():
                 if k in input_keys:
-                    v = v.to(args.device)
+                    inputs[k] = v.to(args.device)
+                elif k in _NON_TENSOR_KEYS:
                     inputs[k] = v
             # Compute loss weighting alpha (RE share): static or dynamic sigmoid schedule
             if args.train_time_loss_weighting:
@@ -378,7 +456,7 @@ def train(
                 (epoch_num + 1) % args.eval_epochs == 0
                 or epoch_num + 1 == args.num_train_epochs
             ):  # Only evaluate when single GPU otherwise metrics may not average well
-                results = evaluate(model, eval_dataset, args, logger)
+                results = _evaluate_multi_or_single(model, eval_dataset, args, logger)
                 f1_re_plus = results["re+_f1"]
                 if log_wandb:
                     _EVAL_KEYS = {
@@ -415,12 +493,24 @@ def train(
                     best_f1 = f1_re_plus
                     best_result = results
                     logger.info(f"New Best F1+: {best_f1}")
-                    logger.info(
-                        f"[WEIGHT CHECK before save] rel_cls.weight sum: "
-                        f"{model.rel_cls.weight.data.sum():.6f}  "
-                        f"ner_cls last weight sum: "
-                        f"{list(model.ner_cls.parameters())[-1].data.sum():.6f}"
-                    )
+                    _model_inner = model.module if hasattr(model, "module") else model
+                    if hasattr(_model_inner, "rel_heads"):
+                        # Multi-head: log first head for diagnostic purposes
+                        _first_rel = next(iter(_model_inner.rel_heads.values()))
+                        _first_ner = next(iter(_model_inner.ner_heads.values()))
+                        logger.info(
+                            f"[WEIGHT CHECK before save] rel_heads[first].weight sum: "
+                            f"{_first_rel.weight.data.sum():.6f}  "
+                            f"ner_heads[first] last weight sum: "
+                            f"{list(_first_ner.parameters())[-1].data.sum():.6f}"
+                        )
+                    else:
+                        logger.info(
+                            f"[WEIGHT CHECK before save] rel_cls.weight sum: "
+                            f"{_model_inner.rel_cls.weight.data.sum():.6f}  "
+                            f"ner_cls last weight sum: "
+                            f"{list(_model_inner.ner_cls.parameters())[-1].data.sum():.6f}"
+                        )
                     # @TODO: also save optimizer, scheduler, scaler and best_f1
                     #        Then further training from a checkpoint is possible
                     _save_model(
