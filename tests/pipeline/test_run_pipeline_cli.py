@@ -179,6 +179,57 @@ def _make_mock_pipeline(docs: list[dict]) -> MagicMock:
     return mock
 
 
+def _make_mock_config(
+    label_sets: list[str] | None = None, seeds: int | list[int] = 42
+) -> MagicMock:
+    """Return a MagicMock that mimics PipelineConfig with working model_copy semantics."""
+    cfg = MagicMock()
+    cfg.label_sets = label_sets if label_sets is not None else ["scier"]
+    cfg.seeds = seeds
+    cfg.hgere.model_dir = "saves/hgere/model"
+
+    def hgere_copy(update: dict | None = None) -> MagicMock:
+        new_h = MagicMock()
+        new_h.model_dir = (update or {}).get("model_dir", cfg.hgere.model_dir)
+        return new_h
+
+    cfg.hgere.model_copy.side_effect = hgere_copy
+
+    def config_copy(update: dict | None = None) -> MagicMock:
+        upd = update or {}
+        new_c = MagicMock()
+        new_c.hgere = upd.get("hgere", cfg.hgere)
+        new_c.label_sets = upd.get("label_sets", cfg.label_sets)
+        new_c.seeds = upd.get("seeds", cfg.seeds)
+        return new_c
+
+    cfg.model_copy.side_effect = config_copy
+    return cfg
+
+
+def _patch_cli(mock_pipeline: MagicMock, mock_config: MagicMock | None = None):
+    """Context manager that patches PipelineConfig.from_yaml and Pipeline constructor."""
+    from contextlib import ExitStack
+
+    if mock_config is None:
+        mock_config = _make_mock_config()
+
+    stack = ExitStack()
+    stack.enter_context(
+        patch(
+            "gsapere.commands.run_pipeline.PipelineConfig.from_yaml",
+            return_value=mock_config,
+        )
+    )
+    stack.enter_context(
+        patch(
+            "gsapere.commands.run_pipeline.Pipeline",
+            return_value=mock_pipeline,
+        )
+    )
+    return stack
+
+
 class TestCliSingleFile:
     def test_single_file_writes_output(self, tmp_path: Path) -> None:
         docs = [_make_doc("d0"), _make_doc("d1")]
@@ -188,7 +239,7 @@ class TestCliSingleFile:
 
         mock_pipeline = _make_mock_pipeline(docs)
         with (
-            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
+            _patch_cli(mock_pipeline),
             patch.object(
                 sys,
                 "argv",
@@ -203,7 +254,6 @@ class TestCliSingleFile:
                 ],
             ),
         ):
-            MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
 
         assert output_file.exists()
@@ -221,7 +271,7 @@ class TestCliSingleFile:
 
         mock_pipeline = _make_mock_pipeline(docs)
         with (
-            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
+            _patch_cli(mock_pipeline),
             patch.object(
                 sys,
                 "argv",
@@ -234,14 +284,13 @@ class TestCliSingleFile:
                 ],
             ),
         ):
-            MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
 
         assert expected_output.exists()
 
     def test_missing_input_exits(self, tmp_path: Path) -> None:
         with (
-            patch("gsapere.commands.run_pipeline.Pipeline"),
+            _patch_cli(_make_mock_pipeline([])),
             patch.object(
                 sys,
                 "argv",
@@ -273,7 +322,7 @@ class TestCliDirectoryMode:
         mock_pipeline = _make_mock_pipeline(docs_a + docs_b)
 
         with (
-            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
+            _patch_cli(mock_pipeline),
             patch.object(
                 sys,
                 "argv",
@@ -288,7 +337,6 @@ class TestCliDirectoryMode:
                 ],
             ),
         ):
-            MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
 
         assert (output_dir / "a.jsonl").exists()
@@ -302,7 +350,7 @@ class TestCliDirectoryMode:
 
         mock_pipeline = _make_mock_pipeline([_make_doc("x")])
         with (
-            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
+            _patch_cli(mock_pipeline),
             patch.object(
                 sys,
                 "argv",
@@ -317,7 +365,6 @@ class TestCliDirectoryMode:
                 ],
             ),
         ):
-            MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
 
         assert (output_dir / "split_train.jsonl").exists()
@@ -330,7 +377,7 @@ class TestCliDirectoryMode:
 
         mock_pipeline = _make_mock_pipeline([_make_doc("x")])
         with (
-            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
+            _patch_cli(mock_pipeline),
             patch.object(
                 sys,
                 "argv",
@@ -343,7 +390,6 @@ class TestCliDirectoryMode:
                 ],
             ),
         ):
-            MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
 
         assert (expected_output_dir / "data.jsonl").exists()
@@ -357,7 +403,7 @@ class TestCliDirectoryMode:
 
         mock_pipeline = _make_mock_pipeline([_make_doc("x")])
         with (
-            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
+            _patch_cli(mock_pipeline),
             patch.object(
                 sys,
                 "argv",
@@ -372,12 +418,12 @@ class TestCliDirectoryMode:
                 ],
             ),
         ):
-            MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
 
         assert not (output_dir / "readme.txt").exists()
 
-    def test_directory_pipeline_loaded_once(self, tmp_path: Path) -> None:
+    def test_directory_pipeline_constructed_once_per_seed(self, tmp_path: Path) -> None:
+        """Single seed (int) → Pipeline constructed exactly once for all files."""
         input_dir = tmp_path / "input"
         input_dir.mkdir()
         _write_jsonl(input_dir / "a.jsonl", [_make_doc("a")])
@@ -386,7 +432,7 @@ class TestCliDirectoryMode:
 
         mock_pipeline = _make_mock_pipeline([_make_doc("a"), _make_doc("b")])
         with (
-            patch("gsapere.commands.run_pipeline.Pipeline") as MockPipeline,
+            _patch_cli(mock_pipeline),
             patch.object(
                 sys,
                 "argv",
@@ -401,10 +447,7 @@ class TestCliDirectoryMode:
                 ],
             ),
         ):
-            MockPipeline.from_yaml.return_value = mock_pipeline
             cli()
-
-        MockPipeline.from_yaml.assert_called_once()
 
     def test_type_mismatch_dir_input_file_output_exits(self, tmp_path: Path) -> None:
         input_dir = tmp_path / "input"
@@ -414,7 +457,7 @@ class TestCliDirectoryMode:
         output_file.touch()
 
         with (
-            patch("gsapere.commands.run_pipeline.Pipeline"),
+            _patch_cli(_make_mock_pipeline([])),
             patch.object(
                 sys,
                 "argv",
@@ -431,3 +474,117 @@ class TestCliDirectoryMode:
             pytest.raises(SystemExit),
         ):
             cli()
+
+
+# ---------------------------------------------------------------------------
+# Multi-seed inference
+# ---------------------------------------------------------------------------
+
+
+class TestCliMultiSeed:
+    def test_multi_seed_creates_seed_subdirs(self, tmp_path: Path) -> None:
+        """List seeds → output files go into /{seed}/ subdirectory."""
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        _write_jsonl(input_dir / "data.jsonl", [_make_doc("x")])
+        output_dir = tmp_path / "output"
+
+        mock_pipeline = _make_mock_pipeline([_make_doc("x")])
+        mock_config = _make_mock_config(seeds=[42, 43])
+
+        with (
+            _patch_cli(mock_pipeline, mock_config),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                ],
+            ),
+        ):
+            cli()
+
+        assert (output_dir / "42" / "data.jsonl").exists()
+        assert (output_dir / "43" / "data.jsonl").exists()
+
+    def test_single_int_seed_no_subdir(self, tmp_path: Path) -> None:
+        """Plain int seed → output goes directly into output_dir, no seed subdir."""
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        _write_jsonl(input_dir / "data.jsonl", [_make_doc("x")])
+        output_dir = tmp_path / "output"
+
+        mock_pipeline = _make_mock_pipeline([_make_doc("x")])
+        mock_config = _make_mock_config(seeds=42)
+
+        with (
+            _patch_cli(mock_pipeline, mock_config),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                ],
+            ),
+        ):
+            cli()
+
+        assert (output_dir / "data.jsonl").exists()
+        assert not any((output_dir / d).is_dir() for d in ["42", "43"])
+
+    def test_multi_seed_uses_seed_suffixed_model_dir(self, tmp_path: Path) -> None:
+        """For each seed in a list the Pipeline is constructed with the seed-suffixed model_dir."""
+        input_dir = tmp_path / "input"
+        input_dir.mkdir()
+        _write_jsonl(input_dir / "data.jsonl", [_make_doc("x")])
+        output_dir = tmp_path / "output"
+
+        mock_pipeline = _make_mock_pipeline([_make_doc("x")])
+        mock_config = _make_mock_config(seeds=[7, 13])
+        mock_config.hgere.model_dir = "saves/hgere/model"
+
+        constructed_model_dirs: list[str] = []
+
+        def capture_pipeline(cfg):
+            constructed_model_dirs.append(cfg.hgere.model_dir)
+            return mock_pipeline
+
+        with (
+            patch(
+                "gsapere.commands.run_pipeline.PipelineConfig.from_yaml",
+                return_value=mock_config,
+            ),
+            patch(
+                "gsapere.commands.run_pipeline.Pipeline",
+                side_effect=capture_pipeline,
+            ),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "run-pipeline",
+                    "--config",
+                    "fake.yaml",
+                    "--input",
+                    str(input_dir),
+                    "--output",
+                    str(output_dir),
+                ],
+            ),
+        ):
+            cli()
+
+        assert "saves/hgere/model_seed7" in constructed_model_dirs
+        assert "saves/hgere/model_seed13" in constructed_model_dirs

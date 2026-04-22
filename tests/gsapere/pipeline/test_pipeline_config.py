@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from gsapere.commands.run_pipeline import _output_path_for_label_set
+from gsapere.commands.run_pipeline import (
+    _effective_output_file,
+    _output_path_for_label_set,
+)
 from gsapere.pipeline.config import PipelineConfig
 
 
@@ -56,18 +59,36 @@ class TestPipelineConfigLabelSets:
 
 
 class TestOutputPathForLabelSet:
-    def test_inserts_label_set_before_extension(self) -> None:
+    def test_inserts_label_set_as_subfolder(self) -> None:
         p = Path("output/predictions.jsonl")
         assert _output_path_for_label_set(p, "scier") == Path(
-            "output/predictions_scier.jsonl"
+            "output/scier/predictions.jsonl"
         )
 
     def test_works_with_json_extension(self) -> None:
         p = Path("out/docs.json")
-        assert _output_path_for_label_set(p, "scinlp") == Path("out/docs_scinlp.json")
+        assert _output_path_for_label_set(p, "scinlp") == Path("out/scinlp/docs.json")
 
-    def test_preserves_parent_directory(self) -> None:
+    def test_preserves_filename(self) -> None:
         p = Path("/data/results/file.jsonl")
         result = _output_path_for_label_set(p, "gsap")
-        assert result.parent == Path("/data/results")
-        assert result.name == "file_gsap.jsonl"
+        assert result.parent == Path("/data/results/gsap")
+        assert result.name == "file.jsonl"
+
+
+class TestEffectiveOutputFile:
+    def test_no_label_set_no_seed(self) -> None:
+        p = Path("out/data.jsonl")
+        assert _effective_output_file(p, None, None) == p
+
+    def test_label_set_only(self) -> None:
+        p = Path("out/data.jsonl")
+        assert _effective_output_file(p, "scier", None) == Path("out/scier/data.jsonl")
+
+    def test_seed_only(self) -> None:
+        p = Path("out/data.jsonl")
+        assert _effective_output_file(p, None, 42) == Path("out/42/data.jsonl")
+
+    def test_label_set_and_seed(self) -> None:
+        p = Path("out/data.jsonl")
+        assert _effective_output_file(p, "gsap", 42) == Path("out/gsap/42/data.jsonl")

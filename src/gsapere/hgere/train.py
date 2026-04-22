@@ -141,6 +141,8 @@ def train(
         wandb_params = dict(project=args.project_name, config=vars(args))
         if args.run_name is not None:
             wandb_params["name"] = args.run_name
+        if getattr(args, "wandb_group", None) is not None:
+            wandb_params["group"] = args.wandb_group
         wandb.init(**wandb_params)
         log_wandb = True
         if isinstance(eval_dataset, dict):

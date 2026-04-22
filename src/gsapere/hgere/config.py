@@ -17,7 +17,7 @@ error pointing at the current version.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 
 from ..config import load_yaml_strict
@@ -78,6 +78,17 @@ class HGERETrainParams(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_deprecated_seed(cls, data: object) -> object:
+        if isinstance(data, dict) and "seed" in data:
+            raise ValueError(
+                "'train_params.seed' has been moved. "
+                "Use 'seeds' at the top level of the config instead "
+                "(e.g. seeds: 42  or  seeds: [42, 43, 44])."
+            )
+        return data
+
     # ── Data ────────────────────────────────────────────────────────────────
     train_file: str = Field(
         default="train.json",
@@ -92,7 +103,6 @@ class HGERETrainParams(BaseModel):
     )
 
     # ── Optimisation ────────────────────────────────────────────────────────
-    seed: int = Field(default=42, description="Random seed for reproducibility.")
     learning_rate: float = Field(description="Learning rate for BERT layers.")
     learning_rate_cls: float = Field(
         default=-1,
@@ -189,6 +199,13 @@ class HGERETrainParams(BaseModel):
     )
     run_name: Optional[str] = Field(
         default=None, description="Weights & Biases run name."
+    )
+    wandb_group: Optional[str] = Field(
+        default=None,
+        description=(
+            "Weights & Biases group name. When training with multiple seeds, "
+            "automatically set to the base run_name so all seed runs are grouped together."
+        ),
     )
     log_wandb: bool = Field(
         default=False, description="Whether to log training in W&B."
@@ -293,6 +310,16 @@ class HGERETrainConfig(BaseModel):
         description=(
             "Label set for entity/relation types (e.g. gsap, scier, scinlp). "
             "Required in single-dataset mode; omit when using multi_dataset."
+        ),
+    )
+
+    # ── Seeds ─────────────────────────────────────────────────────────────────
+    seeds: Union[int, list[int]] = Field(
+        default=42,
+        description=(
+            "Random seed(s) for reproducibility. Pass a single integer or a list. "
+            "When a list is given, training/inference runs once per seed and "
+            "'_seed<n>' is appended to model_dir, run_name, and output_dir."
         ),
     )
 

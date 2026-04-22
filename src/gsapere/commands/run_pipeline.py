@@ -32,6 +32,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from gsapere.labels import LABELS
+from gsapere.pipeline.config import PipelineConfig
 from gsapere.pipeline.pipeline import Pipeline
 
 
@@ -138,6 +139,20 @@ def _output_path_for_label_set(output_file: Path, label_set: str) -> Path:
     return output_file.parent / label_set / output_file.name
 
 
+def _effective_output_file(
+    base_output_file: Path,
+    label_set: str | None,
+    seed: int | None,
+) -> Path:
+    """Build the final output path, inserting label_set and seed subfolders when set."""
+    path = base_output_file.parent
+    if label_set is not None:
+        path = path / label_set
+    if seed is not None:
+        path = path / str(seed)
+    return path / base_output_file.name
+
+
 def _write_results(
     results: list[dict], output_file: Path, logger: logging.Logger
 ) -> None:
@@ -154,6 +169,7 @@ def _process_file(
     output_file: Path,
     batch_size: int,
     logger: logging.Logger,
+    seed: int | None = None,
     debug_break_on_first_rel: bool = False,
     debug_log_rel_probs: bool = False,
 ) -> None:
@@ -209,9 +225,13 @@ def _process_file(
 
     if multi:
         for ls, results in all_results.items():
-            _write_results(results, _output_path_for_label_set(output_file, ls), logger)
+            _write_results(
+                results, _effective_output_file(output_file, ls, seed), logger
+            )
     else:
-        _write_results(all_results_single, output_file, logger)
+        _write_results(
+            all_results_single, _effective_output_file(output_file, None, seed), logger
+        )
 
 
 def cli() -> None:
@@ -238,10 +258,10 @@ def cli() -> None:
         logger.error("No *.json or *.jsonl files found in %s", input_path)
         sys.exit(1)
 
-    logger.info("Loading pipeline from %s", args.config)
-    pipeline = Pipeline.from_yaml(args.config)
+    logger.info("Loading pipeline config from %s", args.config)
+    base_config = PipelineConfig.from_yaml(args.config)
 
-    unknown = [ls for ls in pipeline._config.label_sets if ls not in LABELS]
+    unknown = [ls for ls in base_config.label_sets if ls not in LABELS]
     if unknown:
         logger.error(
             "Unknown label set(s): %s. Known label sets: %s",
@@ -250,24 +270,49 @@ def cli() -> None:
         )
         sys.exit(1)
 
+    # Expand seeds: a plain int means "single run, no seed subfolder";
+    # a list means "one run per seed with /{seed}/ output subfolder".
+    raw_seeds = base_config.seeds
+    if isinstance(raw_seeds, list):
+        seeds_iter = raw_seeds
+        use_seed_subdir = True
+    else:
+        seeds_iter = [raw_seeds]
+        use_seed_subdir = False
+
     file_iter: tqdm | list[Path]
     if input_path.is_dir():
         file_iter = tqdm(input_files, desc="Files", unit="file")
     else:
         file_iter = input_files
 
-    for input_file in file_iter:
-        if input_path.is_dir():
-            output_file = output_path / input_file.name
+    for seed in seeds_iter:
+        if use_seed_subdir:
+            seed_hgere = base_config.hgere.model_copy(
+                update={"model_dir": f"{base_config.hgere.model_dir}_seed{seed}"}
+            )
+            seed_config = base_config.model_copy(update={"hgere": seed_hgere})
+            logger.info(
+                "Running seed %d — loading HGERE from %s", seed, seed_hgere.model_dir
+            )
         else:
-            output_file = output_path
+            seed_config = base_config
 
-        _process_file(
-            pipeline,
-            input_file,
-            output_file,
-            args.batch_size,
-            logger,
-            debug_break_on_first_rel=args.debug_break_on_first_rel,
-            debug_log_rel_probs=args.debug_log_rel_probs,
-        )
+        pipeline = Pipeline(seed_config)
+        effective_seed = seed if use_seed_subdir else None
+
+        for input_file in file_iter:
+            output_file = (
+                output_path / input_file.name if input_path.is_dir() else output_path
+            )
+
+            _process_file(
+                pipeline,
+                input_file,
+                output_file,
+                args.batch_size,
+                logger,
+                seed=effective_seed,
+                debug_break_on_first_rel=args.debug_break_on_first_rel,
+                debug_log_rel_probs=args.debug_log_rel_probs,
+            )

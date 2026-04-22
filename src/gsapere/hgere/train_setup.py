@@ -306,6 +306,9 @@ def setup_training(args, logger):
             with open(output_test_file, "w") as f:
                 json.dump(report, f, indent=4)
 
+    if wandb.run is not None:
+        wandb.finish()
+
 
 # ---------------------------------------------------------------------------
 # Dataset loading

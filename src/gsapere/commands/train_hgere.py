@@ -29,6 +29,7 @@ import os
 import shutil
 import socket
 import sys
+from pathlib import Path
 from typing import Any, Optional
 
 import torch
@@ -44,27 +45,69 @@ from ._cli_utils import load_config_from_argv, save_args
 # ---------------------------------------------------------------------------
 
 
+def _resolve_seeds(config: HGERETrainConfig) -> list[int]:
+    """Return ``config.seeds`` as a list of ints."""
+    seeds = config.seeds
+    return [seeds] if isinstance(seeds, int) else list(seeds)
+
+
+def _apply_seed_suffix(
+    config: HGERETrainConfig, seed: int, suffix: str
+) -> HGERETrainConfig:
+    """Return a copy of *config* with *suffix* appended to model_dir, run_name, output_dir.
+
+    Also sets wandb_group to the base run_name (before suffix) when not already configured,
+    so all seed runs appear under the same W&B group.
+    """
+    run_name = config.train_params.run_name
+    output_dir = config.train_params.output_dir
+    base_name = run_name if run_name is not None else Path(config.model_dir).name
+    wandb_group = config.train_params.wandb_group or base_name
+    return config.model_copy(
+        update={
+            "seeds": seed,
+            "model_dir": f"{config.model_dir}{suffix}",
+            "train_params": config.train_params.model_copy(
+                update={
+                    "run_name": f"{run_name}{suffix}" if run_name is not None else None,
+                    "output_dir": f"{output_dir}{suffix}"
+                    if output_dir is not None
+                    else None,
+                    "wandb_group": wandb_group,
+                }
+            ),
+        }
+    )
+
+
 def _config_to_namespace(config: HGERETrainConfig) -> argparse.Namespace:
     """Convert a validated :class:`HGERETrainConfig` to a flat :class:`argparse.Namespace`.
 
-    1. Top-level fields (excluding ``schema_version``, ``train_params``, and
-       ``datasets``) are included as plain dicts via ``model_dump``.
+    1. Top-level fields (excluding ``schema_version``, ``train_params``,
+       ``datasets``, and ``seeds``) are included as plain dicts via ``model_dump``.
     2. ``train_params`` fields are flattened into the top level.
-    3. ``datasets`` is preserved as its Pydantic list so callers can
+    3. ``seeds`` is resolved to a single ``seed`` int (first/only element).
+    4. ``datasets`` is preserved as its Pydantic list so callers can
        access ``ds_entry.name`` etc. as attributes.
-    4. ``config_name`` (a legacy HuggingFace arg used by ``setup_training`` but
+    5. ``config_name`` (a legacy HuggingFace arg used by ``setup_training`` but
        absent from the Pydantic config) is defaulted to ``""``.
     """
     flat: dict[str, Any] = config.model_dump(
-        exclude={"schema_version", "train_params", "datasets"}
+        exclude={"schema_version", "train_params", "datasets", "seeds"}
     )
     flat.update(config.train_params.model_dump())
     flat.setdefault("config_name", "")
     if not flat.get("output_dir"):
         flat["output_dir"] = flat["model_dir"]
+    if flat.get("run_name") is None:
+        flat["run_name"] = Path(flat["model_dir"]).name
+    if not flat.get("wandb_group"):
+        flat["wandb_group"] = flat["run_name"]
     # Preserve datasets as the original Pydantic list so downstream code can
     # access DatasetEntry attributes directly.
     flat["datasets"] = config.datasets
+    # Resolve seeds to the single runtime seed value.
+    flat["seed"] = _resolve_seeds(config)[0]
     return argparse.Namespace(**flat)
 
 
@@ -73,28 +116,8 @@ def _config_to_namespace(config: HGERETrainConfig) -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
-def main(argv: Optional[list[str]] = None) -> None:
-    """Run the full HGERE training + evaluation pipeline.
-
-    Parameters
-    ----------
-    argv:
-        Argument list.  Pass ``None`` to read from ``sys.argv[1:]``.
-        See module docstring for the two accepted modes (YAML file or CLI flags).
-    """
-    if argv is None:
-        argv = sys.argv[1:]
-
-    config = load_config_from_argv(
-        argv,
-        HGERETrainConfig,
-        description=(
-            "Train the HGERE model. Pass a YAML config as a positional argument "
-            "(train-hgere config.yaml) or supply all parameters directly as CLI "
-            "flags (e.g. --model_dir saves/hgere --train_params__learning_rate 2e-5)."
-        ),
-    )
-
+def _run_single_seed(config: HGERETrainConfig) -> None:
+    """Run training/inference for a single resolved *config* (one seed, paths finalised)."""
     args = _config_to_namespace(config)
 
     # Warn if both dynamic and static loss weighting are configured
@@ -230,3 +253,39 @@ def main(argv: Optional[list[str]] = None) -> None:
     args.global_step = global_step
 
     setup_training(args, logger)
+
+
+def main(argv: Optional[list[str]] = None) -> None:
+    """Run the full HGERE training + evaluation pipeline.
+
+    Parameters
+    ----------
+    argv:
+        Argument list.  Pass ``None`` to read from ``sys.argv[1:]``.
+        See module docstring for the two accepted modes (YAML file or CLI flags).
+        ``seeds`` may be a single integer or a list; when a list is given the
+        pipeline runs once per seed and ``_seed<n>`` is appended to
+        ``model_dir``, ``run_name``, and ``output_dir``.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+
+    config = load_config_from_argv(
+        argv,
+        HGERETrainConfig,
+        description=(
+            "Train the HGERE model. Pass a YAML config as a positional argument "
+            "(train-hgere config.yaml) or supply all parameters directly as CLI "
+            "flags (e.g. --model_dir saves/hgere --train_params__learning_rate 2e-5)."
+        ),
+    )
+
+    seeds = _resolve_seeds(config)
+    multiple = len(seeds) > 1
+    for seed in seeds:
+        suffix = f"_seed{seed}" if multiple else ""
+        seed_config = _apply_seed_suffix(config, seed, suffix) if multiple else config
+        _run_single_seed(seed_config)
+
+
+cli = main
