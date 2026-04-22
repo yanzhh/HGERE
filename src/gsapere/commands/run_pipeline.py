@@ -272,7 +272,7 @@ def cli() -> None:
 
     # Expand seeds: a plain int means "single run, no seed subfolder";
     # a list means "one run per seed with /{seed}/ output subfolder".
-    raw_seeds = base_config.seeds
+    raw_seeds = base_config.hgere.seeds
     if isinstance(raw_seeds, list):
         seeds_iter = raw_seeds
         use_seed_subdir = True

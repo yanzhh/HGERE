@@ -185,12 +185,13 @@ def _make_mock_config(
     """Return a MagicMock that mimics PipelineConfig with working model_copy semantics."""
     cfg = MagicMock()
     cfg.label_sets = label_sets if label_sets is not None else ["scier"]
-    cfg.seeds = seeds
+    cfg.hgere.seeds = seeds
     cfg.hgere.model_dir = "saves/hgere/model"
 
     def hgere_copy(update: dict | None = None) -> MagicMock:
         new_h = MagicMock()
         new_h.model_dir = (update or {}).get("model_dir", cfg.hgere.model_dir)
+        new_h.seeds = cfg.hgere.seeds
         return new_h
 
     cfg.hgere.model_copy.side_effect = hgere_copy
@@ -200,7 +201,6 @@ def _make_mock_config(
         new_c = MagicMock()
         new_c.hgere = upd.get("hgere", cfg.hgere)
         new_c.label_sets = upd.get("label_sets", cfg.label_sets)
-        new_c.seeds = upd.get("seeds", cfg.seeds)
         return new_c
 
     cfg.model_copy.side_effect = config_copy

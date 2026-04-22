@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator, Literal, Optional, Union
+from typing import Generator, Literal, Optional, Union  # noqa: F401
 
 import transformers
 
@@ -117,6 +117,15 @@ class HGEREConfig(BaseModel):
     use_gold_ner: bool = False
     n_workers: int = 4
     use_dataset_id_token_as_cls: bool = False
+    seeds: Union[int, list[int]] = Field(
+        default=42,
+        description=(
+            "Seed(s) for HGERE model selection. Pass a plain integer to run a single "
+            "un-suffixed model. Pass a list to iterate over seed-specific model "
+            "directories (e.g. model_dir + '_seed42') and write outputs into "
+            "a '/{seed}/' subfolder."
+        ),
+    )
 
 
 class PipelineConfig(BaseModel):
@@ -143,15 +152,6 @@ class PipelineConfig(BaseModel):
         description=(
             "One or more dataset label sets for multi-head inference. "
             "HGERE runs once per entry and writes separate output files."
-        ),
-    )
-    seeds: Union[int, list[int]] = Field(
-        default=42,
-        description=(
-            "Seed(s) for HGERE model selection. Pass a plain integer to run a single "
-            "un-suffixed model. Pass a list to iterate over seed-specific model "
-            "directories (e.g. hgere.model_dir + '_seed42') and write outputs into "
-            "a '/{seed}/' subfolder."
         ),
     )
     pruner: PrunerConfig
