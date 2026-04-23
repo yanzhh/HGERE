@@ -1,11 +1,11 @@
 label_set: gsap
 model_dir: saves/gsap-ere/hgere/best
 seeds:
- - 42
- - 43
- - 44
- - 45
- - 46
+    - 42
+    - 43
+    - 44
+    - 45
+    - 46
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 no_sym: false
 do_lower_case: true
@@ -38,6 +38,7 @@ train_params:
     # W&B
     log_wandb: true
     project_name: gsap-rel-hgere
+    wandb_entity: ottowg-gesis7279
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
@@ -49,7 +50,7 @@ train_params:
     eval_dev: true
     eval_test: true
     save_results: true
-    shuffle: true 
+    shuffle: true
     preload_dataset: false
     eval_epochs: 1
     per_gpu_train_batch_size: 21

@@ -2,6 +2,10 @@ label_set: scinlp
 model_dir: saves/scinlp/hgere/best
 seeds:
     - 42
+    - 43
+    - 44
+    - 45
+    - 46
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 model_type: hyper
 do_lower_case: true
