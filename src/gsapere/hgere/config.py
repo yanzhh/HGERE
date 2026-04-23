@@ -198,10 +198,11 @@ class HGERETrainParams(BaseModel):
         default="hgere", description="Weights & Biases project name."
     )
     run_name: Optional[str] = Field(
-        default=None, description="weights & biases run name."
+        default=None, description="Weights & Biases run name."
     )
     wandb_entity: Optional[str] = Field(
-        default=None, description="weights & biases entity name to share across wandb users."
+        default=None,
+        description="Weights & Biases entity name to share across wandb users.",
     )
     wandb_group: Optional[str] = Field(
         default=None,
@@ -561,3 +562,9 @@ class HGERETrainConfig(BaseModel):
             return cls.model_validate(hgere_data)
 
         return cls.model_validate(data)
+
+
+# Force resolution of forward references (needed when from __future__ import annotations
+# is active and PreFilterParams is an Annotated type alias from another module).
+HGERETrainConfig.model_rebuild()
+HGERETrainParams.model_rebuild()
