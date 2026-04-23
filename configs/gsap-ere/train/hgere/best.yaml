@@ -1,5 +1,5 @@
 label_set: gsap
-model_dir: saves/gsap-ere/HGERE/best
+model_dir: saves/gsap-ere/hgere/best
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 no_sym: false
 do_lower_case: true
