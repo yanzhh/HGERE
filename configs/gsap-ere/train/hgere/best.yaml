@@ -1,0 +1,61 @@
+label_set: gsap
+model_dir: saves/gsap-ere/HGERE/best
+base_model_name_or_path: allenai/scibert_scivocab_uncased
+no_sym: false
+do_lower_case: true
+per_gpu_eval_batch_size: 32
+max_seq_length: 512
+max_pair_length: 18
+factor_type: ternary # tersibcop # ternary not run yet
+factor_encoder: biaf
+ent_dim: 400
+rel_dim: 400
+mem_dim: 400
+attn_self: true
+ent_repr: mix
+n_iter: 3
+layernorm: true
+layernorm_1st: true
+ner_focal_loss: false
+re_focal_loss: false
+
+# Data
+## Pruner predictions used as NER candidates input to HGERE
+ner_prediction_dir: saves/gsap-ere/pruner/best
+#data_dir: datasets/gsap-ere
+
+# Optimisation
+train_params:
+    # W&B
+    log_wandb: true
+    project_name: gsap-rel-hgere
+    train_file: ent_pred_train.json
+    dev_file: ent_pred_dev.json
+    test_file: ent_pred_test.json
+    seed: 45
+    n_workers: 16
+    pre_filter_params:
+        method: threshold
+        value: 0.0125
+    do_train: true
+    eval_dev: true
+    eval_test: true
+    save_results: true
+    shuffle: true 
+    preload_dataset: false
+    learning_rate: 1e-5
+    learning_rate_cls: 1e-5
+    num_train_epochs: 8
+    eval_epochs: 1
+    per_gpu_train_batch_size: 21
+    gradient_accumulation_steps: 1
+    adam_epsilon: 1e-8
+    fp16: true
+    local_rank: -1
+    # Loss
+    loss_re_weight_alpha: 0.5 # (1 - alpha) * loss_ner + alpha * loss_re
+    # Model flags
+    # Evaluation
+    evaluate_during_training: true
+    eval_all_checkpoints: true
+    overwrite_output_dir: true
