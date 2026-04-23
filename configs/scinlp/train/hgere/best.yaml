@@ -24,7 +24,7 @@ re_focal_loss: false
 
 # Data
 ## Pruner predictions used as NER candidates input to HGERE
-ner_prediction_dir: saves/scier/pruner/best
+ner_prediction_dir: saves/scinlp/pruner/best
 #data_dir: datasets/gsap-ere
 
 # Optimisation
