@@ -1,7 +1,7 @@
 label_set: scier
 model_dir: saves/scier/hgere/best
 seeds:
-  - 42
+    - 42
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 model_type: hyper
 do_lower_case: true
@@ -31,6 +31,7 @@ train_params:
     # W&B
     log_wandb: true
     project_name: scier-hgere
+    wandb_entity: ottowg-gesis7279
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json

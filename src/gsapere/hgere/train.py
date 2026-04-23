@@ -142,7 +142,7 @@ def train(
         if args.run_name is not None:
             wandb_params["name"] = args.run_name
         if args.wandb_entity is not None:
-            wandb_params["entitiy"] = args.wandb_entity
+            wandb_params["entity"] = args.wandb_entity
         if args.wandb_group is not None:
             wandb_params["group"] = args.wandb_group
         wandb.init(**wandb_params)
