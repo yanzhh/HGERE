@@ -1,5 +1,5 @@
 label_set: gsap
-model_dir: saves/gsap-ere/pruner/best
+model_dir: saves/gsap-ere/pruner/golem
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 
 do_lower_case: true
