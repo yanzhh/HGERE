@@ -12,6 +12,7 @@ max_mention_ori_length: 12
 train_params:
     # W&B
     project_name: gsap-pruner
+    run_name: best
     # Data
     data_dir: datasets/gsap-ere/2025-05-15
     train_file: train.jsonl
