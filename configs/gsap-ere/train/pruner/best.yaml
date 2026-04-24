@@ -1,5 +1,5 @@
 label_set: gsap
-model_dir: saves/gsap-ere/pruner/best
+model_dir: saves/gsap-ere/pruner/golem
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 
 do_lower_case: true
@@ -18,7 +18,7 @@ train_params:
     dev_file: dev.jsonl
     test_file: test.jsonl
     # Rule-based pre-filter (produced by eval-rulebased-pruner)
-    rulebased_pruner_file: saves/gsap-ere/pre-filter/filter-rules.json
+    rulebased_pruner_file: saves/gsap-ere/pre-filter/rules.json
     # Optimisation
     seed: 44
     learning_rate: 1e-6

@@ -33,26 +33,27 @@ ner_prediction_dir: saves/scinlp/pruner/best
 
 # Optimisation
 train_params:
+    num_train_epochs: 40
+    pre_filter_params:
+        method: threshold
+        value: 0.015
+    learning_rate: 1e-5
+    learning_rate_cls: 1e-4
     # W&B
     log_wandb: true
     project_name: scinlp-hgere
     wandb_entity: ottowg-gesis7279
+    # data
     train_file: ent_pred_trai.json
     dev_file: ent_pred_de.json
     test_file: ent_pred_tes.json
     save_results: true
     eval_train: true
     eval_test: true
-    pre_filter_params:
-        method: threshold
-        value: 0.015
     shuffle: false
     preload_dataset: false
     n_workers: 16
     do_train: true
-    learning_rate: 1e-5
-    learning_rate_cls: 1e-4
-    num_train_epochs: 40
     eval_epochs: 2
     per_gpu_train_batch_size: 20
     gradient_accumulation_steps: 1
