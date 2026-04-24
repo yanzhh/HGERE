@@ -28,6 +28,12 @@ ner_prediction_dir: saves/gsap-ere/pruner/best
 
 # Optimisation
 train_params:
+    num_train_epochs: 8
+    learning_rate: 1e-5
+    learning_rate_cls: 1e-5
+    pre_filter_params:
+        method: threshold
+        value: 0.0125
     # W&B
     log_wandb: true
     project_name: gsap-rel-hgere
@@ -36,18 +42,12 @@ train_params:
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
     n_workers: 16
-    pre_filter_params:
-        method: threshold
-        value: 0.0125
     do_train: true
     eval_dev: true
     eval_test: true
     save_results: true
     shuffle: true 
     preload_dataset: false
-    learning_rate: 1e-5
-    learning_rate_cls: 1e-5
-    num_train_epochs: 8
     eval_epochs: 1
     per_gpu_train_batch_size: 21
     gradient_accumulation_steps: 1

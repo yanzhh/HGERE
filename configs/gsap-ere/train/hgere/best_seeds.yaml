@@ -1,5 +1,5 @@
 label_set: gsap
-model_dir: saves/gsap-ere/hgere/best
+model_dir: saves/gsap-ere/hgere/best_bad_pruner_noshuffle
 seeds:
     - 42
     - 43
@@ -11,7 +11,7 @@ no_sym: false
 do_lower_case: true
 per_gpu_eval_batch_size: 32
 max_seq_length: 512
-max_pair_length: 18
+max_ents: 18
 factor_type: ternary # tersibcop # ternary not run yet
 factor_encoder: biaf
 ent_dim: 400
@@ -27,13 +27,16 @@ re_focal_loss: false
 
 # Data
 ## Pruner predictions used as NER candidates input to HGERE
-ner_prediction_dir: saves/gsap-ere/pruner/best
+ner_prediction_dir: saves/gsap-ere/pruner/best_
 #data_dir: datasets/gsap-ere
 
 # Optimisation
 train_params:
     learning_rate: 1e-5
     learning_rate_cls: 1e-5
+    pre_filter_params:
+        method: threshold
+        value: 0.0125
     num_train_epochs: 8
     # W&B
     log_wandb: true
@@ -42,15 +45,13 @@ train_params:
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
-    pre_filter_params:
-        method: threshold
-        value: 0.0125
     n_workers: 16
     do_train: true
     eval_dev: true
     eval_test: true
     save_results: true
-    shuffle: true
+    shuffle: false
+    weight_decay: 0.1
     preload_dataset: false
     eval_epochs: 1
     per_gpu_train_batch_size: 21
