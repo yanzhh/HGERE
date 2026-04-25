@@ -280,7 +280,8 @@ class BertForHyperGNN(BertPreTrainedModel):
             hidden_states
         )  # bs=4, 20 * seq_len * 4096  (20=bs*max_ent_num)
         seq_len = self.max_seq_length
-        max_ent_num = max(ent_numbers)
+        ent_numbers_list = ent_numbers.tolist()
+        max_ent_num = max(ent_numbers_list)
         # bsz = len(ent_numbers)
         tot_seq_len = input_ids.shape[-1]
 
@@ -292,12 +293,11 @@ class BertForHyperGNN(BertPreTrainedModel):
         ]  # n_ent x max_ent_num x dh
         obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
 
+        n_total_ents = sum(ent_numbers_list)
         sub_start_states = hidden_states[
-            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+            torch.arange(n_total_ents), sub_positions[:, 0]
         ]  # n_ent x dh
-        sub_end_states = hidden_states[
-            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
-        ]
+        sub_end_states = hidden_states[torch.arange(n_total_ents), sub_positions[:, 1]]
 
         sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)  # n_ent x de
         obj_reprs = self.obj_encoder(
@@ -307,7 +307,6 @@ class BertForHyperGNN(BertPreTrainedModel):
         rel_reprs = self.rel_encoder(
             sub_reprs.unsqueeze(-2).expand(obj_reprs.shape), obj_reprs
         )  # n_ent x max_ent_num x dr
-        ent_numbers_list = ent_numbers.tolist()
         rel_reprs_split = torch.split(rel_reprs, ent_numbers_list)
         rel_reprs = pad_sequence(rel_reprs_split, batch_first=True, padding_value=0)  #
 
@@ -324,8 +323,8 @@ class BertForHyperGNN(BertPreTrainedModel):
             sub_reprs_split, batch_first=True, padding_value=0
         )  # n_ent x max_ent_num x de
 
-        mask1d = get_ent_mask1d(ent_numbers)
-        mask2d = get_ent_mask2d(ent_numbers)
+        mask1d = get_ent_mask1d(ent_numbers, max_num=max_ent_num)
+        mask2d = get_ent_mask2d(ent_numbers, max_num=max_ent_num)
         uni_obj_reprs *= mask1d.unsqueeze(-1)
         rel_reprs *= mask2d.unsqueeze(-1)
 
@@ -417,7 +416,8 @@ class BertForHyperGNN(BertPreTrainedModel):
         hidden_states = self.dropout(outputs[0])
 
         seq_len = self.max_seq_length
-        max_ent_num = max(ent_numbers)
+        ent_numbers_list = ent_numbers.tolist()
+        max_ent_num = max(ent_numbers_list)
         tot_seq_len = input_ids.shape[-1]
         ent_len = (tot_seq_len - seq_len) // 2
 
@@ -425,12 +425,11 @@ class BertForHyperGNN(BertPreTrainedModel):
             :, :max_ent_num, :
         ]
         obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
+        n_total_ents = sum(ent_numbers_list)
         sub_start_states = hidden_states[
-            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+            torch.arange(n_total_ents), sub_positions[:, 0]
         ]
-        sub_end_states = hidden_states[
-            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
-        ]
+        sub_end_states = hidden_states[torch.arange(n_total_ents), sub_positions[:, 1]]
 
         sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)
         obj_reprs = self.obj_encoder(obj_start_states, obj_end_states)
@@ -456,8 +455,8 @@ class BertForHyperGNN(BertPreTrainedModel):
             padding_value=0,
         )
 
-        mask1d = get_ent_mask1d(ent_numbers)
-        mask2d = get_ent_mask2d(ent_numbers)
+        mask1d = get_ent_mask1d(ent_numbers, max_num=max_ent_num)
+        mask2d = get_ent_mask2d(ent_numbers, max_num=max_ent_num)
         uni_obj_reprs *= mask1d.unsqueeze(-1)
         rel_reprs *= mask2d.unsqueeze(-1)
 
@@ -670,7 +669,8 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         hidden_states = outputs[0]
         hidden_states = self.dropout(hidden_states)
         seq_len = self.max_seq_length
-        max_ent_num = max(ent_numbers)
+        ent_numbers_list = ent_numbers.tolist()
+        max_ent_num = max(ent_numbers_list)
         tot_seq_len = input_ids.shape[-1]
 
         ent_len = (tot_seq_len - seq_len) // 2
@@ -679,12 +679,11 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         ]
         obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
 
+        n_total_ents = sum(ent_numbers_list)
         sub_start_states = hidden_states[
-            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+            torch.arange(n_total_ents), sub_positions[:, 0]
         ]
-        sub_end_states = hidden_states[
-            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
-        ]
+        sub_end_states = hidden_states[torch.arange(n_total_ents), sub_positions[:, 1]]
 
         sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)
         obj_reprs = self.obj_encoder(obj_start_states, obj_end_states)
@@ -692,7 +691,6 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         rel_reprs = self.rel_encoder(
             sub_reprs.unsqueeze(-2).expand(obj_reprs.shape), obj_reprs
         )
-        ent_numbers_list = ent_numbers.tolist()
         rel_reprs_split = torch.split(rel_reprs, ent_numbers_list)
         rel_reprs = pad_sequence(rel_reprs_split, batch_first=True, padding_value=0)
 
@@ -703,8 +701,8 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         sub_reprs_split = torch.split(sub_reprs, ent_numbers_list)
         sub_reprs = pad_sequence(sub_reprs_split, batch_first=True, padding_value=0)
 
-        mask1d = get_ent_mask1d(ent_numbers)
-        mask2d = get_ent_mask2d(ent_numbers)
+        mask1d = get_ent_mask1d(ent_numbers, max_num=max_ent_num)
+        mask2d = get_ent_mask2d(ent_numbers, max_num=max_ent_num)
         uni_obj_reprs *= mask1d.unsqueeze(-1)
         rel_reprs *= mask2d.unsqueeze(-1)
 
@@ -788,7 +786,8 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         hidden_states = self.dropout(outputs[0])
 
         seq_len = self.max_seq_length
-        max_ent_num = max(ent_numbers)
+        ent_numbers_list = ent_numbers.tolist()
+        max_ent_num = max(ent_numbers_list)
         tot_seq_len = input_ids.shape[-1]
         ent_len = (tot_seq_len - seq_len) // 2
 
@@ -796,12 +795,11 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
             :, :max_ent_num, :
         ]
         obj_end_states = hidden_states[:, seq_len + ent_len :][:, :max_ent_num, :]
+        n_total_ents = sum(ent_numbers_list)
         sub_start_states = hidden_states[
-            torch.arange(sum(ent_numbers)), sub_positions[:, 0]
+            torch.arange(n_total_ents), sub_positions[:, 0]
         ]
-        sub_end_states = hidden_states[
-            torch.arange(sum(ent_numbers)), sub_positions[:, 1]
-        ]
+        sub_end_states = hidden_states[torch.arange(n_total_ents), sub_positions[:, 1]]
 
         sub_reprs = self.sub_encoder(sub_start_states, sub_end_states)
         obj_reprs = self.obj_encoder(obj_start_states, obj_end_states)
@@ -827,8 +825,8 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
             padding_value=0,
         )
 
-        mask1d = get_ent_mask1d(ent_numbers)
-        mask2d = get_ent_mask2d(ent_numbers)
+        mask1d = get_ent_mask1d(ent_numbers, max_num=max_ent_num)
+        mask2d = get_ent_mask2d(ent_numbers, max_num=max_ent_num)
         uni_obj_reprs *= mask1d.unsqueeze(-1)
         rel_reprs *= mask2d.unsqueeze(-1)
 
@@ -869,32 +867,26 @@ def get_ent_mask1d(n_ents, max_num=None):
     n_ents: shape (b,), gold ent number.
     """
     if max_num is None:
-        max_num = max(n_ents)
+        max_num = n_ents.max().item()
     bs = len(n_ents)
-    mask = torch.arange(max_num, device=n_ents.device).unsqueeze(0).repeat(bs, 1)
+    mask = torch.arange(max_num, device=n_ents.device).unsqueeze(0).expand(bs, -1)
     mask = mask < n_ents.reshape(bs, 1)
     return mask
 
 
-def get_ent_mask2d(n_ents):
+def get_ent_mask2d(n_ents, max_num=None):
     """
     n_ents: shape (bs,), ent number.
     return b x max_n_ent x max_n_ent
     """
-    max_num = max(n_ents)
-
     if isinstance(n_ents, list):
         n_ents = torch.tensor(n_ents)
-    n_ents = n_ents.reshape(-1, 1)
-    bs = n_ents.shape[0]
-    mask0 = (
-        torch.arange(max_num, device=n_ents.device).unsqueeze(0).repeat(bs, 1)
+    if max_num is None:
+        max_num = n_ents.max().item()
+    valid = torch.arange(max_num, device=n_ents.device).unsqueeze(0) < n_ents.view(
+        -1, 1
     )  # bs x max_num
-    mask1 = mask0.unsqueeze(-1).repeat(1, 1, max_num)  # bs x max_num x max_num
-    mask2 = mask0.unsqueeze(-2).repeat(1, max_num, 1)
-    mask3 = n_ents.unsqueeze(-1).repeat(1, max_num, max_num)  # bs x max_num x max_num
-    mask = (mask1 < mask3) * (mask2 < mask3)
-    return mask
+    return valid.unsqueeze(2) & valid.unsqueeze(1)  # bs x max_num x max_num
 
 
 def get_ent_mask3d(n_ents):

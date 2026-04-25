@@ -947,6 +947,7 @@ class RelationDataset(DocumentDataset):
             collate_fn=self.collate_fn,
             pin_memory=pin_memory,
             worker_init_fn=_worker_init_fn if n_workers > 0 else None,
+            persistent_workers=n_workers > 0,
         )
         return self.loader
 
