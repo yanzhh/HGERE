@@ -36,7 +36,6 @@ import shutil
 import timeit
 from collections import defaultdict
 from dataclasses import dataclass
-from itertools import combinations
 from pathlib import Path
 from typing import Literal
 
@@ -64,10 +63,14 @@ def _decode_ner_batch(
     sent_indices,
     obj_mentions,
     ner_preds,
-    ner_logits,
+    ner_probs,
     ner_label_list: list,
 ) -> dict:
     """Decode NER predictions for one batch.
+
+    ``ner_preds`` and ``ner_probs`` must be CPU tensors with shape
+    (batch, max_ent), where ``ner_probs`` is the already-gathered
+    probability of the argmax class.
 
     Returns a dict mapping sent_id → {span_tuple: (label, prob)}.
     """
@@ -76,16 +79,13 @@ def _decode_ner_batch(
         sent_id = tuple(sent_id)
         sample_obj_mentions = obj_mentions[sample_idx]
         n_spans = len(sample_obj_mentions)
-        sample_ner_preds = ner_preds[sample_idx][:n_spans]
-
-        softmax = torch.nn.functional.softmax(ner_logits[sample_idx][:n_spans], dim=-1)
-        probs = (
-            softmax.gather(-1, sample_ner_preds.unsqueeze(-1)).squeeze(-1).cpu().numpy()
-        )
-        sample_labels = [ner_label_list[idx] for idx in sample_ner_preds]
+        sample_ner_preds = ner_preds[sample_idx][:n_spans].tolist()
+        sample_ner_probs = ner_probs[sample_idx][:n_spans].tolist()
         result[sent_id] = {
-            tuple(span): (label, float(p))
-            for span, label, p in zip(sample_obj_mentions, sample_labels, probs)
+            tuple(span): (ner_label_list[lbl], float(p))
+            for span, lbl, p in zip(
+                sample_obj_mentions, sample_ner_preds, sample_ner_probs
+            )
         }
     return result
 
@@ -103,38 +103,58 @@ def _decode_relation_batch(
     logger,
     debug_log_rel_probs: bool = False,
     debug_break_on_first_rel: bool = False,
+    _triu_cache: dict | None = None,
 ) -> dict:
     """Decode relation predictions for one batch.
+
+    ``rel_logits`` must be a CPU tensor (log-softmax already applied).
+    ``_triu_cache`` is mutated in-place across calls to amortise
+    ``torch.triu_indices`` construction over batches.
 
     Returns a dict mapping sent_id → list of
     (subj_span, subj_label, obj_span, obj_label, rel_label, score).
     """
+    if _triu_cache is None:
+        _triu_cache = {}
     result: dict = defaultdict(list)
     for sample_idx, sent_id in enumerate(sent_indices):
-        n_ent = ent_counts[sample_idx]
+        n_ent = int(ent_counts[sample_idx])
         sent_id = tuple(sent_id)
-        for subj_idx, obj_idx in combinations(range(n_ent), 2):
-            subj_span = tuple(obj_mentions[sample_idx][subj_idx])
-            obj_span = tuple(obj_mentions[sample_idx][obj_idx])
 
-            scores = rel_logits[sample_idx, subj_idx, obj_idx]
-            scores_inv = rel_logits[sample_idx, obj_idx, subj_idx]
-            scores_inv = torch.concat(
-                [
-                    scores_inv[:n_syms],
-                    scores_inv[n_rel_label:],
-                    scores_inv[n_syms:n_rel_label],
-                ]
-            )
-            combined = torch.add(scores, scores_inv)
-            probs = torch.nn.functional.softmax(combined, dim=-1)
-            best_idx = torch.argmax(probs)
-            score = probs[best_idx].cpu().item()
+        if n_ent < 2:
+            continue
 
-            if debug_log_rel_probs:
-                probs_cpu = probs.cpu().tolist()
-                all_labels = rel_label_list + rel_label_list[n_syms:]
-                top = sorted(zip(all_labels, probs_cpu), key=lambda x: -x[1])[:5]
+        if n_ent not in _triu_cache:
+            _triu_cache[n_ent] = torch.triu_indices(n_ent, n_ent, offset=1)
+        subj_idxs, obj_idxs = _triu_cache[n_ent]
+
+        scores = rel_logits[sample_idx, subj_idxs, obj_idxs]
+        scores_inv_raw = rel_logits[sample_idx, obj_idxs, subj_idxs]
+        scores_inv = torch.cat(
+            [
+                scores_inv_raw[:, :n_syms],
+                scores_inv_raw[:, n_rel_label:],
+                scores_inv_raw[:, n_syms:n_rel_label],
+            ],
+            dim=-1,
+        )
+        combined = scores + scores_inv
+        probs = torch.nn.functional.softmax(combined, dim=-1)
+        best_idxs = probs.argmax(dim=-1)
+        best_scores = probs.gather(1, best_idxs.unsqueeze(1)).squeeze(1)
+
+        best_idxs_list = best_idxs.tolist()
+        best_scores_list = best_scores.tolist()
+        subj_idxs_list = subj_idxs.tolist()
+        obj_idxs_list = obj_idxs.tolist()
+
+        if debug_log_rel_probs:
+            all_labels = rel_label_list + rel_label_list[n_syms:]
+            for pair_idx, (si, oi) in enumerate(zip(subj_idxs_list, obj_idxs_list)):
+                subj_span = tuple(obj_mentions[sample_idx][si])
+                obj_span = tuple(obj_mentions[sample_idx][oi])
+                probs_list = probs[pair_idx].tolist()
+                top = sorted(zip(all_labels, probs_list), key=lambda x: -x[1])[:5]
                 logger.info(
                     "[DEBUG REL] sent=%s subj=%s obj=%s  top5=%s",
                     sent_id,
@@ -143,11 +163,15 @@ def _decode_relation_batch(
                     [(lbl, f"{p:.4f}") for lbl, p in top],
                 )
 
-            if best_idx >= n_rel_label:
-                best_idx = best_idx - n_unsyms
+        for pair_idx, (si, oi) in enumerate(zip(subj_idxs_list, obj_idxs_list)):
+            best_rel_label_idx = best_idxs_list[pair_idx]
+            score = best_scores_list[pair_idx]
+            subj_span = tuple(obj_mentions[sample_idx][si])
+            obj_span = tuple(obj_mentions[sample_idx][oi])
+            if best_rel_label_idx >= n_rel_label:
+                best_rel_label_idx -= n_unsyms
                 subj_span, obj_span = obj_span, subj_span
-
-            label = rel_label_list[best_idx]
+            label = rel_label_list[best_rel_label_idx]
             if label != "NIL":
                 subj_label = ner_predictions[sent_id][subj_span][0]
                 obj_label = ner_predictions[sent_id][obj_span][0]
@@ -308,8 +332,9 @@ def infer_hgere(
 
     ner_predictions: dict = {}
     rel_predictions: dict = defaultdict(list)
+    _triu_cache: dict[int, tuple] = {}
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch in tqdm(
             eval_dataset.loader,
             desc="ERE inference",
@@ -329,17 +354,21 @@ def infer_hgere(
 
             outputs = model(**inputs)
 
-            rel_logits = torch.nn.functional.log_softmax(outputs[0], dim=-1)
-            ner_logits = outputs[1]
-
+            # Move to CPU once per batch before any decoding
+            rel_logits = torch.nn.functional.log_softmax(outputs[0], dim=-1).cpu()
+            ner_logits = outputs[1].cpu()
             ner_preds = torch.argmax(ner_logits, dim=-1)
+
+            # Batch NER softmax — one gather across all samples at once
+            ner_softmax = torch.nn.functional.softmax(ner_logits, dim=-1)
+            ner_probs = ner_softmax.gather(-1, ner_preds.unsqueeze(-1)).squeeze(-1)
 
             ner_predictions.update(
                 _decode_ner_batch(
                     sent_indices,
                     obj_mentions,
                     ner_preds,
-                    ner_logits,
+                    ner_probs,
                     eval_dataset.ner_label_list,
                 )
             )
@@ -356,6 +385,7 @@ def infer_hgere(
                 logger,
                 debug_log_rel_probs=debug_log_rel_probs,
                 debug_break_on_first_rel=debug_break_on_first_rel,
+                _triu_cache=_triu_cache,
             )
             for sent_id, rels in batch_rels.items():
                 rel_predictions[sent_id].extend(rels)
@@ -436,7 +466,9 @@ def infer_hgere_multi(
         n_unsyms = n_rel_label - n_syms
         precomputed[ls] = (rel_label_list, n_rel_label, sym_labels, n_syms, n_unsyms)
 
-    with torch.no_grad():
+    _triu_cache: dict[int, tuple] = {}
+
+    with torch.inference_mode():
         for batch in tqdm(
             eval_dataset.loader,
             desc="ERE inference (multi-head)",
@@ -466,15 +498,23 @@ def infer_hgere_multi(
                 ]
                 ner_label_list = label_metas[ls].ner_label_list
 
-                rel_logits = torch.nn.functional.log_softmax(re_logits_raw, dim=-1)
+                # Move to CPU once per label-set per batch
+                rel_logits = torch.nn.functional.log_softmax(
+                    re_logits_raw, dim=-1
+                ).cpu()
+                ner_logits = ner_logits.cpu()
                 ner_preds = torch.argmax(ner_logits, dim=-1)
+
+                # Batch NER softmax — one gather across all samples at once
+                ner_softmax = torch.nn.functional.softmax(ner_logits, dim=-1)
+                ner_probs = ner_softmax.gather(-1, ner_preds.unsqueeze(-1)).squeeze(-1)
 
                 ner_predictions_all[ls].update(
                     _decode_ner_batch(
                         sent_indices,
                         obj_mentions,
                         ner_preds,
-                        ner_logits,
+                        ner_probs,
                         ner_label_list,
                     )
                 )
@@ -491,6 +531,7 @@ def infer_hgere_multi(
                     logger,
                     debug_log_rel_probs=debug_log_rel_probs,
                     debug_break_on_first_rel=debug_break_on_first_rel,
+                    _triu_cache=_triu_cache,
                 )
                 for sent_id, rels in batch_rels.items():
                     rel_predictions_all[ls][sent_id].extend(rels)
