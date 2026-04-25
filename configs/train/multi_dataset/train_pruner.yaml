@@ -10,7 +10,7 @@
 #   uv run gsapere-train-pruner configs/train/multi_dataset/train_pruner.yaml
 
 label_set: scier
-model_dir: saves/multi/pruner/run1
+model_dir: saves/multi-sciere/pruner/sittich-shuffle-6ep
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 do_lower_case: true
 model_type: bertspanmarkerpruner
@@ -20,19 +20,20 @@ max_pair_length: 64
 max_mention_ori_length: 12
 
 train_params:
-    project_name: multi-pruner
-    run_name: run1
+    project_name: multi-sciere-pruner
+    run_name: sittich-shuffle-6ep
     # All three datasets concatenated into a single training set.
     # Prepare this with: cat datasets/scier/train.jsonl datasets_fixed/scinlp/train.jsonl
-    #                        datasets/gsap-ere/2025-05-15/train.jsonl > datasets/multi/train.jsonl
-    data_dir: datasets/multi/
+    #                        datasets/gsap-ere/2025-05-15/train.jsonl > datasets/multi-sciere/train.jsonl
+    data_dir: datasets/multi-sciere
     train_file: train.jsonl
     dev_file: dev.jsonl
     test_file: test.jsonl
-    rulebased_pruner_file: saves/multi/pruner/rules.json
+    rulebased_pruner_file: saves/multi-sciere/pre-filter/rules.json
     seed: 44
+    shuffle: true
     learning_rate: 1e-6
-    num_train_epochs: 8
+    num_train_epochs: 6
     eval_epochs: 1
     per_gpu_train_batch_size: 16
     gradient_accumulation_steps: 1

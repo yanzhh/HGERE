@@ -5,8 +5,8 @@
 #   uv run gsapere-train-pruner configs/train/multi_dataset/infer_pruner_gsap.yaml
 
 label_set: gsap
-model_dir: saves/multi/pruner/run1
-output_dir: saves/multi/pruner/run1/gsap
+model_dir: saves/multi-sciere/pruner/sittich-shuffle-6ep
+output_dir: saves/multi-sciere/pruner/sittich-shuffle-6ep/gsap-ere-may
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 do_lower_case: true
 model_type: bertspanmarkerpruner
@@ -26,8 +26,7 @@ train_params:
     eval_train: true
     eval_dev: true
     eval_test: true
-    save_predictions: true
-    rulebased_pruner_file: saves/multi/pruner/rules.json
+    rulebased_pruner_file: saves/multi-sciere/pre-filter/rules.json
     seed: 44
     learning_rate: 1e-6
     num_train_epochs: 8
