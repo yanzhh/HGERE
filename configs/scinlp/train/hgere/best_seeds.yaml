@@ -33,7 +33,8 @@ ner_prediction_dir: saves/scinlp/pruner/best
 
 # Optimisation
 train_params:
-    num_train_epochs: 20
+    num_train_epochs: 40
+    per_gpu_train_batch_size: 32
     pre_filter_params:
         method: threshold
         value: 0.015

@@ -51,6 +51,7 @@ train_params:
     eval_test: true
     save_results: true
     shuffle: false
+    weight_decay: 0.1
     preload_dataset: false
     eval_epochs: 1
     per_gpu_train_batch_size: 21
