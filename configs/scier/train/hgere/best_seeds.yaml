@@ -1,5 +1,5 @@
 label_set: scier
-model_dir: saves/scier/hgere/best
+model_dir: saves/scier/hgere/gin-try-warmup
 seeds:
     - 42
     - 43
@@ -42,6 +42,7 @@ train_params:
     pre_filter_params:
         method: threshold
         value: 0.0125
+    warmup_steps: 1000
     # Loss
     loss_re_weight_alpha: 0.5 # (1 - alpha) * loss_ner + alpha * loss_re
     train_file: ent_pred_train.json
