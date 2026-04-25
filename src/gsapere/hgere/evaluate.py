@@ -10,7 +10,6 @@ import json
 import os
 import timeit
 from collections import defaultdict
-from itertools import combinations
 from typing import Any
 
 import torch
@@ -152,22 +151,18 @@ def evaluate(
     n_syms = len(sym_labels)
     n_unsyms = n_rel_label - n_syms
 
-    with torch.no_grad():
-        # for batch in tqdm(eval_dataloader, desc="Evaluating"):
+    # Cache triu indices per n_ent to avoid recomputing each batch
+    _triu_cache: dict[int, tuple] = {}
+
+    with torch.inference_mode():
         for batch in tqdm(eval_dataset.loader, desc="Evaluating"):
             sent_indices = batch["indices"]
             obj_mentions = batch["obj_token_pos"]
-            # subjs = batch["sub"]
-            # print(subjs)
-
-            # rel_labels = batch["rel_labels"]
-            # ner_labels = batch["ner_labels"]
             ent_counts = batch["ent_numbers"]
             inputs = {}
-            input_keys = EVAL_KEYS
 
             for k, v in batch.items():
-                if k in input_keys:
+                if k in EVAL_KEYS:
                     inputs[k] = v.to(args.device)
                 elif k in _NON_TENSOR_KEYS:
                     inputs[k] = v
@@ -180,103 +175,70 @@ def evaluate(
             outputs = model(**inputs)
 
             rel_logits = outputs[0]
-            # print("# bs * n_ent * n_ent * num_rel_labels")
-            # print(rel_logits.shape)
             ner_logits = outputs[1]
 
-            rel_logits = torch.nn.functional.log_softmax(rel_logits, dim=-1)
-
-            # print("rel_logits")
-            # 2 * 10 * 10 * 23
-            # n_sents, n_ents, n_ents, n_rel_label
-            # print(rel_logits.shape)
-            # print(rel_logits)
+            # Apply log-softmax for relations, then move everything to CPU once
+            rel_logits = torch.nn.functional.log_softmax(rel_logits, dim=-1).cpu()
+            ner_logits = ner_logits.cpu()
             ner_preds = torch.argmax(ner_logits, dim=-1)
 
-            # print("ner")
-            # print(ner_preds_label)
-            # print(sent_indices)
-            # rel_logits = (
-            #    rel_logits.cpu().numpy()
-            # )  # for plmk, n_ent_total * max_n_ent * num_rel_labels
-            # ner_preds = (
-            #    ner_preds.cpu().numpy()
-            # )  # for plmk, n_ent_total * num_ner_labels
-            # print(f'indexs:{indexs}')
-            # print(f'ner_labels: {ner_labels}')
-            # if args.baseline not in {'firstorder', 'mfvi', 'gnn'}:
-            #     rel_logits_split = torch.split(rel_logits, ent_numbers)
-            #     rel_logits = pad_sequence(rel_logits_split, batch_first=True, padding_value=0)
+            # Batch NER softmax for all sentences at once
+            ner_softmax = torch.nn.functional.softmax(ner_logits, dim=-1)
+            ner_probs = ner_softmax.gather(-1, ner_preds.unsqueeze(-1)).squeeze(-1)
 
-            # NER Label for entities
+            # NER decoding
             for sample_idx, sent_id in enumerate(sent_indices):
-                n_ent = ent_counts[sample_idx]
-
                 sent_id = tuple(sent_id)
                 sample_obj_mentions = obj_mentions[sample_idx]
-                sample_ner_preds = ner_preds[sample_idx][: len(sample_obj_mentions)]
-                sample_ner_logits = ner_logits[sample_idx][: len(sample_obj_mentions)]
-                sample_ner_softmax = torch.nn.functional.softmax(
-                    sample_ner_logits, dim=-1
-                )
-                sample_ner_probs = sample_ner_softmax.gather(
-                    -1, sample_ner_preds.unsqueeze(-1)
-                ).squeeze(-1)
-                sample_ner_probs = sample_ner_probs.cpu().numpy()
-                sample_ner_labels = [
-                    eval_dataset.ner_label_list[label_idx]
-                    for label_idx in ner_preds[sample_idx]
-                ]
-                ner_predictions[sent_id] = {}
-                for ent_span, label, score in zip(
-                    sample_obj_mentions, sample_ner_labels, sample_ner_probs
-                ):
-                    ent_span = tuple(ent_span)
-                    score = float(score)
-                    ner_predictions[sent_id][ent_span] = label, score
+                n_ent = len(sample_obj_mentions)
+                sample_ner_preds = ner_preds[sample_idx][:n_ent].tolist()
+                sample_ner_probs = ner_probs[sample_idx][:n_ent].tolist()
+                ner_predictions[sent_id] = {
+                    tuple(span): (eval_dataset.ner_label_list[lbl], float(prob))
+                    for span, lbl, prob in zip(
+                        sample_obj_mentions, sample_ner_preds, sample_ner_probs
+                    )
+                }
 
-            # Relations
+            # Relation decoding — vectorized over all pairs per sentence
             for sample_idx, sent_id in enumerate(sent_indices):
-                """
-                sent_rel_logits = rel_logits[sample_idx]
-                sent_rel_logits_T = sent_rel_logits.T
-                # Rearange labels to combine label scores with inverse label scores
-                x, y = n_syms, n_label
-                # inverse dim: n_label * n_label (after n_label are the inverse versions of the labels)
-                sent_rel_logits_T_rearranged = torch.concat([sent_rel_logits_T[:n_syms], sent_rel_logits_T[n_label:]]])
-                sent_rel_logits = torch.add(sent_rel_logits[:n_label], sent_rel_logits_T_rearranged)
-                # Calculate prob
-                sent_rel_logits = torch.nn.softmax(sent_rel_logits)
-                """
-                n_ent = ent_counts[sample_idx]
+                n_ent = int(ent_counts[sample_idx])
                 sent_id = tuple(sent_id)
-                # obj tokens, e.g.: [(2, 3), (3, 4), (6, 6), (6, 7), (10, 10), (10, 11), (13, 14)]
-                # go through all unique entity combinations
-                for subj_idx, obj_idx in combinations(list(range(n_ent)), 2):
-                    subj_span = tuple(obj_mentions[sample_idx][subj_idx])
-                    obj_span = tuple(obj_mentions[sample_idx][obj_idx])
-                    # Calc best score (incl. inverse label)
-                    sample_rel_scores = rel_logits[sample_idx, subj_idx, obj_idx]
-                    sample_rel_scores_inv = rel_logits[sample_idx, obj_idx, subj_idx]
-                    sample_rel_scores_inv = torch.concat(
-                        [
-                            sample_rel_scores_inv[:n_syms],
-                            sample_rel_scores_inv[n_rel_label:],
-                            sample_rel_scores_inv[n_syms:n_rel_label],
-                        ]
-                    )
-                    sample_rel_scores = torch.add(
-                        sample_rel_scores, sample_rel_scores_inv
-                    )
-                    sample_rel_probs = torch.nn.functional.softmax(
-                        sample_rel_scores, dim=-1
-                    )
-                    best_rel_label_idx = torch.argmax(sample_rel_probs)
-                    score = sample_rel_probs[best_rel_label_idx].cpu().item()
-                    # inverse = False
+
+                if n_ent < 2:
+                    continue
+
+                if n_ent not in _triu_cache:
+                    _triu_cache[n_ent] = torch.triu_indices(n_ent, n_ent, offset=1)
+                subj_idxs, obj_idxs = _triu_cache[n_ent]
+
+                # Extract scores for all pairs at once: (n_pairs, n_labels)
+                scores = rel_logits[sample_idx, subj_idxs, obj_idxs]
+                scores_inv_raw = rel_logits[sample_idx, obj_idxs, subj_idxs]
+                scores_inv = torch.cat(
+                    [
+                        scores_inv_raw[:, :n_syms],
+                        scores_inv_raw[:, n_rel_label:],
+                        scores_inv_raw[:, n_syms:n_rel_label],
+                    ],
+                    dim=-1,
+                )
+                combined = scores + scores_inv
+                probs = torch.nn.functional.softmax(combined, dim=-1)
+                best_idxs = probs.argmax(dim=-1)
+                best_scores = probs.gather(1, best_idxs.unsqueeze(1)).squeeze(1)
+
+                best_idxs = best_idxs.tolist()
+                best_scores = best_scores.tolist()
+                subj_idxs = subj_idxs.tolist()
+                obj_idxs = obj_idxs.tolist()
+
+                for pair_idx, (si, oi) in enumerate(zip(subj_idxs, obj_idxs)):
+                    best_rel_label_idx = best_idxs[pair_idx]
+                    score = best_scores[pair_idx]
+                    subj_span = tuple(obj_mentions[sample_idx][si])
+                    obj_span = tuple(obj_mentions[sample_idx][oi])
                     if best_rel_label_idx >= n_rel_label:
-                        # the inverse is better!
-                        # inverse = True
                         best_rel_label_idx -= n_unsyms
                         subj_span, obj_span = obj_span, subj_span
                     label = rel_label_list[best_rel_label_idx]
