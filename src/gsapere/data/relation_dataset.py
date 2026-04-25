@@ -948,6 +948,7 @@ class RelationDataset(DocumentDataset):
             pin_memory=pin_memory,
             worker_init_fn=_worker_init_fn if n_workers > 0 else None,
             persistent_workers=n_workers > 0,
+            prefetch_factor=4 if n_workers > 0 else None,
         )
         return self.loader
 

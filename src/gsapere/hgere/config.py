@@ -218,7 +218,7 @@ class HGERETrainParams(BaseModel):
     # ── Data loading ─────────────────────────────────────────────────────────
     shuffle: bool = Field(default=False, description="Shuffle training data.")
     n_workers: int = Field(
-        default=32,
+        default=8,
         description="Number of DataLoader worker processes for data loading.",
     )
     pre_filter_params: Optional[PreFilterParams] = Field(
