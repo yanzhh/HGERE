@@ -372,6 +372,14 @@ def _load_dataset_for_entry(
         pin_memory=True,
     )
     logger.info("    [%s] %s examples = %d", ds_entry.label_set, split, len(dataset))
+    if dataset.sizes and all(s == 0 for s in dataset.sizes):
+        logger.warning(
+            "[%s] %s: all %d sentences have zero NER candidates — dataset will not "
+            "contribute to training. Check that the pruner has been run on this split.",
+            ds_entry.label_set,
+            split,
+            len(dataset.sizes),
+        )
     return dataset
 
 

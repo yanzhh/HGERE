@@ -307,18 +307,19 @@ class BertForHyperGNN(BertPreTrainedModel):
         rel_reprs = self.rel_encoder(
             sub_reprs.unsqueeze(-2).expand(obj_reprs.shape), obj_reprs
         )  # n_ent x max_ent_num x dr
-        rel_reprs_split = torch.split(rel_reprs, ent_numbers.tolist())
+        ent_numbers_list = ent_numbers.tolist()
+        rel_reprs_split = torch.split(rel_reprs, ent_numbers_list)
         rel_reprs = pad_sequence(rel_reprs_split, batch_first=True, padding_value=0)  #
 
         obj_reprs_split = torch.split(
-            obj_reprs, ent_numbers.tolist()
+            obj_reprs, ent_numbers_list
         )  # split on dim0, (n_ent)
         obj_reprs = pad_sequence(
             obj_reprs_split, batch_first=True, padding_value=-1e4
         )  # n_ent x max_ent_num x max_ent_num x dh
         uni_obj_reprs = torch.max(obj_reprs, dim=1)[0]  # n_ent x max_ent_num x dh
 
-        sub_reprs_split = torch.split(sub_reprs, ent_numbers.tolist())
+        sub_reprs_split = torch.split(sub_reprs, ent_numbers_list)
         sub_reprs = pad_sequence(
             sub_reprs_split, batch_first=True, padding_value=0
         )  # n_ent x max_ent_num x de
@@ -437,19 +438,20 @@ class BertForHyperGNN(BertPreTrainedModel):
             sub_reprs.unsqueeze(-2).expand(obj_reprs.shape), obj_reprs
         )
 
+        ent_numbers_list = ent_numbers.tolist()
         rel_reprs = pad_sequence(
-            torch.split(rel_reprs, ent_numbers.tolist()),
+            torch.split(rel_reprs, ent_numbers_list),
             batch_first=True,
             padding_value=0,
         )
         obj_reprs = pad_sequence(
-            torch.split(obj_reprs, ent_numbers.tolist()),
+            torch.split(obj_reprs, ent_numbers_list),
             batch_first=True,
             padding_value=-1e4,
         )
         uni_obj_reprs = torch.max(obj_reprs, dim=1)[0]
         sub_reprs = pad_sequence(
-            torch.split(sub_reprs, ent_numbers.tolist()),
+            torch.split(sub_reprs, ent_numbers_list),
             batch_first=True,
             padding_value=0,
         )
@@ -690,14 +692,15 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
         rel_reprs = self.rel_encoder(
             sub_reprs.unsqueeze(-2).expand(obj_reprs.shape), obj_reprs
         )
-        rel_reprs_split = torch.split(rel_reprs, ent_numbers.tolist())
+        ent_numbers_list = ent_numbers.tolist()
+        rel_reprs_split = torch.split(rel_reprs, ent_numbers_list)
         rel_reprs = pad_sequence(rel_reprs_split, batch_first=True, padding_value=0)
 
-        obj_reprs_split = torch.split(obj_reprs, ent_numbers.tolist())
+        obj_reprs_split = torch.split(obj_reprs, ent_numbers_list)
         obj_reprs = pad_sequence(obj_reprs_split, batch_first=True, padding_value=-1e4)
         uni_obj_reprs = torch.max(obj_reprs, dim=1)[0]
 
-        sub_reprs_split = torch.split(sub_reprs, ent_numbers.tolist())
+        sub_reprs_split = torch.split(sub_reprs, ent_numbers_list)
         sub_reprs = pad_sequence(sub_reprs_split, batch_first=True, padding_value=0)
 
         mask1d = get_ent_mask1d(ent_numbers)
@@ -806,19 +809,20 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
             sub_reprs.unsqueeze(-2).expand(obj_reprs.shape), obj_reprs
         )
 
+        ent_numbers_list = ent_numbers.tolist()
         rel_reprs = pad_sequence(
-            torch.split(rel_reprs, ent_numbers.tolist()),
+            torch.split(rel_reprs, ent_numbers_list),
             batch_first=True,
             padding_value=0,
         )
         obj_reprs = pad_sequence(
-            torch.split(obj_reprs, ent_numbers.tolist()),
+            torch.split(obj_reprs, ent_numbers_list),
             batch_first=True,
             padding_value=-1e4,
         )
         uni_obj_reprs = torch.max(obj_reprs, dim=1)[0]
         sub_reprs = pad_sequence(
-            torch.split(sub_reprs, ent_numbers.tolist()),
+            torch.split(sub_reprs, ent_numbers_list),
             batch_first=True,
             padding_value=0,
         )
