@@ -60,6 +60,7 @@ train_params:
         value: 0.0125
     warmup_steps: 3000
     project_name: multi-head-hgere
+    wandb_entity: ottowg-gesis7279
     save_results: true
     eval_train: false
     eval_dev: true
