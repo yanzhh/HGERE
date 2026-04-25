@@ -244,9 +244,14 @@ def train(
 
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", "Detected call of `lr_scheduler.step\\(\\)`")
+        num_warmup_steps = (
+            args.warmup_steps
+            if args.warmup_steps != -1
+            else int(args.warmup_ratio * t_total)
+        )
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
-            num_warmup_steps=int(args.warmup_ratio * t_total),
+            num_warmup_steps=num_warmup_steps,
             num_training_steps=t_total,
         )
 

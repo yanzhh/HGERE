@@ -1,5 +1,5 @@
 label_set: scinlp
-model_dir: saves/scinlp/hgere/best
+model_dir: saves/scinlp/hgere/best_bs32_ep20
 seeds:
     - 42
     - 43
@@ -40,6 +40,7 @@ train_params:
         value: 0.015
     learning_rate: 1e-5
     learning_rate_cls: 1e-4
+    per_gpu_train_batch_size: 32
     # W&B
     log_wandb: true
     project_name: scinlp-hgere
