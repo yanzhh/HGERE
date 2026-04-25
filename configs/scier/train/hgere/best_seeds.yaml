@@ -1,5 +1,5 @@
 label_set: scier
-model_dir: saves/scier/hgere/gin-try-warmup
+model_dir: saves/scier/hgere/bacardi-ws3000
 seeds:
     - 42
     - 43
@@ -42,7 +42,9 @@ train_params:
     pre_filter_params:
         method: threshold
         value: 0.0125
-    warmup_steps: 1000
+    warmup_steps: 3000
+    per_gpu_train_batch_size: 18
+    gradient_accumulation_steps: 2
     # Loss
     loss_re_weight_alpha: 0.5 # (1 - alpha) * loss_ner + alpha * loss_re
     train_file: ent_pred_train.json
@@ -56,8 +58,6 @@ train_params:
     n_workers: 16
     do_train: true
     eval_epochs: 1
-    per_gpu_train_batch_size: 32
-    gradient_accumulation_steps: 1
     adam_epsilon: 1e-8
     fp16: true
     local_rank: -1
