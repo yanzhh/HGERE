@@ -201,6 +201,10 @@ class PrunerTrainParams(BaseModel):
         default=True, description="Persist predictions to disk after evaluation."
     )
     shuffle: bool = Field(default=False, description="Shuffle training data.")
+    n_workers: int = Field(
+        default=4,
+        description="Number of DataLoader worker processes for data loading.",
+    )
 
     # ── Eval settings ─────────────────────────────────────────────────────────
     target_recall_diff: float = Field(

@@ -269,12 +269,16 @@ def load_data(args, tokenizer, logger):
         if args.local_rank == -1
         else DistributedSampler(train_dataset)
     )
+    n_workers = getattr(args, "n_workers", 4)
     train_data_loader = DataLoader(
         train_dataset,
         sampler=train_sampler,
         batch_size=args.train_batch_size,
         collate_fn=PrunerCollator(),
-        num_workers=1,
+        num_workers=n_workers,
+        pin_memory=True,
+        persistent_workers=n_workers > 0,
+        prefetch_factor=4 if n_workers > 0 else None,
     )
     return train_sampler, train_data_loader
 
