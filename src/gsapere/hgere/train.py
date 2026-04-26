@@ -337,7 +337,7 @@ def train(
 
             for k, v in batch.items():
                 if k in input_keys:
-                    inputs[k] = v.to(args.device)
+                    inputs[k] = v.to(args.device, non_blocking=True)
                 elif k in _NON_TENSOR_KEYS:
                     inputs[k] = v
             # Compute loss weighting alpha (RE share): static or dynamic sigmoid schedule
@@ -374,16 +374,20 @@ def train(
                     re_loss = re_loss / args.gradient_accumulation_steps
                     ner_loss = ner_loss / args.gradient_accumulation_steps
 
-                tr_loss += loss.item()
-                if re_loss > 0:
-                    tr_re_loss += re_loss.item()
-                if ner_loss > 0:
-                    tr_ner_loss += ner_loss.item()
-
-                logging_reloss += re_loss.item()
-                logging_nerloss += ner_loss.item()
-
             scaler.scale(loss).backward()
+
+            # Accumulate loss scalars AFTER queuing backward so the CPU does not
+            # block the forward→backward transition on the GPU.
+            _loss_val = loss.detach().item()
+            _re_loss_val = re_loss.detach().item()
+            _ner_loss_val = ner_loss.detach().item()
+            tr_loss += _loss_val
+            if _re_loss_val > 0:
+                tr_re_loss += _re_loss_val
+            if _ner_loss_val > 0:
+                tr_ner_loss += _ner_loss_val
+            logging_reloss += _re_loss_val
+            logging_nerloss += _ner_loss_val
 
             # t3 = timeit.default_timer()
             # logger.info(f"time for loss backward: {t3-t2}s")
