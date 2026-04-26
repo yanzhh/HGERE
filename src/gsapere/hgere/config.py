@@ -130,7 +130,7 @@ class HGERETrainParams(BaseModel):
     warmup_ratio: float = Field(
         default=0.1, description="Linear warmup ratio (used if warmup_steps=-1)."
     )
-    logging_steps: int = Field(default=5, description="Log every N update steps.")
+    logging_steps: int = Field(default=100, description="Log every N update steps.")
     save_steps: int = Field(
         default=1000, description="Save a checkpoint every N update steps."
     )
