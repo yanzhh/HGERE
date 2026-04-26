@@ -29,13 +29,13 @@ class PrunerDataset(DocumentDataset):
 
     def __init__(
         self,
-        file_path: str | Path,
-        tokenizer: Any,
-        max_seq_length: int,
-        max_pair_length: int,
-        max_mention_ori_length: int,
-        model_type: str,
-        label_set: str,
+        file_path: str | Path | None = None,
+        tokenizer: Any = None,
+        max_seq_length: int = 512,
+        max_pair_length: int = 64,
+        max_mention_ori_length: int = 8,
+        model_type: str = "bert",
+        label_set: str = "",
         evaluate: bool = False,
         rulebased_pruner_file: str | None = None,
         shuffle: bool = False,
@@ -44,6 +44,7 @@ class PrunerDataset(DocumentDataset):
         group_axis: int = -1,
         nocross: bool = False,
         doc_limit: int | None = None,
+        in_memory_docs: list[dict] | None = None,
     ) -> None:
         self.max_pair_length = max_pair_length
         self.max_entity_length = max_pair_length * 2
@@ -73,6 +74,10 @@ class PrunerDataset(DocumentDataset):
         self.n_gold_in_candidates: int = 0
         self.ner_golden_labels: set[tuple[Any, ...]] = set()
 
+        # Cache of base attention masks keyed by context-window length L.
+        # Populated during _build_index() for non-modernbert, non-span models.
+        self._base_attn_cache: dict[int, torch.Tensor] = {}
+
         # Call base __init__ which runs _index_file(); then we run _build_index()
         super().__init__(
             file_path=file_path,
@@ -80,6 +85,7 @@ class PrunerDataset(DocumentDataset):
             max_seq_length=max_seq_length,
             lazy=False,
             doc_limit=doc_limit,
+            in_memory_docs=in_memory_docs,
         )
         self._build_index()
 
@@ -151,6 +157,27 @@ class PrunerDataset(DocumentDataset):
                     + [self.tokenizer.sep_token]
                 )
 
+                # Precompute token IDs and context-window length once per sentence.
+                input_ids_base = self.tokenizer.convert_tokens_to_ids(target_tokens)
+                L = len(input_ids_base)
+
+                # Cache the base attention mask (without per-chunk marker entries)
+                # for BERT-family models; cloning is faster than rebuilding from zeros.
+                _is_modernbert = self.model_type.startswith("modernbert")
+                _is_span = self.model_type in ["bertspan", "robertaspan", "albertspan"]
+                if (
+                    not _is_modernbert
+                    and not _is_span
+                    and L not in self._base_attn_cache
+                ):
+                    _base = torch.zeros(
+                        (self.max_entity_length + self.max_seq_length,) * 2,
+                        dtype=torch.int64,
+                    )
+                    _base[:L, :L] = 1
+                    _base.fill_diagonal_(1)
+                    self._base_attn_cache[L] = _base
+
                 entity_infos: list[tuple[tuple[int, int], int, tuple[int, int]]] = []
                 sentence_begin_in_context = left_context_length
                 sentence_end_in_context = left_context_length + sentence_length
@@ -213,7 +240,8 @@ class PrunerDataset(DocumentDataset):
                     for i in range(0, max(len(entity_infos), 1), dL):
                         examples = entity_infos[i : i + dL]
                         item: dict[str, Any] = {
-                            "sentence": target_tokens,
+                            "input_ids_base": input_ids_base,
+                            "L": L,
                             "examples": examples,
                             "example_index": (line_idx, sentence_idx),
                             "example_L": len(entity_infos),
@@ -235,7 +263,8 @@ class PrunerDataset(DocumentDataset):
                     if len(entity_infos) == 0:
                         self.data.append(
                             {
-                                "sentence": target_tokens,
+                                "input_ids_base": input_ids_base,
+                                "L": L,
                                 "examples": [],
                                 "example_index": (line_idx, sentence_idx),
                                 "example_L": 0,
@@ -258,7 +287,8 @@ class PrunerDataset(DocumentDataset):
                         examples = entity_infos[_start:_end]
                         self.data.append(
                             {
-                                "sentence": target_tokens,
+                                "input_ids_base": input_ids_base,
+                                "L": L,
                                 "examples": examples,
                                 "example_index": (line_idx, sentence_idx),
                                 "example_L": len(entity_infos),
@@ -273,11 +303,11 @@ class PrunerDataset(DocumentDataset):
 
     def _item_to_tensors(self, entry: dict[str, Any]) -> list[Any]:
         """Convert a preprocessed entry dict to a list of tensors + metadata."""
-        input_ids = self.tokenizer.convert_tokens_to_ids(entry["sentence"])
-        L = len(input_ids)
+        input_ids = list(entry["input_ids_base"])
+        L = entry["L"]
 
         if not self.model_type.startswith("modernbert"):
-            input_ids += [0] * (self.max_seq_length - len(input_ids))
+            input_ids += [0] * (self.max_seq_length - L)
 
         position_plus_pad = int(self.model_type.find("roberta") != -1) * 2
 
@@ -319,19 +349,20 @@ class PrunerDataset(DocumentDataset):
                     + [0] * (self.max_pair_length - len(entry["examples"]))
                 )
 
-            attention_mask = torch.zeros(
-                (self.max_entity_length + self.max_seq_length,) * 2,
-                dtype=torch.int64,
-            )
-            attention_mask[:L, :L] = 1
-            attention_mask.fill_diagonal_(1)
-
             if self.model_type.startswith("modernbert"):
+                # 1D all-ones mask — skip the expensive 2D construction that
+                # gets discarded at the end of this function anyway.
+                attention_mask = torch.ones(
+                    self.max_entity_length + self.max_seq_length, dtype=torch.int64
+                )
                 position_ids = list(range(L)) + [0] * (
                     self.max_seq_length + self.max_entity_length - L
                 )
                 marker_offset = L
             else:
+                # Clone the precomputed base ([:L,:L]=1, diagonal=1); only the
+                # per-chunk marker rows/columns need to be patched below.
+                attention_mask = self._base_attn_cache[L].clone()
                 position_ids = (
                     list(
                         range(
@@ -373,15 +404,11 @@ class PrunerDataset(DocumentDataset):
             position_ids[w1] = m1[0]
             position_ids[w2] = m1[1]
 
-            for xx in [w1, w2]:
-                for yy in [w1, w2]:
-                    attention_mask[xx, yy] = 1
-                attention_mask[xx, :L] = 1
-
-        if self.model_type.startswith("modernbert") and attention_mask.dim() == 2:
-            attention_mask = torch.ones(
-                attention_mask.shape[0], dtype=attention_mask.dtype
-            )
+            if not self.model_type.startswith("modernbert"):
+                for xx in [w1, w2]:
+                    for yy in [w1, w2]:
+                        attention_mask[xx, yy] = 1
+                    attention_mask[xx, :L] = 1
 
         labels += [-1] * (num_pair - len(labels))
         mention_pos += [(0, 0)] * (num_pair - len(mention_pos))

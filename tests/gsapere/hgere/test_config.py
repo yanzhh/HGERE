@@ -41,12 +41,10 @@ MULTI_DS_CONFIG: dict[str, Any] = {
     "sampling_temperature": 0.5,
     "datasets": [
         {
-            "name": "scier",
             "label_set": "scier",
             "ner_prediction_dir": "saves/scier/pruner/output",
         },
         {
-            "name": "scinlp",
             "label_set": "scinlp",
             "ner_prediction_dir": "saves/scinlp/pruner/output",
         },
@@ -96,10 +94,9 @@ class TestMultiDatasetConfig:
     def test_dataset_entries_parsed(self) -> None:
         config = HGERETrainConfig.model_validate(MULTI_DS_CONFIG)
         ds = config.datasets
-        assert ds[0].name == "scier"
         assert ds[0].label_set == "scier"
         assert ds[0].ner_prediction_dir == "saves/scier/pruner/output"
-        assert ds[1].name == "scinlp"
+        assert ds[1].label_set == "scinlp"
 
     def test_dataset_entry_defaults(self) -> None:
         config = HGERETrainConfig.model_validate(MULTI_DS_CONFIG)

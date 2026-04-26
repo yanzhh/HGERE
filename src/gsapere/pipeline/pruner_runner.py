@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import tempfile
 import types
 from pathlib import Path
 from typing import Any
@@ -296,25 +294,13 @@ class PrunerRunner:
         n_gpu = torch.cuda.device_count()
         args = self._make_args(n_gpu)
 
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".jsonl", delete=False
-            ) as tmp_f:
-                tmp_path = tmp_f.name
-                for doc in docs:
-                    tmp_f.write(json.dumps(doc) + "\n")
-
-            pool = run_pruner_inference(
-                args,
-                self._model,
-                self._tokenizer,
-                tmp_path,
-                disable_progress=not show_progress,
-            )
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+        pool = run_pruner_inference(
+            args,
+            self._model,
+            self._tokenizer,
+            docs=docs,
+            disable_progress=not show_progress,
+        )
 
         filtered = apply_final_pruning(pool, self._config.final_pruning)
 

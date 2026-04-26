@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import timeit
 from collections import defaultdict
@@ -50,7 +52,7 @@ def _run_pruner_batch_loop(
 
         batch = tuple(t.to(args.device) for t in batch[:6])
 
-        with torch.no_grad():
+        with torch.inference_mode():
             inputs = {
                 "input_ids": batch[0],
                 "attention_mask": batch[1],
@@ -112,8 +114,9 @@ def run_pruner_inference(
     args: object,
     model: object,
     tokenizer: object,
-    file_path: str,
+    file_path: str | None = None,
     disable_progress: bool = True,
+    docs: list[dict] | None = None,
 ) -> dict[tuple[int, int], list[tuple[int, int, float, str]]]:
     """Run pruner inference and return the span candidate pool per sentence.
 
@@ -129,13 +132,15 @@ def run_pruner_inference(
             n_gpu).
         model: Loaded BertForSpanMarkerNerPruner in eval mode.
         tokenizer: Matching tokenizer.
-        file_path: Path to JSONL input file.
+        file_path: Path to JSONL input file. Mutually exclusive with ``docs``.
+        docs: Pre-parsed list of document dicts. When provided, no file I/O
+            occurs; ``file_path`` is ignored.
 
     Returns:
         Dict mapping (line_idx, sent_idx) -> list of (start, end, prob, gold_label).
     """
     eval_dataset = PrunerDataset(
-        file_path=file_path,
+        file_path=file_path if docs is None else None,
         tokenizer=tokenizer,
         max_seq_length=args.max_seq_length,
         max_pair_length=args.max_pair_length,
@@ -145,17 +150,22 @@ def run_pruner_inference(
         evaluate=True,
         nocross=getattr(args, "nocross", False),
         rulebased_pruner_file=getattr(args, "rulebased_pruner_file", None),
+        in_memory_docs=docs,
     )
 
     goldspan2label = _span2label(set(eval_dataset.ner_golden_labels))
     eval_sampler = SequentialSampler(eval_dataset)
     eval_batch_size = args.per_gpu_eval_batch_size * max(1, getattr(args, "n_gpu", 1))
+    n_workers = 4
     eval_dataloader = DataLoader(
         eval_dataset,
         sampler=eval_sampler,
         batch_size=eval_batch_size,
         collate_fn=PrunerCollator(),
-        num_workers=4,
+        num_workers=n_workers,
+        pin_memory=True,
+        persistent_workers=n_workers > 0,
+        prefetch_factor=4 if n_workers > 0 else None,
     )
 
     topk_infos = (
