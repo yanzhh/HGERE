@@ -40,14 +40,15 @@ class DocumentDataset(Dataset, ABC):
 
     def __init__(
         self,
-        file_path: str | Path,
+        file_path: str | Path | None,
         tokenizer: Any,
         max_seq_length: int,
         lazy: bool = False,
         pre_filter_params: dict[Any, Any] | None = None,
         doc_limit: int | None = None,
+        in_memory_docs: list[dict] | None = None,
     ) -> None:
-        self._file_path = Path(file_path)
+        self._file_path = Path(file_path) if file_path is not None else None
         self.tokenizer = tokenizer
         self.max_seq_length = max_seq_length
         self._lazy = lazy
@@ -55,13 +56,26 @@ class DocumentDataset(Dataset, ABC):
 
         self.do_pre_filter = pre_filter_params is not None
         self.pre_filter_params = pre_filter_params
+        self._in_memory_docs = in_memory_docs
 
-        # Scan file for byte offsets — fast, no JSON parsing
-        self._offsets = self._index_file()
+        if in_memory_docs is not None:
+            n = (
+                min(len(in_memory_docs), doc_limit)
+                if doc_limit is not None
+                else len(in_memory_docs)
+            )
+            self._offsets = list(range(n))
+        else:
+            # Scan file for byte offsets — fast, no JSON parsing
+            self._offsets = self._index_file()
 
     @property
     def file_path(self) -> Path:
         """Public accessor for the dataset file path (backward compat with ACEDatasetNER)."""
+        if self._file_path is None:
+            raise AttributeError(
+                "Dataset was constructed from in-memory docs; no file path is available."
+            )
         return self._file_path
 
     # ------------------------------------------------------------------
@@ -90,9 +104,12 @@ class DocumentDataset(Dataset, ABC):
     def _load_raw_document(self, line_idx: int) -> Document:
         """Read line at _offsets[line_idx], parse JSON, apply PTB unescape,
         and return a frozen Document domain object."""
-        with open(self._file_path, "rb") as f:
-            f.seek(self._offsets[line_idx])
-            raw = json.loads(f.readline())
+        if self._in_memory_docs is not None:
+            raw = self._in_memory_docs[line_idx]
+        else:
+            with open(self._file_path, "rb") as f:
+                f.seek(self._offsets[line_idx])
+                raw = json.loads(f.readline())
 
         sentences_raw: list[list[str]] = raw["sentences"]
         ner_raw: list[list[list[Any]]] = raw.get("ner", [[] for _ in sentences_raw])
