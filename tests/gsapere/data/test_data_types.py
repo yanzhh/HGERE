@@ -325,7 +325,7 @@ class TestObjectEntryFields:
 
 class TestSentenceSubjectCandidateFields:
     def test_fields_exist(self) -> None:
-        expected = {"index", "subject_marked_tokens", "subject", "relations"}
+        expected = {"index", "input_ids", "subject", "relations"}
         actual = {f.name for f in dataclasses.fields(SentenceSubjectCandidate)}
         assert actual == expected
 

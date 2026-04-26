@@ -323,10 +323,17 @@ class RelationDataset(DocumentDataset):
                         entity_labels_gold=entity_labels_gold,
                     )
 
+                    _ids = np.array(
+                        self.tokenizer.convert_tokens_to_ids(subject_marked_tokens),
+                        dtype=np.int32,
+                    )
+                    if self._dataset_cls_token_id is not None:
+                        _ids[0] = self._dataset_cls_token_id
+
                     subject_candidates.append(
                         SentenceSubjectCandidate(
                             index=(doc_idx, sentence_idx),
-                            subject_marked_tokens=subject_marked_tokens,
+                            input_ids=_ids,
                             subject=SubjectInfo(
                                 token_span=(subj_begin, subj_end, subj_label),
                                 subtoken_pos=(subj_begin_sent, subj_end_sent),
@@ -821,11 +828,7 @@ class RelationDataset(DocumentDataset):
         subject_token_spans: list[tuple[int, int, str]] = []
 
         for entry in sent.subject_candidates:
-            input_ids = self.tokenizer.convert_tokens_to_ids(
-                entry.subject_marked_tokens
-            )
-            if self._dataset_cls_token_id is not None:
-                input_ids[0] = self._dataset_cls_token_id
+            input_ids = entry.input_ids.tolist()
             input_seq_len = len(input_ids)
             input_ids += [self.tokenizer.pad_token_id] * (
                 self.max_seq_length - input_seq_len

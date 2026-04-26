@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, model_validator
 
 
@@ -174,7 +175,9 @@ class SentenceSubjectCandidate:
     """
 
     index: tuple[int, int]  # (doc_idx, sent_idx)
-    subject_marked_tokens: list[str]  # subtokens with subject boundary markers injected
+    input_ids: (
+        np.ndarray
+    )  # token IDs (int32) with subject boundary markers, without padding
     subject: SubjectInfo
     relations: list[ObjectEntry]  # one entry per object candidate
 
