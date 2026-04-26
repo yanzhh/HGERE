@@ -916,6 +916,7 @@ class RelationDataset(DocumentDataset):
         batch_by_size: bool = False,
         n_workers: int = 0,
         pin_memory: bool = True,
+        persistent_workers: bool = False,
     ) -> DataLoader:
         """Build and return a DataLoader over this dataset.
 
@@ -950,7 +951,7 @@ class RelationDataset(DocumentDataset):
             collate_fn=self.collate_fn,
             pin_memory=pin_memory,
             worker_init_fn=_worker_init_fn if n_workers > 0 else None,
-            persistent_workers=n_workers > 0,
+            persistent_workers=persistent_workers and n_workers > 0,
             prefetch_factor=4 if n_workers > 0 else None,
         )
         return self.loader

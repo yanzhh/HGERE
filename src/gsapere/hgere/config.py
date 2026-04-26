@@ -221,6 +221,14 @@ class HGERETrainParams(BaseModel):
         default=8,
         description="Number of DataLoader worker processes for data loading.",
     )
+    persistent_workers: bool = Field(
+        default=False,
+        description=(
+            "Keep DataLoader worker processes alive between epochs. "
+            "Saves epoch-boundary overhead but workers retain their RSS indefinitely. "
+            "Leave False unless profiling shows epoch restarts are a bottleneck."
+        ),
+    )
     pre_filter_params: Optional[PreFilterParams] = Field(
         default=None, description="Parameters for pre-filtering NER candidates."
     )
