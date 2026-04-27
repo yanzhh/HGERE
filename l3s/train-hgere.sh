@@ -1,5 +1,3 @@
-#nvidia-smi  # GPU-Info anzeigen
-uv run gsapere-train-hgere configs/scinlp/train/hgere/best_seeds.yaml
 #!/bin/bash
 #SBATCH --job-name=hgere
 #SBATCH --nodes=1
