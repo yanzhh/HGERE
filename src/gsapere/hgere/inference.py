@@ -37,7 +37,7 @@ import timeit
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 from tqdm import tqdm
@@ -103,7 +103,7 @@ def _decode_relation_batch(
     logger,
     debug_log_rel_probs: bool = False,
     debug_break_on_first_rel: bool = False,
-    _triu_cache: dict | None = None,
+    _triu_cache: Optional[dict] = None,
 ) -> dict:
     """Decode relation predictions for one batch.
 
