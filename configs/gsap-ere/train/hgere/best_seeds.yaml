@@ -1,5 +1,5 @@
 label_set: gsap
-model_dir: saves/gsap-ere/hgere/bacardi_best
+model_dir: saves/gsap-ere/hgere/l3s_best
 seeds:
     - 42
     - 43

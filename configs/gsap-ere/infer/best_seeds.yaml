@@ -9,7 +9,7 @@ pruner:
     max_seq_length: 256
     max_pair_length: 64
     max_mention_ori_length: 12
-    rulebased_pruner_file: /data_ssds/disk01/ottowg_gsap/model-hgere/gsap-best-rules.json
+    rulebased_pruner_file: saves/gsap-ere/pre-filter/rules.json
     topk_ratio: 8
     min_mentions_num: 1
     max_mentions_num: 60
@@ -18,7 +18,7 @@ pruner:
         threshold: 0.00005
 
 hgere:
-    model_dir: saves/gsap-ere/hgere/best
+    model_dir: saves/gsap-ere/hgere/l3s_best
     seeds:
       - 42
       - 43
