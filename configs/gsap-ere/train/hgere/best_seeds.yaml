@@ -38,6 +38,7 @@ train_params:
         method: threshold
         value: 0.0125
     num_train_epochs: 8
+    warmup_steps: 3000
     # W&B
     log_wandb: true
     project_name: gsap-rel-hgere
@@ -45,7 +46,7 @@ train_params:
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
-    n_workers: 16
+    n_workers: 32
     do_train: true
     eval_dev: true
     eval_test: true
