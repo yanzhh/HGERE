@@ -1,5 +1,5 @@
 label_set: gsap
-model_dir: saves/gsap-ere/hgere/best_bad_pruner_noshuffle
+model_dir: saves/gsap-ere/hgere/slurm-ws3000
 seeds:
     - 42
     - 43
@@ -27,7 +27,7 @@ re_focal_loss: false
 
 # Data
 ## Pruner predictions used as NER candidates input to HGERE
-ner_prediction_dir: saves/gsap-ere/pruner/best_
+ner_prediction_dir: saves/gsap-ere/pruner/best
 #data_dir: datasets/gsap-ere
 
 # Optimisation
@@ -38,6 +38,7 @@ train_params:
         method: threshold
         value: 0.0125
     num_train_epochs: 8
+    warmup_steps: 3000
     # W&B
     log_wandb: true
     project_name: gsap-rel-hgere
@@ -45,7 +46,7 @@ train_params:
     train_file: ent_pred_train.json
     dev_file: ent_pred_dev.json
     test_file: ent_pred_test.json
-    n_workers: 16
+    n_workers: 32
     do_train: true
     eval_dev: true
     eval_test: true
