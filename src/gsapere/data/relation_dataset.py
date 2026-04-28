@@ -917,6 +917,7 @@ class RelationDataset(DocumentDataset):
         n_workers: int = 0,
         pin_memory: bool = True,
         persistent_workers: bool = False,
+        seed: int = 0,
     ) -> DataLoader:
         """Build and return a DataLoader over this dataset.
 
@@ -927,6 +928,7 @@ class RelationDataset(DocumentDataset):
                 minimise padding (recommended for training efficiency).
             n_workers: Number of DataLoader worker processes.
             pin_memory: Pin memory for faster GPU transfer.
+            seed: Base seed for the DataLoader generator (worker seeds).
         """
         if batch_by_size:
             self.buckets = create_size_sorted_batches(self.sizes, batch_size)
@@ -944,6 +946,9 @@ class RelationDataset(DocumentDataset):
             random.seed(worker_seed + worker_id)
             np.random.seed(worker_seed + worker_id)
 
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+
         self.loader = DataLoader(
             dataset=self,
             batch_sampler=sampler_cls(buckets=self.buckets),
@@ -953,6 +958,7 @@ class RelationDataset(DocumentDataset):
             worker_init_fn=_worker_init_fn if n_workers > 0 else None,
             persistent_workers=persistent_workers and n_workers > 0,
             prefetch_factor=4 if n_workers > 0 else None,
+            generator=generator,
         )
         return self.loader
 

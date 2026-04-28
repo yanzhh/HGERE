@@ -43,3 +43,8 @@ def set_seed(args):
         torch.cuda.manual_seed_all(args.seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    # Required for deterministic cuBLAS (linear layers, attention matmul).
+    # Must be set before any CUDA kernel launches; setting the env var here
+    # is safe because PyTorch reads it lazily on first cuBLAS workspace alloc.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(True)

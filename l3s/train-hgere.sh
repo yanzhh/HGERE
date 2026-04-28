@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=hgere
 #SBATCH --nodes=1
-#SBATCH --gpus=1  # 1 GPU anfordern
+#SBATCH --gpus=h100:1  # 1 GPU anfordern
 #SBATCH --cpus-per-task=32
 #SBATCH --time=2-01:00:00
 #SBATCH --mem 30G
