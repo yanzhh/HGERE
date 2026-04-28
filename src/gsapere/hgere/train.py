@@ -57,7 +57,8 @@ def _evaluate_multi_or_single(
     ``<model_dir>/<dataset_name>/`` so results stay separated by dataset.
 
     Returns per-dataset metrics under ``{name}/{metric}`` keys plus a
-    macro-averaged ``re+_f1`` used for best-model checkpoint selection.
+    micro-averaged ``re+_f1`` (and ``re+_precision``, ``re+_recall``) computed
+    from summed TP/FP/FN counts across all datasets.
     """
     import copy
 
@@ -87,9 +88,19 @@ def _evaluate_multi_or_single(
         for name, results in per_dataset.items():
             for k, v in results.items():
                 merged[f"{name}/{k}"] = v
-        merged["re+_f1"] = sum(r["re+_f1"] for r in per_dataset.values()) / len(
-            per_dataset
+        # Micro re+_f1 across all datasets from summed TP/FP/FN counts.
+        total_tp = sum(r["re+_tp"] for r in per_dataset.values())
+        total_fp = sum(r["re+_fp"] for r in per_dataset.values())
+        total_fn = sum(r["re+_fn"] for r in per_dataset.values())
+        micro_p = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+        micro_r = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+        merged["re+_f1"] = (
+            2 * micro_p * micro_r / (micro_p + micro_r)
+            if (micro_p + micro_r) > 0
+            else 0.0
         )
+        merged["re+_precision"] = micro_p
+        merged["re+_recall"] = micro_r
         return merged
     return evaluate(
         model,
@@ -490,10 +501,16 @@ def train(
                     metrics_to_log["eval/loss"] = (
                         alpha * avg_loss_re + (1 - alpha) * avg_loss_ner
                     )
+                    # Per-dataset re+_f1 keys (multi-head): log under eval/{name}/re+_f1
+                    metrics_to_log |= {
+                        f"eval/{k}": v
+                        for k, v in results.items()
+                        if k.endswith("/re+_f1") and k not in _EVAL_KEYS
+                    }
                     metrics_to_log |= {
                         f"eval_detail/{k}": v
                         for k, v in results.items()
-                        if k not in _EVAL_KEYS
+                        if k not in _EVAL_KEYS and not k.endswith("/re+_f1")
                     }
                     wandb.log(metrics_to_log, step=global_step)
 

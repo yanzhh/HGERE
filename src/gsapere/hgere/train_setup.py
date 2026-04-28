@@ -238,6 +238,7 @@ def setup_training(args, logger):
                         f"{list(model.ner_cls.parameters())[-1].data.sum():.6f}"
                     )
             # eval train
+            # Top-level aggregate keys (micro for multi-head, direct for single-head)
             _SPLIT_KEYS = {
                 "ner_precision",
                 "ner_recall",
@@ -249,6 +250,18 @@ def setup_training(args, logger):
                 "re+_recall",
                 "re+_f1",
             }
+
+            def _wandb_split_metrics(prefix: str, results: dict) -> dict:
+                """Flat aggregate keys + per-dataset re+_f1 under wandb prefix."""
+                out = {
+                    f"{prefix}/{k}": v for k, v in results.items() if k in _SPLIT_KEYS
+                }
+                # Per-dataset breakdown: keys of the form "{name}/re+_f1"
+                for k, v in results.items():
+                    if k.endswith("/re+_f1") and k not in _SPLIT_KEYS:
+                        out[f"{prefix}/{k}"] = v
+                return out
+
             if args.eval_train:
                 train_results = _evaluate_multi_or_single(
                     model,
@@ -261,11 +274,7 @@ def setup_training(args, logger):
                 report["train"] = train_results
                 if wandb.run is not None:
                     wandb.log(
-                        {
-                            f"train_eval/{k}": v
-                            for k, v in train_results.items()
-                            if k in _SPLIT_KEYS
-                        },
+                        _wandb_split_metrics("train_eval", train_results),
                         commit=False,
                     )
             # eval dev
@@ -291,11 +300,7 @@ def setup_training(args, logger):
                 report["test"] = test_results
                 if wandb.run is not None:
                     wandb.log(
-                        {
-                            f"test/{k}": v
-                            for k, v in test_results.items()
-                            if k in _SPLIT_KEYS
-                        },
+                        _wandb_split_metrics("test", test_results),
                         commit=False,
                     )
 
