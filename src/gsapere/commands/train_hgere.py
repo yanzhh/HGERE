@@ -167,6 +167,12 @@ def _run_single_seed(config: HGERETrainConfig) -> None:
         logger = get_logger(args, exp_path, args.eval_test)
 
     else:
+        # Fresh training run: remove any stale checkpoint-* subdirectories so
+        # get_checkpoints doesn't find leftovers from a previous run.
+        if os.path.exists(args.model_dir) and args.overwrite_output_dir:
+            for entry in Path(args.model_dir).iterdir():
+                if entry.is_dir() and entry.name.startswith("checkpoint-"):
+                    shutil.rmtree(entry)
         exp_path = create_exp_dir(args.model_dir, scripts_to_save=[]) or args.model_dir
         logger = get_logger(args, exp_path, args.eval_test)
 

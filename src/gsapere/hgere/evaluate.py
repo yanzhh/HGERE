@@ -317,12 +317,21 @@ def evaluate(
 
 
 def get_checkpoints(args: Any) -> list:
-    checkpoints = [args.model_dir]
-
     if args.eval_all_checkpoints:
         found = sorted(
             glob.glob(args.model_dir + "/**/" + WEIGHTS_NAME, recursive=True)
             + glob.glob(args.model_dir + "/**/" + SAFETENSORS_NAME, recursive=True)
         )
-        checkpoints = list(dict.fromkeys(os.path.dirname(c) for c in found))
-    return checkpoints
+        return list(dict.fromkeys(os.path.dirname(c) for c in found))
+
+    # Default: only the most recent (best-F1) checkpoint, identified by the
+    # highest step number in the checkpoint directory name.
+    ckpt_dirs = sorted(
+        glob.glob(os.path.join(args.model_dir, "checkpoint-*")),
+        key=lambda p: (
+            int(p.rsplit("-", 1)[-1]) if p.rsplit("-", 1)[-1].isdigit() else -1
+        ),
+    )
+    if ckpt_dirs:
+        return [ckpt_dirs[-1]]
+    return [args.model_dir]

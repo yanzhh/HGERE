@@ -71,6 +71,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Number of documents per batch (0 = all at once).",
     )
     p.add_argument(
+        "--skip_train",
+        action="store_true",
+        help="Skip files named 'train.jsonl'.",
+    )
+    p.add_argument(
         "--debug_break_on_first_rel",
         action="store_true",
         help="Debug: log and raise after the first predicted relation.",
@@ -306,6 +311,10 @@ def cli() -> None:
         effective_seed = seed if use_seed_subdir else None
 
         for input_file in file_iter:
+            if args.skip_train and input_file.name == "train.jsonl":
+                logger.info("Skipping %s (--skip_train)", input_file)
+                continue
+
             output_file = (
                 output_path / input_file.name if input_path.is_dir() else output_path
             )
