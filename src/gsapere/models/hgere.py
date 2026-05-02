@@ -25,6 +25,10 @@ Supporting modules
     LinearMessegePasser – single linear message-passing step
 """
 
+from __future__ import annotations
+
+from typing import Optional
+
 from transformers import (
     AutoTokenizer,
     BertConfig,
@@ -55,16 +59,52 @@ from torch.nn.utils.rnn import pad_sequence
 # ---------------------------------------------------------------------------
 
 
-def _build_ner_head(ent_dim: int, num_ner_labels: int, ent_repr: str) -> Module:
+def _build_ner_head(
+    ent_dim: int,
+    num_ner_labels: int,
+    ent_repr: str,
+    head_hidden_dim: Optional[int] = None,
+) -> Module:
     """Build a single NER classification head."""
+    out_dim = head_hidden_dim if head_hidden_dim is not None else num_ner_labels
     if ent_repr == "mix":
-        return CatEncoder(input_dims=[ent_dim] * 2, output_dim=num_ner_labels)
-    return Linear(ent_dim, num_ner_labels)
+        inner: Module = CatEncoder(input_dims=[ent_dim] * 2, output_dim=out_dim)
+    else:
+        inner = Linear(ent_dim, out_dim)
+    if head_hidden_dim is None:
+        return inner
+    return _HeadWithFC(inner, head_hidden_dim, num_ner_labels)
 
 
-def _build_rel_head(rel_dim: int, num_rel_labels: int) -> Module:
+def _build_rel_head(
+    rel_dim: int,
+    num_rel_labels: int,
+    head_hidden_dim: Optional[int] = None,
+) -> Module:
     """Build a single relation classification head."""
-    return Linear(rel_dim, num_rel_labels)
+    if head_hidden_dim is None:
+        return Linear(rel_dim, num_rel_labels)
+    return _HeadWithFC(
+        Linear(rel_dim, head_hidden_dim), head_hidden_dim, num_rel_labels
+    )
+
+
+def _sync_head_fc_projections(
+    ner_heads: "nn.ModuleDict", rel_heads: "nn.ModuleDict"
+) -> None:
+    """Copy the first head's FC inner_proj weights to all other heads.
+
+    Ensures all per-dataset FC projection layers start from an identical
+    initialization so training only breaks symmetry via gradient signal.
+    Only called when head_hidden_dim is set (heads are _HeadWithFC instances).
+    """
+    for heads in (ner_heads, rel_heads):
+        keys = list(heads.keys())
+        if len(keys) < 2:
+            continue
+        ref_state = heads[keys[0]].inner_proj.state_dict()
+        for k in keys[1:]:
+            heads[k].inner_proj.load_state_dict(ref_state)
 
 
 def _apply_ner_head(
@@ -193,6 +233,8 @@ class BertForHyperGNN(BertPreTrainedModel):
                 "                    {'tersib', 'tercop', 'tergp', 'tersibcop','tersibgp', 'tercopgp', 'tersibcopgp'}"
             )
             raise Exception()
+        head_hidden_dim: Optional[int] = getattr(args, "head_hidden_dim", None)
+
         # Classification heads: single-head or per-dataset multi-head
         dataset_heads_cfg = getattr(config, "dataset_heads", None)
         if dataset_heads_cfg is not None:
@@ -201,14 +243,16 @@ class BertForHyperGNN(BertPreTrainedModel):
             self.ner_heads = nn.ModuleDict(
                 {
                     name: _build_ner_head(
-                        ent_dim, info["num_ner_labels"], args.ent_repr
+                        ent_dim, info["num_ner_labels"], args.ent_repr, head_hidden_dim
                     )
                     for name, info in dataset_heads_cfg.items()
                 }
             )
             self.rel_heads = nn.ModuleDict(
                 {
-                    name: _build_rel_head(rel_dim, info["num_rel_labels"])
+                    name: _build_rel_head(
+                        rel_dim, info["num_rel_labels"], head_hidden_dim
+                    )
                     for name, info in dataset_heads_cfg.items()
                 }
             )
@@ -238,6 +282,8 @@ class BertForHyperGNN(BertPreTrainedModel):
             )
 
         self.post_init()
+        if head_hidden_dim is not None and dataset_heads_cfg is not None:
+            _sync_head_fc_projections(self.ner_heads, self.rel_heads)
 
     def forward(
         self,
@@ -600,6 +646,8 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
             print(f"No valid factor_type specified: {self.args.factor_type}")
             raise Exception()
 
+        head_hidden_dim: Optional[int] = getattr(args, "head_hidden_dim", None)
+
         # Classification heads: single-head or per-dataset multi-head
         dataset_heads_cfg = getattr(config, "dataset_heads", None)
         if dataset_heads_cfg is not None:
@@ -607,14 +655,16 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
             self.ner_heads = nn.ModuleDict(
                 {
                     name: _build_ner_head(
-                        ent_dim, info["num_ner_labels"], args.ent_repr
+                        ent_dim, info["num_ner_labels"], args.ent_repr, head_hidden_dim
                     )
                     for name, info in dataset_heads_cfg.items()
                 }
             )
             self.rel_heads = nn.ModuleDict(
                 {
-                    name: _build_rel_head(rel_dim, info["num_rel_labels"])
+                    name: _build_rel_head(
+                        rel_dim, info["num_rel_labels"], head_hidden_dim
+                    )
                     for name, info in dataset_heads_cfg.items()
                 }
             )
@@ -643,6 +693,8 @@ class ModernBertForHyperGNN(ModernBertPreTrainedModel):
             )
 
         self.post_init()
+        if head_hidden_dim is not None and dataset_heads_cfg is not None:
+            _sync_head_fc_projections(self.ner_heads, self.rel_heads)
 
     def forward(
         self,
@@ -917,6 +969,25 @@ class CatEncoder(Module):
         if self.proj:
             repr = self.projection(repr)
         return repr
+
+
+class _HeadWithFC(Module):
+    """Classification head with a dataset-specific FC projection before the output linear.
+
+    Structure: inner_proj(*args) → GELU → Linear(hidden_dim, num_labels)
+
+    ``inner_proj`` may accept multiple positional tensors (e.g. a CatEncoder for
+    the mix ent_repr mode that takes sub and obj representations separately).
+    """
+
+    def __init__(self, inner_proj: Module, hidden_dim: int, num_labels: int) -> None:
+        super().__init__()
+        self.inner_proj = inner_proj
+        self.act = GELU()
+        self.out = Linear(hidden_dim, num_labels)
+
+    def forward(self, *args: torch.Tensor) -> torch.Tensor:
+        return self.out(self.act(self.inner_proj(*args)))
 
 
 class HyperGNNBinaryGraph(Module):

@@ -1,5 +1,5 @@
 label_set: scinlp
-model_dir: saves/scinlp/hgere/best_bs32_ep20
+model_dir: saves/scinlp/hgere/best_l3s
 seeds:
     - 42
     - 43
