@@ -385,6 +385,17 @@ class HGERETrainConfig(BaseModel):
     rel_enc: str = Field(default="cat", description="Relation encoder type.")
     ent_dim: int = Field(default=200, description="Entity dimension.")
     rel_dim: int = Field(default=200, description="Relation dimension.")
+    head_hidden_dim: int | None = Field(
+        default=None,
+        description=(
+            "Hidden dimension for an optional FC projection layer inserted before each "
+            "per-dataset classification head (NER and RE). When set, each head becomes "
+            "FC(input_dim → head_hidden_dim) → GELU → Linear(head_hidden_dim → num_labels) "
+            "instead of a single linear layer. All heads' FC projections are initialized "
+            "identically so training starts from a symmetric point. Only applies in "
+            "multi-head mode."
+        ),
+    )
     rel_rank: int = Field(default=200, description="Rank for biaffine factorisation.")
     rel_factorize: bool = Field(
         default=False, description="Use biaffine relation factorisation."
