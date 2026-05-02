@@ -1,5 +1,5 @@
 label_set: scier
-model_dir: saves/scier/hgere/bacardi-ws3000
+model_dir: saves/scier/hgere/best_gin
 seeds:
     - 42
     - 43
@@ -42,7 +42,6 @@ train_params:
     pre_filter_params:
         method: threshold
         value: 0.0125
-    warmup_steps: 3000
     per_gpu_train_batch_size: 18
     gradient_accumulation_steps: 2
     # Loss
