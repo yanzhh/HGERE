@@ -8,14 +8,15 @@
 # Usage:
 #   uv run train-hgere configs/train/multi_dataset/train_hgere.yaml
 
-model_dir: saves/multi-sciere/hgere/gin-mushroom
+model_dir: saves/multi-sciere/hgere/gin-mushroom-5000
 base_model_name_or_path: allenai/scibert_scivocab_uncased
 model_type: hyper
 do_lower_case: true
 no_sym: true
 max_seq_length: 512
 seeds:
- - 42
+ - 41
+ - 43
 factor_type: ternary
 factor_encoder: biaf
 ent_dim: 400
@@ -58,7 +59,7 @@ train_params:
     pre_filter_params:
         method: threshold
         value: 0.0125
-    warmup_steps: 3000
+    warmup_steps: 5000
     project_name: multi-head-hgere
     wandb_entity: ottowg-gesis7279
     save_results: true
@@ -67,7 +68,7 @@ train_params:
     eval_test: true
     shuffle: false
     preload_dataset: false
-    n_workers: 64
+    n_workers: 16
     do_train: true
     learning_rate: 1e-5
     learning_rate_cls: 1e-5

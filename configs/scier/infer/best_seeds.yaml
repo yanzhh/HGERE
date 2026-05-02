@@ -1,7 +1,6 @@
 label_set: scier
 
 pruner:
-    #model_dir: /data_ssds/disk01/ottowg_gsap/model-hgere/gsap-best-pruner
     model_dir: saves/scier/pruner/best
     base_model_name_or_path: allenai/scibert_scivocab_uncased
     do_lower_case: true
@@ -16,19 +15,20 @@ pruner:
     max_mentions_num: 60
     final_pruning:
         method: threshold
-        threshold: 0.0005
+        threshold: 0.00005
 
 hgere:
-    model_dir: saves/scier/hgere/best
+    model_dir: saves/scier/hgere/best_gin
     seeds:
-        - 42
-        - 43
-        - 44
-        - 45
-        - 46
+      - 42
+      - 43
+      - 44
+      - 45
+      - 46
     base_model_name_or_path: allenai/scibert_scivocab_uncased
     model_type: hyper
     do_lower_case: true
+    shuffle: false
     no_sym: true
     per_gpu_eval_batch_size: 32
     max_seq_length: 512
@@ -41,7 +41,7 @@ hgere:
     n_iter: 3
     layernorm: true
     layernorm_1st: true
-    attn_self: false
+    attn_self: true
     pre_filter_params:
         method: threshold
         value: 0.0125

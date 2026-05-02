@@ -96,7 +96,9 @@ def _make_bert_config(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="Requires loading full BERT weights; use integration test instead")
+@pytest.mark.skip(
+    reason="Requires loading full BERT weights; use integration test instead"
+)
 class TestSingleHeadMode:
     """Structural checks that rely on a real pretrained model load."""
 
@@ -241,3 +243,175 @@ class TestMultiHeadInit:
         assert not hasattr(model, "rel_heads")
         assert hasattr(model, "ner_cls")
         assert hasattr(model, "rel_cls")
+
+
+# ---------------------------------------------------------------------------
+# _HeadWithFC unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestHeadWithFC:
+    """Unit tests for the _HeadWithFC module."""
+
+    def test_forward_single_input(self) -> None:
+        from gsapere.models.hgere import _HeadWithFC
+
+        inner = nn.Linear(64, 32)
+        head = _HeadWithFC(inner, hidden_dim=32, num_labels=10)
+        out = head(torch.randn(4, 64))
+        assert out.shape == (4, 10)
+
+    def test_forward_multi_input(self) -> None:
+        """Multi-arg forward (mix ent_repr: sub + obj concatenated by CatEncoder)."""
+        from gsapere.models.hgere import _HeadWithFC, CatEncoder
+
+        inner = CatEncoder(input_dims=[64, 64], output_dim=32)
+        head = _HeadWithFC(inner, hidden_dim=32, num_labels=7)
+        out = head(torch.randn(5, 64), torch.randn(5, 64))
+        assert out.shape == (5, 7)
+
+    def test_has_inner_proj_act_out(self) -> None:
+        from gsapere.models.hgere import _HeadWithFC
+
+        inner = nn.Linear(16, 8)
+        head = _HeadWithFC(inner, hidden_dim=8, num_labels=3)
+        assert hasattr(head, "inner_proj")
+        assert hasattr(head, "act")
+        assert hasattr(head, "out")
+
+    def test_3d_input(self) -> None:
+        """Relation heads operate on [bs, n_ent, rel_dim] tensors."""
+        from gsapere.models.hgere import _HeadWithFC
+
+        inner = nn.Linear(64, 32)
+        head = _HeadWithFC(inner, hidden_dim=32, num_labels=12)
+        out = head(torch.randn(2, 5, 64))
+        assert out.shape == (2, 5, 12)
+
+
+# ---------------------------------------------------------------------------
+# Head builders with head_hidden_dim
+# ---------------------------------------------------------------------------
+
+
+class TestHeadBuildersWithFC:
+    def test_build_ner_head_sub_with_fc(self) -> None:
+        from gsapere.models.hgere import _HeadWithFC, _build_ner_head
+
+        head = _build_ner_head(
+            ent_dim=64, num_ner_labels=5, ent_repr="sub", head_hidden_dim=32
+        )
+        assert isinstance(head, _HeadWithFC)
+        out = head(torch.randn(3, 64))
+        assert out.shape == (3, 5)
+
+    def test_build_ner_head_mix_with_fc(self) -> None:
+        from gsapere.models.hgere import _HeadWithFC, _build_ner_head
+
+        head = _build_ner_head(
+            ent_dim=64, num_ner_labels=5, ent_repr="mix", head_hidden_dim=32
+        )
+        assert isinstance(head, _HeadWithFC)
+        out = head(torch.randn(3, 64), torch.randn(3, 64))
+        assert out.shape == (3, 5)
+
+    def test_build_rel_head_with_fc(self) -> None:
+        from gsapere.models.hgere import _HeadWithFC, _build_rel_head
+
+        head = _build_rel_head(rel_dim=64, num_rel_labels=12, head_hidden_dim=32)
+        assert isinstance(head, _HeadWithFC)
+        out = head(torch.randn(2, 3, 64))
+        assert out.shape == (2, 3, 12)
+
+    def test_build_ner_head_without_fc_unchanged(self) -> None:
+        """Without head_hidden_dim, builders must return the same type as before."""
+        from gsapere.models.hgere import _build_ner_head, _build_rel_head
+
+        ner = _build_ner_head(ent_dim=64, num_ner_labels=5, ent_repr="sub")
+        assert isinstance(ner, nn.Linear)
+        rel = _build_rel_head(rel_dim=64, num_rel_labels=12)
+        assert isinstance(rel, nn.Linear)
+
+
+# ---------------------------------------------------------------------------
+# Multi-head model with FC projection
+# ---------------------------------------------------------------------------
+
+
+class TestMultiHeadInitWithFC:
+    def _build_model(
+        self, dataset_heads: dict, head_hidden_dim: int | None = None
+    ) -> BertForHyperGNN:
+        from transformers import BertConfig
+
+        bert_cfg = BertConfig(
+            hidden_size=64,
+            num_hidden_layers=1,
+            num_attention_heads=2,
+            intermediate_size=128,
+            max_position_embeddings=512,
+            vocab_size=100,
+        )
+        bert_cfg.num_labels = 10
+        bert_cfg.num_ner_labels = 4
+        bert_cfg.max_seq_length = 32
+        bert_cfg.alpha = 1.0
+        bert_cfg.dataset_heads = dataset_heads
+
+        args = _make_args(head_hidden_dim=head_hidden_dim)
+        return BertForHyperGNN(bert_cfg, args=args)
+
+    def test_heads_are_fc_head_with_fc(self) -> None:
+        from gsapere.models.hgere import _HeadWithFC
+
+        heads = {
+            "scier": {"num_ner_labels": 4, "num_rel_labels": 12},
+            "scinlp": {"num_ner_labels": 5, "num_rel_labels": 14},
+        }
+        model = self._build_model(heads, head_hidden_dim=32)
+        for key in heads:
+            assert isinstance(model.ner_heads[key], _HeadWithFC)
+            assert isinstance(model.rel_heads[key], _HeadWithFC)
+
+    def test_output_shapes_with_fc(self) -> None:
+        heads = {
+            "scier": {"num_ner_labels": 4, "num_rel_labels": 12},
+            "gsap": {"num_ner_labels": 11, "num_rel_labels": 39},
+        }
+        model = self._build_model(heads, head_hidden_dim=32)
+        rel_dummy = torch.randn(1, 3, 64)
+        assert model.rel_heads["scier"](rel_dummy).shape[-1] == 12
+        assert model.rel_heads["gsap"](rel_dummy).shape[-1] == 39
+
+    def test_fc_projections_synced_across_heads(self) -> None:
+        """After init, all heads' inner_proj weights must be identical."""
+        heads = {
+            "scier": {"num_ner_labels": 4, "num_rel_labels": 12},
+            "scinlp": {"num_ner_labels": 5, "num_rel_labels": 14},
+            "gsap": {"num_ner_labels": 11, "num_rel_labels": 39},
+        }
+        model = self._build_model(heads, head_hidden_dim=32)
+        keys = list(heads.keys())
+        ref_ner = model.ner_heads[keys[0]].inner_proj.state_dict()
+        ref_rel = model.rel_heads[keys[0]].inner_proj.state_dict()
+        for k in keys[1:]:
+            for param_name, ref_val in ref_ner.items():
+                assert torch.equal(
+                    model.ner_heads[k].inner_proj.state_dict()[param_name], ref_val
+                ), (
+                    f"NER inner_proj '{param_name}' differs between '{keys[0]}' and '{k}'"
+                )
+            for param_name, ref_val in ref_rel.items():
+                assert torch.equal(
+                    model.rel_heads[k].inner_proj.state_dict()[param_name], ref_val
+                ), (
+                    f"REL inner_proj '{param_name}' differs between '{keys[0]}' and '{k}'"
+                )
+
+    def test_without_fc_heads_are_not_fc_head(self) -> None:
+        from gsapere.models.hgere import _HeadWithFC
+
+        heads = {"scier": {"num_ner_labels": 4, "num_rel_labels": 12}}
+        model = self._build_model(heads, head_hidden_dim=None)
+        assert not isinstance(model.ner_heads["scier"], _HeadWithFC)
+        assert not isinstance(model.rel_heads["scier"], _HeadWithFC)
