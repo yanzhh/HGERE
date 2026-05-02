@@ -525,8 +525,8 @@ def train(
                         _first_rel = next(iter(_model_inner.rel_heads.values()))
                         _first_ner = next(iter(_model_inner.ner_heads.values()))
                         logger.info(
-                            f"[WEIGHT CHECK before save] rel_heads[first].weight sum: "
-                            f"{_first_rel.weight.data.sum():.6f}  "
+                            f"[WEIGHT CHECK before save] rel_heads[first] last weight sum: "
+                            f"{list(_first_rel.parameters())[-1].data.sum():.6f}  "
                             f"ner_heads[first] last weight sum: "
                             f"{list(_first_ner.parameters())[-1].data.sum():.6f}"
                         )
