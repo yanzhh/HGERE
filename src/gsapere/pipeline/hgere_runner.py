@@ -42,6 +42,7 @@ _ARCH_PARAMS: tuple[str, ...] = (
     "attn_self",
     "attn_res",
     "unirel",
+    "head_hidden_dim",
 )
 
 
@@ -146,6 +147,7 @@ class HGERERunner:
             attn_self=_arch("attn_self"),
             attn_res=_arch("attn_res"),
             unirel=_arch("unirel"),
+            head_hidden_dim=_arch("head_hidden_dim"),
             device=device,
         )
         with suppress_transformers_warnings():
