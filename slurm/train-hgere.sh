@@ -13,14 +13,17 @@ trap "kill $GPU_MONITOR_PID" EXIT
 uv run gsapere-train-hgere configs/$1/train/hgere/best_seeds.yaml
 uv run gsapere-pipeline \
 	--config configs/$1/infer/best_seeds.yaml \
+	--skip-train \
 	--input datasets/gsap-ere/ \
 	--output datasets/gsap-ere/pred_${1}
 uv run gsapere-pipeline \
 	--config configs/$1/infer/best_seeds.yaml \
+	--skip-train \
 	--input datasets/scier/ \
 	--output datasets/scier/pred_${1}
 	--output datasets/scier/pred_gsap-ere
 uv run gsapere-pipeline \
 	--config configs/$1/infer/best_seeds.yaml \
+	--skip-train \
 	--input datasets/scinlp/ \
 	--output datasets/scinlp/pred_${1}
