@@ -221,22 +221,6 @@ def setup_training(args, logger):
                     checkpoint, config=config, args=args
                 )
                 model.to(args.device)
-                if hasattr(model, "rel_heads"):
-                    _first_rel = next(iter(model.rel_heads.values()))
-                    _first_ner = next(iter(model.ner_heads.values()))
-                    logger.info(
-                        f"[WEIGHT CHECK after reload] rel_heads[first].weight sum: "
-                        f"{_first_rel.weight.data.sum():.6f}  "
-                        f"ner_heads[first] last weight sum: "
-                        f"{list(_first_ner.parameters())[-1].data.sum():.6f}"
-                    )
-                else:
-                    logger.info(
-                        f"[WEIGHT CHECK after reload] rel_cls.weight sum: "
-                        f"{model.rel_cls.weight.data.sum():.6f}  "
-                        f"ner_cls last weight sum: "
-                        f"{list(model.ner_cls.parameters())[-1].data.sum():.6f}"
-                    )
             # eval train
             # Top-level aggregate keys (micro for multi-head, direct for single-head)
             _SPLIT_KEYS = {

@@ -519,24 +519,6 @@ def train(
                     best_f1 = f1_re_plus
                     best_result = results
                     logger.info(f"New Best F1+: {best_f1}")
-                    _model_inner = model.module if hasattr(model, "module") else model
-                    if hasattr(_model_inner, "rel_heads"):
-                        # Multi-head: log first head for diagnostic purposes
-                        _first_rel = next(iter(_model_inner.rel_heads.values()))
-                        _first_ner = next(iter(_model_inner.ner_heads.values()))
-                        logger.info(
-                            f"[WEIGHT CHECK before save] rel_heads[first] last weight sum: "
-                            f"{list(_first_rel.parameters())[-1].data.sum():.6f}  "
-                            f"ner_heads[first] last weight sum: "
-                            f"{list(_first_ner.parameters())[-1].data.sum():.6f}"
-                        )
-                    else:
-                        logger.info(
-                            f"[WEIGHT CHECK before save] rel_cls.weight sum: "
-                            f"{_model_inner.rel_cls.weight.data.sum():.6f}  "
-                            f"ner_cls last weight sum: "
-                            f"{list(_model_inner.ner_cls.parameters())[-1].data.sum():.6f}"
-                        )
                     # @TODO: also save optimizer, scheduler, scaler and best_f1
                     #        Then further training from a checkpoint is possible
                     _save_model(
