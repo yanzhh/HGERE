@@ -97,6 +97,7 @@ class HGEREConfig(BaseModel):
     factor_encoder: str = "biaf"
     ent_dim: int = 400
     rel_dim: int = 400
+    head_hidden_dim: Optional[int] = None
     mem_dim: int = 400
     # Entity representation: "mix" (sub+obj), "sub", or "obj"
     ent_repr: str = "mix"
