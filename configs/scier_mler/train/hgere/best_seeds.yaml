@@ -1,0 +1,66 @@
+label_set: mler
+model_dir: saves/scier_mler/hgere/train_34_gin
+seeds:
+    - 42
+    - 43
+    - 44
+    - 45
+    - 46
+base_model_name_or_path: allenai/scibert_scivocab_uncased
+model_type: hyper
+do_lower_case: true
+no_sym: true
+per_gpu_eval_batch_size: 32
+max_seq_length: 512
+factor_type: ternary # tersibcop # ternary not run yet
+factor_encoder: biaf
+ent_dim: 400
+rel_dim: 400
+mem_dim: 400
+ent_repr: mix
+n_iter: 3
+layernorm: true
+layernorm_1st: true
+attn_self: true
+
+# Data
+## Pruner predictions used as NER candidates input to HGERE
+ner_prediction_dir: saves/gsap-ere/pruner/best/scier_LLM_v3
+#data_dir: datasets/gsap-ere
+ner_focal_loss: false
+re_focal_loss: false
+
+# Optimisation
+train_params:
+    # W&B
+    log_wandb: true
+    project_name: scier-mler-hgere
+    wandb_entity: ottowg-gesis7279
+    num_train_epochs: 10
+    learning_rate: 5e-5
+    learning_rate_cls: 5e-5
+    pre_filter_params:
+        method: threshold
+        value: 0.0125
+    per_gpu_train_batch_size: 21
+    gradient_accumulation_steps: 1
+    # Loss
+    loss_re_weight_alpha: 0.5 # (1 - alpha) * loss_ner + alpha * loss_re
+    train_file: ent_pred_train.json
+    dev_file: ent_pred_dev.json
+    test_file: ent_pred_test.json
+    save_results: true
+    eval_train: true
+    eval_test: true
+    shuffle: false
+    preload_dataset: false
+    n_workers: 16
+    do_train: true
+    eval_epochs: 1
+    adam_epsilon: 1e-8
+    fp16: true
+    local_rank: -1
+    # Evaluation
+    evaluate_during_training: true
+    eval_all_checkpoints: true
+    overwrite_output_dir: true
