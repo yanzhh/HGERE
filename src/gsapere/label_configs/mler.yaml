@@ -1,0 +1,13 @@
+# MLER (Machine Learning Entity and Relation)
+# A lightweight annotation schema for extracting structured knowledge from ML paper sentences. It distinguishes two entity types — *concepts* (abstract ideas, methods, tasks) and *artifacts* (named, concrete objects like models, datasets, and tools) — and three relation types that capture whether a connection between entities is stated directly, implied, or is a coreference. The concept/artifact boundary is intentionally context-sensitive rather than rule-based, which reflects how ML authors actually write.
+
+ner:
+    - concept
+    - artifact
+
+relations:
+    symmetric:
+        - coreference
+    non_symmetric:
+        - direct
+        - indirect
