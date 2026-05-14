@@ -102,9 +102,21 @@ class TestMultiDatasetConfig:
         config = HGERETrainConfig.model_validate(MULTI_DS_CONFIG)
         ds = config.datasets[0]
         assert ds.train_file == "train.json"
-        assert ds.dev_file == "dev.json"
-        assert ds.test_file == "test.json"
+        assert ds.dev_file is None  # dev/test opt-in via explicit filename
+        assert ds.test_file is None
         assert ds.sampling_weight == pytest.approx(1.0)
+
+    def test_dataset_entry_explicit_dev_test(self) -> None:
+        """Explicitly setting dev/test filenames overrides the None default."""
+        from gsapere.hgere.config import DatasetEntry
+        entry = DatasetEntry(
+            label_set="scier",
+            ner_prediction_dir="some/dir",
+            dev_file="dev.json",
+            test_file="test.json",
+        )
+        assert entry.dev_file == "dev.json"
+        assert entry.test_file == "test.json"
 
     def test_sampling_temperature_parsed(self) -> None:
         config = HGERETrainConfig.model_validate(MULTI_DS_CONFIG)

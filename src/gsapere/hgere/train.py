@@ -112,6 +112,43 @@ def _evaluate_multi_or_single(
     )
 
 
+def _build_split_metrics(prefix: str, results: dict[str, float]) -> dict[str, float]:
+    """Build an ordered W&B metrics dict for one evaluation split.
+
+    Ordering:
+      1. ner_f1 for each dataset (per-dataset keys, then aggregate if present)
+      2. re_f1 — same
+      3. re+_f1 — same
+      4. Precision+recall pairs: (ner_p, ner_r), (re_p, re_r), (re+_p, re+_r),
+         same per-dataset then aggregate pattern within each pair
+    """
+    ds_names = sorted({k.rsplit("/", 1)[0] for k in results if "/" in k})
+    out: dict[str, float] = {}
+
+    for f1_key in ("ner_f1", "re_f1", "re+_f1"):
+        for ds in ds_names:
+            k = f"{ds}/{f1_key}"
+            if k in results:
+                out[f"{prefix}/{k}"] = results[k]
+        if f1_key in results:
+            out[f"{prefix}/{f1_key}"] = results[f1_key]
+
+    for p_key, r_key in (
+        ("ner_precision", "ner_recall"),
+        ("re_precision", "re_recall"),
+        ("re+_precision", "re+_recall"),
+    ):
+        for pr_key in (p_key, r_key):
+            for ds in ds_names:
+                k = f"{ds}/{pr_key}"
+                if k in results:
+                    out[f"{prefix}/{k}"] = results[k]
+            if pr_key in results:
+                out[f"{prefix}/{pr_key}"] = results[pr_key]
+
+    return out
+
+
 def log_candidate_stats_to_wandb(split: str, stats: CandidateStats) -> None:
     """Log pruner candidate quality stats for one split to W&B.
 
@@ -472,46 +509,28 @@ def train(
         if args.local_rank in [-1, 0]:
             # EVALUATE AFTER EACH EPOCH
             # -------------------------
-            if args.evaluate_during_training and (
-                (epoch_num + 1) % args.eval_epochs == 0
-                or epoch_num + 1 == args.num_train_epochs
+            # Skip if no eval datasets are configured (all datasets opted out of dev).
+            _has_eval_data = not isinstance(eval_dataset, dict) or bool(eval_dataset)
+            if (
+                args.evaluate_during_training
+                and _has_eval_data
+                and (
+                    (epoch_num + 1) % args.eval_epochs == 0
+                    or epoch_num + 1 == args.num_train_epochs
+                )
             ):  # Only evaluate when single GPU otherwise metrics may not average well
                 results = _evaluate_multi_or_single(model, eval_dataset, args, logger)
                 f1_re_plus = results["re+_f1"]
                 if log_wandb:
-                    _EVAL_KEYS = {
-                        "ner_precision",
-                        "ner_recall",
-                        "ner_f1",
-                        "re_precision",
-                        "re_recall",
-                        "re_f1",
-                        "re+_precision",
-                        "re+_recall",
-                        "re+_f1",
-                    }
                     dstep = global_step - logging_loss_steps
                     avg_loss_re = logging_reloss / max(dstep, 1)
                     avg_loss_ner = logging_nerloss / max(dstep, 1)
-                    metrics_to_log = {
-                        f"eval/{k}": v for k, v in results.items() if k in _EVAL_KEYS
-                    }
+                    metrics_to_log = _build_split_metrics("eval", results)
                     metrics_to_log["eval/loss_re"] = avg_loss_re
                     metrics_to_log["eval/loss_ner"] = avg_loss_ner
                     metrics_to_log["eval/loss"] = (
                         alpha * avg_loss_re + (1 - alpha) * avg_loss_ner
                     )
-                    # Per-dataset re+_f1 keys (multi-head): log under eval/{name}/re+_f1
-                    metrics_to_log |= {
-                        f"eval/{k}": v
-                        for k, v in results.items()
-                        if k.endswith("/re+_f1") and k not in _EVAL_KEYS
-                    }
-                    metrics_to_log |= {
-                        f"eval_detail/{k}": v
-                        for k, v in results.items()
-                        if k not in _EVAL_KEYS and not k.endswith("/re+_f1")
-                    }
                     wandb.log(metrics_to_log, step=global_step)
 
                 is_best_result = f1_re_plus > best_f1

@@ -48,8 +48,18 @@ class DatasetEntry(BaseModel):
     train_file: str = Field(
         default="train.json", description="Training split filename."
     )
-    dev_file: str = Field(default="dev.json", description="Dev split filename.")
-    test_file: str = Field(default="test.json", description="Test split filename.")
+    dev_file: Optional[str] = Field(
+        default=None,
+        description=(
+            "Dev split filename. If null, this dataset is excluded from dev evaluation."
+        ),
+    )
+    test_file: Optional[str] = Field(
+        default=None,
+        description=(
+            "Test split filename. If null, this dataset is excluded from test evaluation."
+        ),
+    )
     sampling_weight: float = Field(
         default=1.0,
         description="Relative sampling weight for this dataset (before temperature scaling).",

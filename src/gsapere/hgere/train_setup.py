@@ -17,7 +17,12 @@ from ..data.tokenizer_utils import (
     adjust_tokenizer as _adjust_tokenizer,
 )
 from ..hgere.evaluate import get_checkpoints
-from ..hgere.train import _evaluate_multi_or_single, log_candidate_stats_to_wandb, train
+from ..hgere.train import (
+    _build_split_metrics,
+    _evaluate_multi_or_single,
+    log_candidate_stats_to_wandb,
+    train,
+)
 from ..labels import LABELS
 from ..models.hgere import MODEL_CLASSES
 from ..utils import set_seed
@@ -184,6 +189,11 @@ def setup_training(args, logger):
                 _, test_dataset = _load_multi_datasets(
                     datasets_cfg, tokenizer, args, logger, splits=("test", "test")
                 )
+                if not test_dataset:
+                    logger.info(
+                        "No datasets have a test file — skipping test evaluation."
+                    )
+                    args.eval_test = False
             else:
                 test_dataset = load_dataset("test", tokenizer, args, logger)
                 _log_entity_stats("test", test_dataset, logger)
@@ -207,6 +217,11 @@ def setup_training(args, logger):
                     _, dev_dataset = _load_multi_datasets(
                         datasets_cfg, tokenizer, args, logger
                     )
+                    if not dev_dataset:
+                        logger.info(
+                            "No datasets have a dev file — skipping dev evaluation."
+                        )
+                        args.eval_dev = False
                 else:
                     dev_dataset = load_dataset("dev", tokenizer, args, logger)
         for checkpoint in checkpoints:
@@ -283,10 +298,7 @@ def setup_training(args, logger):
                 )
                 report["test"] = test_results
                 if wandb.run is not None:
-                    wandb.log(
-                        _wandb_split_metrics("test", test_results),
-                        commit=False,
-                    )
+                    wandb.log(_build_split_metrics("test", test_results), commit=False)
 
             output_test_file = os.path.join(
                 getattr(args, "output_dir", None) or args.model_dir,
@@ -310,14 +322,27 @@ def _load_dataset_for_entry(
     tokenizer: Any,
     args: Any,
     logger: logging.Logger,
-) -> RelationDataset:
-    """Load one dataset split for a :class:`~gsapere.hgere.config.DatasetEntry`."""
+) -> RelationDataset | None:
+    """Load one dataset split for a :class:`~gsapere.hgere.config.DatasetEntry`.
+
+    Returns ``None`` when the split's filename field is ``None`` (dataset
+    explicitly opted out of this split).
+    """
     file_map = {
         "train": ds_entry.train_file,
         "dev": ds_entry.dev_file,
         "test": ds_entry.test_file,
     }
-    file_path = Path(ds_entry.ner_prediction_dir) / file_map[split]
+    filename = file_map[split]
+    if filename is None:
+        logger.info(
+            "  [%s] no %s file configured — skipping %s evaluation for this dataset.",
+            ds_entry.label_set,
+            split,
+            split,
+        )
+        return None
+    file_path = Path(ds_entry.ner_prediction_dir) / filename
     logger.info(f"  [{ds_entry.label_set}] {split} file: {file_path}")
     assert os.path.isfile(file_path), (
         f"Missing {split} file for {ds_entry.label_set}: {file_path}"
@@ -393,17 +418,22 @@ def _load_multi_datasets(
     eval_datasets: dict[str, RelationDataset] = {}
     for ds_entry in datasets_cfg:
         if train_split == eval_split:
-            # Both sides want the same split (e.g. test/test)
+            # Both sides want the same split (e.g. test/test or train/train).
             ds = _load_dataset_for_entry(train_split, ds_entry, tokenizer, args, logger)
-            train_datasets[ds_entry.label_set] = ds
-            eval_datasets[ds_entry.label_set] = ds
+            if ds is not None:
+                train_datasets[ds_entry.label_set] = ds
+                eval_datasets[ds_entry.label_set] = ds
         else:
-            train_datasets[ds_entry.label_set] = _load_dataset_for_entry(
+            train_ds = _load_dataset_for_entry(
                 train_split, ds_entry, tokenizer, args, logger
             )
-            eval_datasets[ds_entry.label_set] = _load_dataset_for_entry(
+            if train_ds is not None:
+                train_datasets[ds_entry.label_set] = train_ds
+            eval_ds = _load_dataset_for_entry(
                 eval_split, ds_entry, tokenizer, args, logger
             )
+            if eval_ds is not None:
+                eval_datasets[ds_entry.label_set] = eval_ds
 
     sampling_weights = {ds.label_set: ds.sampling_weight for ds in datasets_cfg}
     train_wrapper = MultiRelationDataset(
