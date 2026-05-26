@@ -48,23 +48,9 @@ cd HGERE
 uv sync
 ```
 
-### Pretrained models
-
-Download SciBERT (used by both stages):
-
-```bash
-# requires git-lfs
-git lfs install
-git clone https://huggingface.co/allenai/scibert_scivocab_uncased pretrained_models/scibert_scivocab_uncased
-```
-
-Or ModernBERT:
-
-```bash
-git clone https://huggingface.co/answerdotai/ModernBERT-base pretrained_models/modernbert_base
-```
-
 ### Datasets
+
+Datasets are loaded from their original sources via the download command:
 
 ```bash
 uv run gsapere-download-dataset --list          # list available datasets
@@ -72,7 +58,34 @@ uv run gsapere-download-dataset gsap-ere
 uv run gsapere-download-dataset scier
 uv run gsapere-download-dataset scinlp
 uv run gsapere-download-dataset scierc
+uv run gsapere-download-dataset --all           # download everything
 ```
+
+See [documentation/download-dataset.md](documentation/download-dataset.md) for split details and manual download fallbacks.
+
+#### GSAP-ERE
+
+Entity and relation extraction on scientific text, developed at GESIS.
+DOI: <https://doi.org/10.60914/c4c1d-s0587>
+
+> Paper under review.
+
+#### SciER
+
+Scientific entity and relation extraction across scientific abstracts.
+Source: <https://github.com/edzq/SciER>
+
+#### SciNLP
+
+Scientific NLP entity and relation extraction dataset.
+Source: <https://github.com/AKADDC/SciNLP>
+
+#### SciERC
+
+Scientific information extraction benchmark — 500 annotated AI abstracts,
+6 entity types, 7 relation types.
+
+> Luan et al., "Multi-Task Identification of Entities, Relations, and Coreference for Scientific Knowledge Graph Construction", EMNLP 2018.
 
 ---
 
@@ -86,42 +99,15 @@ Training is a two-step process: first train the pruner, then train HGERE on the 
 uv run gsapere-train-pruner configs/train/gsap/train_gsap_pruner.yaml
 ```
 
-Or via CLI flags:
+After training, run pruner inference on train/dev/test to produce the enriched input files for HGERE (see `scripts/pruner/`).
 
-```bash
-uv run gsapere-train-pruner \
-    --model_dir saves/pruner/gsap \
-    --label_set gsap \
-    --base_model_name_or_path pretrained_models/scibert_scivocab_uncased \
-    --train_params__data_dir datasets/gsap-ere \
-    --train_params__learning_rate 2e-5 \
-    --train_params__num_train_epochs 10
-```
-
-After training, run pruner inference on train/dev/test to produce the input files for HGERE (see `scripts/pruner/`).
-
-### Step 2 — Train HGERE
+### Step 2 — Train HGERE (single dataset)
 
 ```bash
 uv run gsapere-train-hgere configs/train/gsap/train_gsap_hgere.yaml
 ```
 
-Or via CLI flags:
-
-```bash
-uv run gsapere-train-hgere \
-    --model_dir saves/hgere/gsap \
-    --label_set gsap \
-    --base_model_name_or_path pretrained_models/scibert_scivocab_uncased \
-    --ner_prediction_dir saves/pruner/gsap/output \
-    --train_params__learning_rate 2e-5 \
-    --train_params__num_train_epochs 10 \
-    --train_params__per_gpu_train_batch_size 18
-```
-
-Both commands accept a YAML config file (positional argument) **or** individual `--field value` flags. Nested fields use `__` as a separator (e.g. `--train_params__learning_rate`).
-
-Example YAML:
+Example config:
 
 ```yaml
 schema_version: "1.0"
@@ -129,11 +115,72 @@ label_set: gsap
 model_dir: saves/hgere/gsap
 base_model_name_or_path: pretrained_models/scibert_scivocab_uncased
 ner_prediction_dir: saves/pruner/gsap/output
+max_seq_length: 512
+n_iter: 3
+layernorm: true
+attn_self: true
 
 train_params:
-  learning_rate: 2e-5
-  num_train_epochs: 10
-  per_gpu_train_batch_size: 18
+  learning_rate: 1e-5
+  num_train_epochs: 8
+  per_gpu_train_batch_size: 21
+  fp16: true
+  evaluate_during_training: true
+  eval_epochs: 1
+  loss_re_weight_alpha: 0.9
+  log_wandb: true
+```
+
+### Step 2 (alt) — Train HGERE on multiple datasets jointly
+
+Multi-dataset mode trains a shared encoder with per-dataset NER and relation heads. Each dataset must have its own pruner output directory.
+
+```bash
+uv run gsapere-train-hgere configs/multi-sciere-scinlp-gsap-ere/train/hgere/train_multi.yaml
+```
+
+Example config:
+
+```yaml
+schema_version: "1.0"
+model_dir: saves/multi/hgere/run1
+base_model_name_or_path: pretrained_models/scibert_scivocab_uncased
+max_seq_length: 512
+n_iter: 3
+layernorm: true
+attn_self: true
+sampling_temperature: 0.8   # 0 = always largest dataset, 1 = proportional to size
+seeds: [42, 43, 44]          # run once per seed; _seed<n> appended to model_dir
+
+datasets:
+  - label_set: scier
+    ner_prediction_dir: saves/pruner/scier/output
+    train_file: ent_pred_train.json
+    dev_file: ent_pred_dev.json
+    test_file: ent_pred_test.json
+  - label_set: scinlp
+    ner_prediction_dir: saves/pruner/scinlp/output
+    train_file: ent_pred_train.json
+    dev_file: ent_pred_dev.json   # omit (null) to skip dev evaluation for this dataset
+  - label_set: gsap
+    ner_prediction_dir: saves/pruner/gsap/output
+    train_file: ent_pred_train.json
+
+train_params:
+  learning_rate: 1e-5
+  num_train_epochs: 8
+  per_gpu_train_batch_size: 21
+  fp16: true
+  evaluate_during_training: true
+  log_wandb: true
+```
+
+### Tune pruner threshold
+
+After training the pruner, use the threshold tuning command to find the best precision/recall trade-off:
+
+```bash
+uv run gsapere-tune-pruner --config configs/train/gsap/train_gsap_pruner.yaml
 ```
 
 ---
@@ -150,17 +197,41 @@ CUDA_VISIBLE_DEVICES=0 uv run gsapere-pipeline \
 ```
 
 `--input` can be a `.jsonl` file or a directory of `.jsonl` files.
+Ready-to-use configs for all supported datasets are in [`configs/inference/`](configs/inference/).
+
+The pipeline config combines pruner and HGERE settings in a single YAML file:
+
+```yaml
+label_set: gsap
+
+pruner:
+  model_dir: saves/pruner/gsap/best
+  base_model_name_or_path: pretrained_models/scibert_scivocab_uncased
+  model_type: bertspanmarkerpruner
+  max_seq_length: 256
+  per_gpu_eval_batch_size: 32
+  final_pruning:
+    method: threshold
+    threshold: 0.0005
+
+hgere:
+  model_dir: saves/hgere/gsap/best
+  base_model_name_or_path: pretrained_models/scibert_scivocab_uncased
+  model_type: hyper
+  max_seq_length: 512
+  per_gpu_eval_batch_size: 32
+  n_iter: 3
+  layernorm: true
+  attn_self: true
+  pre_filter_params:
+    method: threshold
+    value: 0.0125
+```
 
 ### Pruner inference only
 
 ```bash
 bash scripts/pruner/gsap-ere/infer_gsap.sh
-```
-
-### Tune pruner threshold
-
-```bash
-uv run gsapere-tune-pruner --config config.yaml
 ```
 
 ---
@@ -190,6 +261,15 @@ uv run gsapere-tune-pruner --config config.yaml
 uv run pytest                          # run tests
 uv run ruff format src/ tests/         # format
 uv run ruff check src/ tests/          # lint
+```
+
+---
+
+## Building and publishing
+
+```bash
+uv build                               # produces dist/ wheel + sdist
+bash publish.sh                        # build + upload to PyPI (requires .pypi token file)
 ```
 
 ---
