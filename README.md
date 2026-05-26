@@ -7,8 +7,9 @@ A fork of [HGERE](https://github.com/yanzhh/HGERE) adapted for scientific text, 
 
 The pipeline consists of:
 
-1. **Span Pruner** — a lightweight binary classifier that scores all candidate n-grams and filters them down to a manageable set (target: ≥ 98 % entity recall)
-2. **HGERE** — a Hypergraph GNN that jointly predicts entity types and relations on the pruned candidates
+1. **Rule-based pre-filter** *(optional)* — removes deterministically non-entity spans (punctuation, function-word sequences, etc.) before the neural pruner sees training data, reducing trivial negatives and speeding up training
+2. **Span Pruner** — a binary classifier that scores remaining candidate n-grams and filters them to a manageable set (target: ≥ 98 % entity recall)
+3. **HGERE** — a Hypergraph GNN that jointly predicts entity types and relations on the pruned candidates
 
 Supported datasets: **GSAP-ERE**, **SciER**, **SciNLP**, **SciERC**
 
@@ -19,7 +20,7 @@ Supported datasets: **GSAP-ERE**, **SciER**, **SciNLP**, **SciERC**
 - Large-scale code restructuring: Pydantic-first configs, typed signatures throughout, proper package layout under `src/`
 - All dependencies updated to current versions
 - The transformer package is **no longer hardcoded** — any compatible HuggingFace `transformers` version works
-- Added span pruner stage, multi-dataset joint training, and full CLI entry points
+- Added rule-based pre-filter, span pruner stage, multi-dataset joint training, and full CLI entry points
 - Tests for all major components
 
 ---
@@ -65,10 +66,11 @@ See [documentation/download-dataset.md](documentation/download-dataset.md) for s
 
 #### GSAP-ERE
 
-Entity and relation extraction on scientific text, developed at GESIS.
+Fine-grained entity and relation extraction focused on machine learning — 100 annotated full-text ML publications, 63K entities, 35K relations, 10 entity types, 18 relation types.
 DOI: <https://doi.org/10.60914/c4c1d-s0587>
 
-> Published at AAAI 2026.
+> Otto et al., "GSAP-ERE: Fine-Grained Scholarly Entity and Relation Extraction Focused on Machine Learning", AAAI 2026.
+> <https://ojs.aaai.org/index.php/AAAI/article/view/40537>
 
 #### SciER
 
@@ -98,7 +100,15 @@ Scientific information extraction benchmark — 500 annotated AI abstracts,
 
 Training is a two-step process: first train the pruner, then train HGERE on the pruner's output.
 
-### Step 1 — Train the span pruner
+### Step 1 — Fit the rule-based pre-filter (optional)
+
+```bash
+uv run gsapere-fit-rulebased-pruner configs/train/gsap/fit_rulebased_pruner.yaml
+```
+
+This fits token n-gram patterns from the training data that deterministically exclude non-entity spans. The saved JSON file is referenced in the pruner training config to speed up training.
+
+### Step 2 — Train the span pruner
 
 ```bash
 uv run gsapere-train-pruner configs/train/gsap/train_gsap_pruner.yaml
@@ -106,7 +116,7 @@ uv run gsapere-train-pruner configs/train/gsap/train_gsap_pruner.yaml
 
 After training, run pruner inference on train/dev/test to produce the enriched input files for HGERE (see `scripts/pruner/`).
 
-### Step 2 — Train HGERE (single dataset)
+### Step 3 — Train HGERE (single dataset)
 
 ```bash
 uv run gsapere-train-hgere configs/train/gsap/train_gsap_hgere.yaml
@@ -136,7 +146,7 @@ train_params:
   log_wandb: true
 ```
 
-### Step 2 (alt) — Train HGERE on multiple datasets jointly
+### Step 3 (alt) — Train HGERE on multiple datasets jointly
 
 Multi-dataset mode trains a shared encoder with per-dataset NER and relation heads. Each dataset must have its own pruner output directory.
 
@@ -179,27 +189,6 @@ train_params:
   evaluate_during_training: true
   log_wandb: true
 ```
-
-### Rule-based pruner (optional, for performance)
-
-The neural pruner scores all O(n²) candidate spans per sentence, most of which are unambiguous non-entities (punctuation, function-word sequences, purely numeric tokens, etc.).
-The rule-based pruner is a lightweight pre-filter that removes these deterministically before training, reducing the candidate set while keeping gold-entity recall at or near 100 %.
-This speeds up training and can improve convergence by reducing the imbalance of trivial negatives.
-
-Fit the rule-based pruner from training data:
-
-```bash
-uv run gsapere-fit-rulebased-pruner configs/train/gsap/fit_rulebased_pruner.yaml
-```
-
-Then reference the saved JSON file in your pruner training config:
-
-```yaml
-train_params:
-  rulebased_pruner_file: saves/pruner/gsap/rules.json
-```
-
-See [documentation/rulebased_pruner_prefiltering.md](documentation/rulebased_pruner_prefiltering.md) for details.
 
 ---
 
