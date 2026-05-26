@@ -21,9 +21,9 @@ classifiers = [
     "Topic :: Text Processing :: Linguistic",
 ]
 dependencies = [
+    "torch>=2.8.0",
     "einops>=0.8.0",
     "setuptools>=75.6.0",
-    "torch>=2.8.0",
     "tqdm>=4.67.1",
     "wandb>=0.19.9",
     "transformers",
@@ -51,7 +51,7 @@ gsapere-generate-pruner-docs = "gsapere.documentation.generate_pruner_docs:cli"
 gsapere-analysis-ner-length-distribution = "gsapere.commands.ner_length_distribution:cli"
 gsapere-fix-gold-annos = "gsapere.commands.add_gold_annotations:cli"
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
     "lint>=1.2.1",
     "ruff>=0.15.5",
