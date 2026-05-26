@@ -68,17 +68,21 @@ See [documentation/download-dataset.md](documentation/download-dataset.md) for s
 Entity and relation extraction on scientific text, developed at GESIS.
 DOI: <https://doi.org/10.60914/c4c1d-s0587>
 
-> Paper under review.
+> Published at AAAI 2026.
 
 #### SciER
 
-Scientific entity and relation extraction across scientific abstracts.
-Source: <https://github.com/edzq/SciER>
+Entity and relation extraction dataset for datasets, methods, and tasks in scientific documents — 106 annotated full-text papers, 24k entities, 12k relations.
+
+> Dziadek et al., "SciER: An Entity and Relation Extraction Dataset for Datasets, Methods, and Tasks in Scientific Documents", EMNLP 2024.
+> <https://aclanthology.org/2024.emnlp-main.726/>
 
 #### SciNLP
 
-Scientific NLP entity and relation extraction dataset.
-Source: <https://github.com/AKADDC/SciNLP>
+Full-text entity and relation extraction benchmark for the NLP domain — 60 annotated ACL papers, 6,409 entities, 1,648 relations.
+
+> "SciNLP: A Domain-Specific Benchmark for Full-Text Scientific Entity and Relation Extraction in NLP", EMNLP 2025.
+> <https://aclanthology.org/2025.emnlp-main.732/>
 
 #### SciERC
 
@@ -86,6 +90,7 @@ Scientific information extraction benchmark — 500 annotated AI abstracts,
 6 entity types, 7 relation types.
 
 > Luan et al., "Multi-Task Identification of Entities, Relations, and Coreference for Scientific Knowledge Graph Construction", EMNLP 2018.
+> <https://aclanthology.org/D18-1360/>
 
 ---
 
@@ -175,13 +180,26 @@ train_params:
   log_wandb: true
 ```
 
-### Tune pruner threshold
+### Rule-based pruner (optional, for performance)
 
-After training the pruner, use the threshold tuning command to find the best precision/recall trade-off:
+The neural pruner scores all O(n²) candidate spans per sentence, most of which are unambiguous non-entities (punctuation, function-word sequences, purely numeric tokens, etc.).
+The rule-based pruner is a lightweight pre-filter that removes these deterministically before training, reducing the candidate set while keeping gold-entity recall at or near 100 %.
+This speeds up training and can improve convergence by reducing the imbalance of trivial negatives.
+
+Fit the rule-based pruner from training data:
 
 ```bash
-uv run gsapere-tune-pruner --config configs/train/gsap/train_gsap_pruner.yaml
+uv run gsapere-fit-rulebased-pruner configs/train/gsap/fit_rulebased_pruner.yaml
 ```
+
+Then reference the saved JSON file in your pruner training config:
+
+```yaml
+train_params:
+  rulebased_pruner_file: saves/pruner/gsap/rules.json
+```
+
+See [documentation/rulebased_pruner_prefiltering.md](documentation/rulebased_pruner_prefiltering.md) for details.
 
 ---
 
@@ -226,12 +244,6 @@ hgere:
   pre_filter_params:
     method: threshold
     value: 0.0125
-```
-
-### Pruner inference only
-
-```bash
-bash scripts/pruner/gsap-ere/infer_gsap.sh
 ```
 
 ---
