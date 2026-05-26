@@ -288,9 +288,22 @@ bash publish.sh                        # build + upload to PyPI (requires .pypi 
 
 ## Citation
 
-Please cite both this work (paper under review) and the original HGERE:
+Please cite this work and the original HGERE:
 
 ```bibtex
+@article{Otto2026GSAP-ERE,
+  title   = {{GSAP-ERE}: Fine-Grained Scholarly Entity and Relation Extraction Focused on Machine Learning},
+  author  = {Otto, Wolfgang and Gan, Lu and Upadhyaya, Sharmila and Karmakar, Saurav and Dietze, Stefan},
+  journal = {Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume  = {40},
+  number  = {38},
+  pages   = {32600--32609},
+  year    = {2026},
+  month   = {Mar.},
+  doi     = {10.1609/aaai.v40i38.40537},
+  url     = {https://ojs.aaai.org/index.php/AAAI/article/view/40537},
+}
+
 @misc{yan2023joint,
   title         = {Joint Entity and Relation Extraction with Span Pruning and Hypergraph Neural Networks},
   author        = {Zhaohui Yan and Songlin Yang and Wei Liu and Kewei Tu},
